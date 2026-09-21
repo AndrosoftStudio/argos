@@ -1,0 +1,14 @@
+{
+  "name": "Argos EPI",
+  "short_name": "Argos EPI",
+  "description": "Monitoramento do uso de EPIs por camera e visao computacional.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#05075a",
+  "theme_color": "#3740b4",
+  "icons": [
+    { "src": "icone-192.png", "type": "image/png", "sizes": "192x192", "purpose": "any" },
+    { "src": "icone-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any" },
+    { "src": "apple-touch-icon.png", "type": "image/png", "sizes": "180x180" }
+  ]
+}

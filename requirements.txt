@@ -1,0 +1,19 @@
+flask>=3.0.0
+flask-cors>=4.0.0
+flask-sock>=0.7.0
+opencv-python>=4.8.0
+ultralytics>=8.4.0
+numpy>=1.24.0,<2.0
+requests>=2.31.0
+psutil>=5.9.0
+gevent
+Pillow
+pyfiglet>=1.0.2
+python-dotenv
+# banco em container proprio
+psycopg[binary]>=3.1
+psycopg_pool>=3.2
+# reconhecimento de rosto: SCRFD + ArcFace rodados direto no onnxruntime.
+# O pacote insightface nao entra: a 0.7.3 nao tem wheel (exigiria compilador
+# C++ e ~10 dependencias). Os dois modelos .onnx vem em models/insightface/.
+onnxruntime>=1.17

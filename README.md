@@ -1,1 +1,92 @@
-# argos
+# Argos EPI
+
+Monitoramento do uso de EPIs por câmera e visão computacional.
+TCC de Desenvolvimento de Sistemas — SENAI Lauro de Freitas/BA — AndrosoftStudio.
+
+O sistema olha as câmeras em tempo real, identifica cada pessoa na cena, verifica
+se ela está com os EPIs exigidos naquela área e, quando falta alguma coisa,
+registra o episódio com foto e atribui ao funcionário reconhecido.
+
+---
+
+## O que tem aqui
+
+| Pasta | O que é |
+|---|---|
+| `backend/` | Servidor Flask: streams, IA, áreas, auditoria, contas, hub |
+| `frontend/` | Painel web (`index.html`) e a página do celular-câmera (`cam.html`) |
+| `treinamento/` | Pipeline de dataset e treino dos modelos de EPI |
+| `scripts/` | Utilidades — migração para Postgres, geração do fundo da marca |
+| `docs/tcc/` | Documentação acadêmica do TCC |
+| `coisas/` | Logo oficial da equipe (AJCAM Linyx) |
+
+## Como funciona, em uma passada
+
+1. Uma câmera entra no sistema — celular pelo link, navegador, RTSP ou a tela.
+2. Cada câmera roda em uma linha de processamento própria: um modelo YOLO de
+   EPIs + um modelo de pose que separa as pessoas e rastreia cada uma.
+3. O rosto de quem aparece é comparado com a galeria de funcionários
+   (SCRFD + ArcFace, por embedding — **não existe etapa de treino**).
+4. Cada pessoa é cobrada pelos EPIs da **área** onde está pisando, não por uma
+   lista única da câmera.
+5. Falta confirmada vira um **episódio** na auditoria, com até 3 fotos de
+   evidência, e entra na ficha de desempenho do funcionário.
+
+## Rodando
+
+Tudo sobe por Docker Compose, a partir da raiz do projeto:
+
+```bash
+cp .env.example .env      # ajuste antes de subir
+docker compose --profile gpu up -d --build     # NVIDIA
+docker compose --profile cpu up -d --build     # sem GPU
+```
+
+O painel fica em `http://localhost:8088`.
+
+O serviço `db` é um PostgreSQL 16 publicado só em `127.0.0.1:5432`. Nele ficam
+contas, sessões, EPIs, funcionários, embeddings de rosto, modelos, áreas, zonas,
+câmeras e a auditoria. Em disco, sob `dados/`, ficam apenas os binários: fotos,
+pesos `.pt` e evidências.
+
+### Frontend na Vercel
+
+`frontend/` também é publicado como site estático em
+[argosepi.vercel.app](https://argosepi.vercel.app), pelo repositório
+[argosepi-frontend](https://github.com/AndrosoftStudio/argosepi-frontend). O site
+encontra o backend pelo hub, porque o túnel Cloudflare sorteia um endereço novo a
+cada reinício.
+
+> **Ordem ao mexer nos dois lados:** reconstruir o Docker primeiro, conferir que
+> as rotas novas respondem **401 em vez de 404**, e só então publicar o frontend.
+> `docker-compose.yml` monta `./frontend` como volume, então mudança de frontend
+> vale na hora localmente — mas `backend/` é copiado para dentro da imagem.
+
+---
+
+## O que NÃO está neste repositório, de propósito
+
+O `.gitignore` bloqueia, e é para continuar assim:
+
+- **`.env`** — tem a `HUB_API_KEY` do servidor.
+- **`dados/`** — vetores de rosto, fotos de evidência de funcionários flagrados
+  sem EPI e vídeos gravados das câmeras. É dado pessoal e biométrico de pessoas
+  reais. Não entra em repositório nenhum, nem privado: histórico de git não se
+  apaga fácil.
+- **`backend/users.json.migrated`** — nomes, CPF e telefone de contas reais.
+- **`models/`, `weights/`, `runs/`, `*.pt`** — pesados e recriáveis pelo
+  `treinamento/`.
+- **`cloudflared.exe`** — baixado na construção da imagem (ver `Dockerfile`).
+
+`POSTGRES_PASSWORD` no `docker-compose.yml` e no `.env.example` é um valor
+padrão de desenvolvimento (`argos`), não a senha real — o banco só escuta em
+`127.0.0.1`. Para expor o banco, troque a senha no `.env`.
+
+## Gerando o fundo da marca
+
+O fundo azul do sistema é uma malha (mesh gradient) gerada, não um gradiente de
+CSS — gradiente radial sempre lê como círculo e a emenda entre dois aparece:
+
+```bash
+python scripts/gerar_fundo.py     # escreve frontend/fundo-malha.jpg
+```

@@ -1,0 +1,118 @@
+# GPU NVIDIA : docker compose --profile gpu up -d --build
+# Somente CPU: docker compose --profile cpu up -d --build
+# Logs       : docker compose --profile gpu logs -f
+# Parar      : docker compose --profile gpu down
+#
+# Painel do treino (site treinamentoargosepi.vercel.app) — NAO sobe junto com o backend:
+#   criar uma vez : docker compose --profile treino create --build painel-treino
+#   depois        : ligar/desligar o container "argosepi-painel-treino" pelo Docker Desktop
+#                   (ou docker start / docker stop argosepi-painel-treino)
+
+x-backend: &backend
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    # o backend fala com o container do banco pelo nome do servico
+    DATABASE_URL: postgresql://${POSTGRES_USER:-argos}:${POSTGRES_PASSWORD:-argos}@db:5432/${POSTGRES_DB:-argosepi}
+  ports:
+    - "8088:8088"
+  volumes:
+    - ./dados:/app/dados
+    - ./models:/app/models
+    - ./frontend:/app/frontend:ro
+  depends_on:
+    db:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  # Banco de dados em container proprio. Os dados ficam no volume pgdata, e nao
+  # na pasta ./dados -- que segue guardando so os binarios (fotos, .pt,
+  # evidencias). A porta e publicada apenas em 127.0.0.1, porque o iniciar.bat
+  # roda o backend fora do Docker e precisa alcancar o banco; de fora da
+  # maquina ninguem chega nele.
+  db:
+    image: postgres:16-alpine
+    container_name: argosepi-db
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-argos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-argos}
+      POSTGRES_DB: ${POSTGRES_DB:-argosepi}
+      # pt_BR nao existe na imagem alpine; o sort fica no padrao do Postgres
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-argos} -d ${POSTGRES_DB:-argosepi}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  backend-gpu:
+    <<: *backend
+    profiles: ["gpu"]
+    image: argosepi-backend:gpu
+    container_name: argosepi-backend
+    build:
+      context: .
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu124
+        INSTALL_TENSORRT: "0"
+    gpus: all
+
+  backend-cpu:
+    <<: *backend
+    profiles: ["cpu"]
+    image: argosepi-backend:cpu
+    container_name: argosepi-backend-cpu
+    build:
+      context: .
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+
+  # Painel de acompanhamento do treino. So le os arquivos; o treino continua rodando no Windows.
+  # Ao ligar, abre o tunel do Cloudflare e se registra no hub; o site acha o painel sozinho.
+  # Inspecao do banco pelo navegador (opcional):
+  #   docker compose --profile dbtools up -d adminer   ->  http://localhost:8090
+  adminer:
+    profiles: ["dbtools"]
+    image: adminer:4
+    container_name: argosepi-adminer
+    ports:
+      - "8090:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  painel-treino:
+    profiles: ["treino"]
+    image: argosepi-painel-treino
+    container_name: argosepi-painel-treino
+    hostname: ${COMPUTERNAME:-argos-treino}
+    build:
+      context: .
+      dockerfile: treinamento/acompanhar_treinamento/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8766:8765"   # 8765 fica livre para o painel do Windows (acompanhar_treinamento.bat)
+    volumes:
+      - ${ARGOS_TREINO_HOST:-D:/ArgosEPI}:/treino:ro
+      - ${ARGOS_DATASET_HOST:-C:/ArgosEPI/datasets}:/dataset:ro
+      - ../coisas/logo.png:/coisas/logo.png:ro
+      - ../coisas/favicon.ico:/coisas/favicon.ico:ro
+    gpus: all          # so para o nvidia-smi mostrar a GPU no painel
+    restart: "no"      # liga apenas quando voce mandar
+
+volumes:
+  pgdata:
+    name: argosepi-pgdata

@@ -1,0 +1,62 @@
+# ─────────────────────────────────────────────────────────────────
+# Argos EPI — o que NUNCA entra no repositório
+# ─────────────────────────────────────────────────────────────────
+
+# Segredos. O .env tem a HUB_API_KEY do servidor.
+# Use .env.example como modelo e mantenha o .env só na máquina.
+.env
+.env.local
+*.key
+*.pem
+
+# Dados de pessoas. dados/users/ guarda vetores de rosto, fotos de evidência
+# de funcionários flagrados sem EPI e vídeos gravados das câmeras. É dado
+# pessoal e biométrico de gente real: não vai para repositório nenhum, nem
+# privado — histórico de git não se apaga fácil.
+dados/
+uploads/
+backend/users.json
+backend/users.json.migrated
+*.db
+*.sqlite
+*.sqlite3
+
+# Pesos de modelo: pesados e recriáveis pelo treinamento.
+*.pt
+*.onnx
+*.engine
+*.torchscript
+models/
+weights/
+runs/
+treinamento/runs/
+treinamento/weights/
+
+# Binário baixado na instalação (ver Dockerfile).
+cloudflared
+cloudflared.exe
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+env/
+
+# Node / ferramentas
+node_modules/
+package-lock.json
+
+# Sistema operacional e editores
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+
+# Saídas temporárias
+*.log
+tmp/
+temp/

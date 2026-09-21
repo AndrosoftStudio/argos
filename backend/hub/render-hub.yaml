@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: vigilancia-epi-hub
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn hub:app
+    envVars:
+      - key: HUB_STALE_AFTER_SECONDS
+        value: "45"
+      - key: HUB_TRAINING_STALE_AFTER_SECONDS
+        value: "180"
+      - key: HUB_PING_ON_HEARTBEAT
+        value: "0"

@@ -1,0 +1,9 @@
+# Deploy opcional no Render, a partir do proprio Dockerfile.
+services:
+  - type: web
+    name: argos-epi-treinamento
+    env: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: HUB_URL
+        value: https://backend-hub-vigilanciaepi.onrender.com

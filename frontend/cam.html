@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no,viewport-fit=cover">
+<title>Dispositivo remoto | Argos EPI</title>
+<meta name="theme-color" content="#05075a">
+<link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" type="image/png" href="icone-192.png" sizes="192x192">
+<link rel="icon" type="image/png" href="icone-512.png" sizes="512x512">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="config.js"></script>
+<script src="argos-stream.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+:root{--navy:#05075a;--brand:#3740b4;--brand-2:#2c34a0;--gold:#fbc343;--gold-ink:#5c3d00;--dn:#c81e1e;--ok:#4ade80;--display:'Anton',Impact,'Arial Narrow',sans-serif;}
+html,body{background:var(--navy);color:#fff;font-family:'Outfit',system-ui,sans-serif;height:100vh;height:100dvh;overflow:hidden;display:flex;flex-direction:column;}
+.top-bar{position:absolute;top:0;left:0;right:0;padding:12px 16px;padding-top:max(12px,env(safe-area-inset-top));background:linear-gradient(to bottom,rgba(5,7,90,.94),rgba(5,7,90,0));z-index:10;display:flex;justify-content:space-between;align-items:center;}
+.logo{font-family:var(--display);font-size:1.6rem;letter-spacing:.03em;line-height:1;display:flex;align-items:center;gap:8px;}
+.logo img{height:30px;width:auto;display:block;flex-shrink:0;}
+.modal-marca{display:flex;flex-direction:column;align-items:center;gap:10px;margin-bottom:14px;}
+.modal-marca img{height:104px;width:auto;display:block;filter:drop-shadow(0 8px 22px rgba(3,5,60,.3));}
+@media (max-width:380px){.logo img{height:24px;}.logo{font-size:1.35rem;}}
+.logo span{font-size:.72rem;letter-spacing:.1em;color:var(--navy);background:var(--gold);padding:4px 6px 3px;border-radius:4px;}
+.status{display:flex;align-items:center;gap:8px;font-size:.85rem;font-weight:600;}
+.net-tag{font-size:.62rem;letter-spacing:.08em;padding:3px 6px;border-radius:4px;background:rgba(255,255,255,.16);}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--dn);transition:background .3s;}
+.dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(74,222,128,.3);}
+.video-container{flex:1;position:relative;background:#00012a;overflow:hidden;}
+#raw-video,#player{position:absolute;inset:0;width:100%;height:100%;}
+#raw-video{object-fit:contain;}
+#player{pointer-events:none;z-index:1;}
+.stopped-msg{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:rgba(255,255,255,.72);padding-bottom:180px;}
+.missing-badge{position:absolute;top:calc(64px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);background:var(--dn);border:2px solid #fff;padding:8px 18px;border-radius:18px;font-weight:700;font-size:.82rem;pointer-events:none;width:max-content;max-width:92%;text-align:center;line-height:1.3;box-shadow:0 6px 18px rgba(200,30,30,.45);z-index:6;}
+.rec{position:absolute;top:calc(64px + env(safe-area-inset-top));left:14px;display:flex;align-items:center;gap:8px;background:rgba(200,30,30,.92);padding:6px 12px;border-radius:999px;font-weight:700;font-size:.85rem;z-index:6;}
+.rec i{width:10px;height:10px;border-radius:50%;background:#fff;animation:pisca 1s infinite;}
+@keyframes pisca{50%{opacity:.25}}
+.panel{position:absolute;left:0;right:0;bottom:0;padding:28px 16px max(18px,env(safe-area-inset-bottom));background:linear-gradient(to top,rgba(5,7,90,.97) 60%,rgba(5,7,90,0));display:flex;flex-direction:column;gap:10px;align-items:center;z-index:5;}
+.mode-info{display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:9px 14px;width:100%;max-width:440px;font-size:.84rem;line-height:1.35;}
+.mode-info b{color:var(--gold);}
+.mode-info small{display:block;opacity:.7;font-size:.72rem;}
+.seg{display:flex;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:3px;gap:3px;width:100%;max-width:440px;}
+.seg button{flex:1;padding:10px 4px;border:0;border-radius:9px;background:transparent;color:#fff;font:600 .82rem 'Outfit',system-ui,sans-serif;cursor:pointer;}
+.seg button.on{background:var(--gold);color:var(--navy);}
+.seg.locked{opacity:.45;pointer-events:none;}
+.opts{display:flex;gap:8px;width:100%;max-width:440px;}
+.opts label{flex:1;display:flex;flex-direction:column;gap:4px;font-size:.7rem;color:rgba(255,255,255,.72);}
+.opts select{padding:9px;border-radius:9px;border:1px solid rgba(255,255,255,.25);background:#10136b;color:#fff;font:600 .88rem 'Outfit',system-ui,sans-serif;}
+.hint-mode{font-size:.76rem;color:rgba(255,255,255,.78);text-align:center;max-width:440px;line-height:1.4;}
+.job{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:10px 14px;width:100%;max-width:440px;font-size:.85rem;line-height:1.4;}
+.bar{height:6px;border-radius:3px;background:rgba(255,255,255,.2);overflow:hidden;margin-top:6px;}
+.bar b{display:block;height:100%;background:var(--gold);transition:width .3s;}
+.btn{color:#fff;border:2px solid transparent;padding:13px 32px;border-radius:14px;font-family:var(--display);font-weight:400;font-size:1.15rem;letter-spacing:.06em;cursor:pointer;transition:transform .15s,opacity .15s;}
+.btn:active{transform:scale(.95);}
+.btn:disabled{opacity:.6;}
+.btn-start{background:var(--brand);border-color:var(--gold);box-shadow:0 6px 18px rgba(55,64,180,.5);}
+.btn-stop{background:var(--dn);border-color:#ff9b9b;box-shadow:0 6px 18px rgba(200,30,30,.45);}
+.modal{position:absolute;inset:0;padding:20px;display:flex;align-items:center;justify-content:center;z-index:50;background:radial-gradient(130% 95% at 15% 0%,#0a7bff 0%,#1657da 30%,#1b31a8 58%,#150f63 100%);}
+.modal-box{background:var(--gold);color:var(--gold-ink);padding:30px 26px;border-radius:14px;width:100%;max-width:360px;text-align:center;box-shadow:0 0 0 6px rgba(176,120,40,.28),0 30px 80px rgba(3,5,40,.5);}
+.modal-brand{font-family:var(--display);font-size:2.6rem;letter-spacing:.03em;line-height:1;color:var(--brand-2);margin-bottom:14px;}
+.modal-box h2{font-family:var(--display);font-weight:400;font-size:1.4rem;letter-spacing:.03em;color:var(--brand-2);margin-bottom:8px;}
+.modal-box p{color:var(--gold-ink);font-size:.9rem;margin-bottom:4px;}
+.modal-box input{width:100%;padding:13px;border-radius:12px;border:2px solid transparent;background:#fff8f3;color:#141852;margin:14px 0;font-size:.95rem;outline:none;font-family:'Outfit',system-ui,sans-serif;}
+.modal-box input:focus{border-color:var(--brand);}
+.modal-box .btn{border-color:var(--brand-2);}
+.dbg{position:absolute;top:calc(100px + env(safe-area-inset-top));right:10px;left:10px;font-size:.68rem;font-family:ui-monospace,monospace;color:rgba(255,255,255,.62);text-align:right;pointer-events:none;z-index:6;}
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div class="logo"><img src="logo.png" alt="" onerror="this.remove()">ARGOS<span>EPI</span></div>
+  <div class="status">
+    <span class="net-tag" id="net-tag" style="display:none"></span>
+    <span id="fps-lbl"></span>
+    <div class="dot" id="dot"></div>
+  </div>
+</div>
+
+<div class="video-container">
+  <video id="raw-video" autoplay playsinline muted></video>
+  <canvas id="player"></canvas>
+  <div id="stopped-msg" class="stopped-msg">
+    <span style="font-size:3rem">📷</span>
+    <span style="font-weight:600">Câmera desligada</span>
+    <span style="font-size:.82rem;opacity:.6">Toque em iniciar. O modo de análise é escolhido no painel.</span>
+  </div>
+  <div id="missing-badge" class="missing-badge" style="display:none"></div>
+  <div id="dbg" class="dbg"></div>
+</div>
+
+<div class="panel">
+  <div class="mode-info" id="mode-info" role="status">
+    <span id="mode-icon" style="font-size:1.3rem">⚡</span>
+    <div><b id="mode-name">Tempo real</b> · <span id="mode-opts">—</span><small id="mode-desc">Definido no painel de controle</small></div>
+  </div>
+  <button class="btn btn-start" id="btn-start" style="display:none">INICIAR</button>
+  <button class="btn btn-stop" id="btn-stop" style="display:none">⏹ PARAR</button>
+</div>
+
+<div class="modal" id="modal">
+  <div class="modal-box">
+    <div class="modal-marca"><img src="logo.png" alt="" onerror="this.remove()">
+      <div class="modal-brand" style="margin:0">ARGOS</div></div>
+    <h2>Acesso restrito</h2>
+    <p>Cole o token do dispositivo para iniciar a câmera remota.</p>
+    <input type="text" id="token-input" placeholder="cam_..." autocomplete="off"/>
+    <button class="btn btn-start" style="width:100%" id="btn-save">Entrar</button>
+  </div>
+</div>
+
+<script>
+const params = new URLSearchParams(location.search);
+let token = params.get('token') || localStorage.getItem('cam_token');
+const CAM_CONSOLE_BANNER = `
+    _                          _____ ____ ___
+   / \\   _ __ __ _  ___  ___  | ____|  _ \\_ _|
+  / _ \\ | '__/ _\` |/ _ \\/ __| |  _| | |_) | |
+ / ___ \\| | | (_| | (_) \\__ \\ | |___|  __/| |
+/_/   \\_\\_|  \\__, |\\___/|___/ |_____|_|  |___|
+             |___/
+`;
+console.log(
+  `%c${CAM_CONSOLE_BANNER}%c\nArgos EPI | Dispositivo remoto | Camera mobile/externa\nToken: ${token ? 'informado' : 'aguardando'}`,
+  'color:#fbc343;font-weight:800;line-height:1.05',
+  'color:#8f96d6;font-weight:600'
+);
+
+function buildStreamId(tok){
+  const safe = String(tok||'').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,24);
+  return safe ? ('remote_' + safe) : ('cam_' + Math.random().toString(36).slice(2,11));
+}
+const $ = (id) => document.getElementById(id);
+
+/* ── Onde fica o backend ───────────────────────────────────────────
+   Esta pagina pode ser servida de dois lugares:
+     a) pelo proprio backend (link do tunel) -> basta usar caminho relativo;
+     b) pela Vercel, que e um endereco fixo -> precisa descobrir o backend.
+   No caso (b) o link traz ?node=<id do backend>; o hub sabe o endereco atual
+   daquele node, que muda a cada reinicio do tunel. O token so vale no backend
+   que o emitiu, entao cada candidato e testado com o proprio token antes de
+   ser aceito -- assim o link continua valendo mesmo se o node_id mudar.     */
+const limpaUrl = (v) => String(v || '').trim().replace(/\/+$/, '');
+const HUB_PADRAO = 'https://backend-hub-vigilanciaepi.onrender.com';
+// sem o hub esta pagina nao acha o backend quando servida pela Vercel,
+// entao ela nao depende so do config.js estar presente
+const HUB_URL = limpaUrl(window.BACKEND_HUB_URL || HUB_PADRAO);
+const NODE_ALVO = params.get('node') || '';
+let BASE = limpaUrl(params.get('backend') || window.BACKEND_URL || '');
+let BASE_RESOLVIDO = Boolean(BASE);
+
+const api = (caminho) => (BASE || '') + caminho;
+
+async function _tokenServe(base, tok){
+  // /streams/<id>/config responde 200 com token valido e 401 com token de outro backend
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 6000);
+    const r = await fetch(limpaUrl(base) + '/streams/' + encodeURIComponent(buildStreamId(tok)) + '/config',
+                          { headers: { 'Authorization': 'Bearer ' + tok, 'ngrok-skip-browser-warning': 'true' },
+                            cache: 'no-store', signal: ctl.signal });
+    clearTimeout(t);
+    return r.ok;
+  } catch { return false; }
+}
+
+async function _mesmaOrigemEhBackend(){
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 4000);
+    const r = await fetch('/status', { cache: 'no-store', signal: ctl.signal });
+    clearTimeout(t);
+    if (!r.ok) return false;
+    const d = await r.json().catch(() => ({}));
+    return Boolean(d && d.node_id);          // so o backend responde node_id
+  } catch { return false; }
+}
+
+async function _candidatosDoHub(){
+  if (!HUB_URL) return [];
+  try {
+    const r = await fetch(HUB_URL + '/nodes', { cache: 'no-store',
+                                                headers: { 'ngrok-skip-browser-warning': 'true' } });
+    if (!r.ok) return [];
+    const d = await r.json().catch(() => ({}));
+    const nodes = (Array.isArray(d.nodes) ? d.nodes : []).filter((n) => n && n.url);
+    // o node pedido no link vem primeiro; o resto por disponibilidade
+    nodes.sort((a, b) => (
+      (b.node_id === NODE_ALVO) - (a.node_id === NODE_ALVO) ||
+      (b.availability || 0) - (a.availability || 0)
+    ));
+    return nodes.map((n) => limpaUrl(n.url));
+  } catch { return []; }
+}
+
+async function resolverBackend(tok){
+  if (BASE_RESOLVIDO) return BASE;
+  if (await _mesmaOrigemEhBackend()) { BASE = ''; BASE_RESOLVIDO = true; return BASE; }
+  const candidatos = await _candidatosDoHub();
+  for (const url of candidatos) {
+    if (!tok || await _tokenServe(url, tok)) { BASE = url; BASE_RESOLVIDO = true; return BASE; }
+  }
+  if (candidatos.length) { BASE = candidatos[0]; BASE_RESOLVIDO = true; return BASE; }
+  throw new Error('Nenhum servidor Argos EPI disponível no momento. Verifique se o servidor está ligado.');
+}
+
+const modal = $('modal'), btnSave = $('btn-save'), tkInput = $('token-input');
+const btnStart = $('btn-start'), btnStop = $('btn-stop');
+const video = $('raw-video'), playerCanvas = $('player');
+const dot = $('dot'), fpsLbl = $('fps-lbl'), netTag = $('net-tag');
+const badge = $('missing-badge'), stopped = $('stopped-msg'), dbgEl = $('dbg');
+
+let streamId = buildStreamId(token);
+let config = { modo: 'tempo_real', fps: 30, resolucao: 720 };
+let camStream = null, sender = null, player = null, wakeLock = null;
+let active = false, reopening = false, playerStats = null;
+
+function authHeaders(json = true){
+  return json
+    ? { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }
+    : { 'Authorization': 'Bearer ' + token };
+}
+
+function showConfig(cfg){
+  config = { ...config, ...(cfg || {}) };
+  const m = ArgosStream.MODES[config.modo] || ArgosStream.MODES.tempo_real;
+  $('mode-icon').textContent = m.icone;
+  $('mode-name').textContent = m.nome;
+  $('mode-opts').textContent = `${config.fps} fps · ${config.resolucao}p`;
+  $('mode-desc').textContent = m.descricao + ' Definido no painel de controle.';
+}
+
+async function loadConfig(){
+  if (!token) return;
+  try {
+    await resolverBackend(token);
+    const r = await fetch(api('/streams/' + encodeURIComponent(streamId) + '/config'), { headers: authHeaders(false) });
+    if (r.ok) showConfig((await r.json()).config);
+  } catch (e) { dbgEl.textContent = e.message || 'Servidor não encontrado'; }
+}
+
+btnSave.onclick = () => {
+  const v = tkInput.value.trim();
+  if (!v.startsWith('cam_')) { alert('Token inválido — deve começar com cam_'); return; }
+  token = v;
+  streamId = buildStreamId(token);
+  localStorage.setItem('cam_token', token);
+  modal.style.display = 'none';
+  btnStart.style.display = 'inline-block';
+  history.replaceState({}, '', '?token=' + encodeURIComponent(token) + (NODE_ALVO ? '&node=' + encodeURIComponent(NODE_ALVO) : ''));
+  loadConfig();
+};
+tkInput.addEventListener('keydown', (e) => e.key === 'Enter' && btnSave.click());
+if (token) { modal.style.display = 'none'; btnStart.style.display = 'inline-block'; }
+
+function setBusy(on){
+  active = on;
+  dot.classList.toggle('on', on);
+  btnStart.style.display = on ? 'none' : 'inline-block';
+  btnStop.style.display = on ? 'inline-block' : 'none';
+  stopped.style.display = on ? 'none' : 'flex';
+}
+
+function waitVideo(){
+  return new Promise((resolve, reject) => {
+    let tries = 0;
+    const iv = setInterval(() => {
+      if (video.videoWidth > 0) { clearInterval(iv); resolve(); }
+      else if (++tries > 50) { clearInterval(iv); reject(new Error('A câmera abriu, mas não liberou imagens. Permita a câmera e mantenha a página aberta.')); }
+    }, 100);
+  });
+}
+
+async function openCam(){
+  const s = await ArgosStream.openCamera({ fps: config.fps, height: config.resolucao });
+  const old = camStream;
+  camStream = s;
+  video.srcObject = s;
+  await video.play().catch(() => {});
+  await waitVideo();
+  if (old) old.getTracks().forEach((t) => t.stop());
+}
+
+/* O painel mudou fps ou resolução: reabre a câmera sem parar o envio. */
+async function onConfig(cfg, old){
+  showConfig(cfg);
+  if (!active || reopening || (old && old.fps === cfg.fps && old.resolucao === cfg.resolucao)) return;
+  reopening = true;
+  try { await openCam(); } catch (e) { dbgEl.textContent = 'Não foi possível trocar a câmera: ' + e.message; }
+  reopening = false;
+}
+
+btnStart.onclick = async () => {
+  btnStart.disabled = true;
+  try {
+    await resolverBackend(token);
+    await loadConfig();
+    await openCam();
+    const r = await fetch(api('/streams/add'), { method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ device: 'auto', camera: 'webcam', stream_id: streamId }) });
+    if (r.status === 401) { alert('Sessão inválida ou token revogado.'); localStorage.removeItem('cam_token'); location.reload(); return; }
+    if (!r.ok) throw new Error('Falha ao registrar a câmera no servidor');
+    const d = await r.json().catch(() => ({}));
+    if (d.config) showConfig(d.config);
+    fetch(api('/streams/notify'), { method: 'POST', headers: authHeaders(), body: JSON.stringify({ stream_id: streamId }) }).catch(() => {});
+    setBusy(true);
+    try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
+    startSending();
+  } catch (e) {
+    alert('Erro ao iniciar: ' + e.message);
+    await stopAll();
+  } finally {
+    btnStart.disabled = false;
+  }
+};
+btnStop.onclick = () => stopAll();
+
+function startSending(){
+  sender = new ArgosStream.LiveSender({
+    video, token, streamId, backendUrl: BASE,
+    onConfig,
+    onInfo: (d) => d.config && showConfig(d.config),
+    onResult: (d) => { if (player) player.pushResult(d); showMissing(d); },
+    onStats: (s) => {
+      const info = ArgosStream.trackInfo(camStream);
+      fpsLbl.textContent = playerStats ? `${Math.round(playerStats.fps)} fps` : '';
+      netTag.style.display = 'inline';
+      netTag.textContent = s.transport === 'ws' ? 'WS' : s.transport === 'http' ? 'HTTP' : 'SEM REDE';
+      dbgEl.textContent = `câmera ${info.width}x${info.height}@${Math.round(info.fps || 0)} · envio ${s.sentFps.toFixed(0)} q/s` +
+        ` (${Math.round(s.quality * 100)}% qual., ${Math.round(s.scale * 100)}% tam.) · ${(s.kbps / 1000).toFixed(1)} Mb/s` +
+        (s.pending ? ` · ${s.pending} na fila` : '') +
+        ` · atraso ${s.serverDelay ?? '—'} ms · GPU ${s.serverFps ?? '—'} q/s`;
+    },
+    onStatus: (st, msg) => {
+      if (st === 'removido') { alert('Esta câmera foi removida no painel.'); stopAll(); }
+      else if (st === 'erro' && msg) dbgEl.textContent = msg;
+      else if (st === 'reconectando') { if (player) player.setMessage('Sem conexão · guardando quadros e tentando de novo...'); }
+      else if (player) player.setMessage('');
+    },
+  });
+  player = new ArgosStream.LivePlayer({
+    canvas: playerCanvas,
+    getFrame: (seq) => sender && sender.frameBlob(seq),
+    onStats: (st) => { playerStats = st; },
+  });
+  sender.start();
+}
+
+function showMissing(d){
+  const missing = d.missing || [];
+  const fall = (d.alerts || []).some((a) => a.includes('queda'));
+  if (d.status === 'perigo' && (missing.length || fall)) {
+    badge.textContent = fall ? '⚠ POSSÍVEL QUEDA' : 'FALTA: ' + missing.join(', ');
+    badge.style.display = 'block';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+async function stopAll(){
+  if (sender) {
+    sender.stop();
+    sender = null;
+    fetch(api('/streams/stop_external'), { method: 'POST', headers: authHeaders(), body: JSON.stringify({ stream_id: streamId }) }).catch(() => {});
+  }
+  if (player) { player.close(); player = null; }
+  badge.style.display = 'none';
+  if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null; }
+  video.srcObject = null;
+  try { await wakeLock?.release(); } catch {}
+  wakeLock = null;
+  setBusy(false);
+  fpsLbl.textContent = '';
+  netTag.style.display = 'none';
+  dbgEl.textContent = '';
+}
+
+// a tela apagada solta a trava; ao voltar para a página, pede de novo
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible' && active && !wakeLock) {
+    try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
+  }
+});
+
+function autoStartIfRequested(){
+  const auto = params.get('auto');
+  if ((auto === '1' || auto === 'true') && token) {
+    setTimeout(() => { if (btnStart.style.display !== 'none') btnStart.click(); }, 250);
+  }
+}
+// descobre o backend primeiro; so depois carrega a config e inicia sozinho
+loadConfig().finally(autoStartIfRequested);
+</script>
+</body>
+</html>

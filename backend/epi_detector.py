@@ -1,0 +1,154 @@
+"""
+epi_detector.py - Detector de EPIs e conversao das deteccoes para a taxonomia Argos.
+
+Compartilhado pelo tempo real (processor.py) e pelas analises de video (analysis_jobs.py).
+"""
+import os
+
+import torch
+
+import ppe_taxonomy as tax
+from ppe_analyzer import supported_items
+from yolo_runtime import precision_kwargs
+
+MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'models')
+# modelo de pose por nivel de detalhe (o Ultralytics baixa na primeira vez)
+POSE_MODELS = {'tempo_real': 'yolo26n-pose.pt', 'detalhado': 'yolo26s-pose.pt', 'super': 'yolo26m-pose.pt'}
+
+
+def resolve_device(req):
+    req = str(req or 'auto').lower()
+    if req == 'cpu':
+        return 'cpu'
+    if req in ('auto', '0', 'cuda', 'gpu') and torch.cuda.is_available():
+        return '0'
+    if req in ('auto', 'dml'):
+        try:
+            import torch_directml
+            return torch_directml.device()
+        except Exception:
+            pass
+    return 'cpu'
+
+
+def is_cuda(device):
+    d = str(device)
+    return d in ('0', 'cuda', 'gpu') or d.startswith('cuda')
+
+
+def pose_model_path(level):
+    return os.path.join(MODELS_DIR, POSE_MODELS.get(level, POSE_MODELS['tempo_real']))
+
+
+def _runtime_path(model_path, device, use_tensorrt):
+    if not use_tensorrt or not is_cuda(device):
+        return model_path, 'pytorch'
+    if os.environ.get('EPI_USE_TENSORRT', '1').strip().lower() in ('0', 'false', 'no', 'off'):
+        return model_path, 'pytorch'
+    root, ext = os.path.splitext(model_path)
+    if ext.lower() == '.engine':
+        return model_path, 'tensorrt'
+    if os.path.exists(root + '.engine'):
+        return root + '.engine', 'tensorrt'
+    return model_path, 'pytorch'
+
+
+def _iou(a, b):
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def merge_detections(*groups, iou=0.5):
+    """Uniao de listas de deteccoes: caixas da mesma classe sobrepostas ficam com a de maior confianca."""
+    kept = []
+    for d in sorted((d for g in groups for d in g), key=lambda d: -d['conf']):
+        if all(k['cls'] != d['cls'] or _iou(k['box'], d['box']) < iou for k in kept):
+            kept.append(d)
+    return kept
+
+
+class EpiDetector:
+    """Modelo YOLO de EPIs (Argos, enviado pelo usuario ou COCO) com classes ja interpretadas."""
+
+    def __init__(self, model_path, device='cpu', use_tensorrt=True, log=print):
+        from ultralytics import YOLO
+        runtime, backend = _runtime_path(model_path, device, use_tensorrt)
+        try:
+            self.model = YOLO(runtime)
+        except Exception:
+            if runtime == model_path:
+                raise
+            log('Falha ao carregar TensorRT; usando modelo PyTorch original')
+            runtime, backend = model_path, 'pytorch'
+            self.model = YOLO(runtime)
+        self.model_path, self.runtime_path, self.backend = model_path, runtime, backend
+        self.device = device
+        self.half = bool(is_cuda(device) and backend != 'tensorrt')
+        names = self.model.names
+        self.names = dict(names) if isinstance(names, dict) else dict(enumerate(names))
+        self.class_names = [str(self.names[i]) for i in sorted(self.names)]
+        self.resolved = tax.resolve_model_classes(self.names)
+        self.supported = supported_items(self.resolved)
+        self.items = {item for item, _, _ in self.resolved.values()}
+        self.knows_ppe = any(known and item != 'person' for item, _, known in self.resolved.values())
+        # modelo generico (COCO, 80 classes): classes fora da taxonomia nao sao EPI
+        self.is_generic = len(self.names) >= 80 and not self.knows_ppe
+
+    def clean_required(self, required):
+        """Tira itens que nao sao EPI (ex.: 'car' salvo por configuracoes antigas de modelos COCO)."""
+        return [i for i in required if i in tax.ITEMS or not self.is_generic]
+
+    def useful_for(self, required):
+        """Vale rodar? Um modelo COCO puro nao acrescenta nada aos EPIs exigidos."""
+        return self.knows_ppe or any(item in self.items for item in required)
+
+    def _convert(self, result, dx=0.0, dy=0.0):
+        boxes = result.boxes
+        if boxes is None or len(boxes) == 0:
+            return []
+        out = []
+        for xyxy, conf, cls in zip(boxes.xyxy.cpu().tolist(), boxes.conf.cpu().tolist(), boxes.cls.int().cpu().tolist()):
+            item, present, known = self.resolved.get(cls, (str(cls), True, False))
+            out.append({'item': item, 'present': present, 'known': known, 'conf': round(float(conf), 4),
+                        'box': (xyxy[0] + dx, xyxy[1] + dy, xyxy[2] + dx, xyxy[3] + dy),
+                        'label': str(self.names.get(cls, cls)), 'cls': cls})
+        return out
+
+    def detect(self, img, imgsz=640, conf=0.35, augment=False):
+        r = self.model.predict(img, imgsz=imgsz, conf=conf, iou=0.5, device=self.device, verbose=False,
+                               augment=augment, **precision_kwargs(self.half))[0]
+        return self._convert(r)
+
+    def detect_crops(self, img, boxes, imgsz=640, conf=0.3, margin=0.15, min_px=24):
+        """Detector em recortes de cada pessoa ampliados para imgsz: EPIs pequenos ficam visiveis."""
+        h, w = img.shape[:2]
+        crops, offsets = [], []
+        for x1, y1, x2, y2 in boxes:
+            mx, my = (x2 - x1) * margin, (y2 - y1) * margin
+            cx1, cy1 = int(max(0, x1 - mx)), int(max(0, y1 - my))
+            cx2, cy2 = int(min(w, x2 + mx)), int(min(h, y2 + my))
+            if cx2 - cx1 < min_px or cy2 - cy1 < min_px:
+                continue
+            crops.append(img[cy1:cy2, cx1:cx2])
+            offsets.append((cx1, cy1))
+        if not crops:
+            return []
+        results = self.model.predict(crops, imgsz=imgsz, conf=conf, iou=0.5, device=self.device, verbose=False,
+                                     **precision_kwargs(self.half))
+        out = []
+        for r, (dx, dy) in zip(results, offsets):
+            out.extend(self._convert(r, dx, dy))
+        return out
+
+
+def run_employee_model(model, img, device, half):
+    """Rostos reconhecidos pelo modelo funcionarios.pt: [{'nome', 'confidence', 'bbox'}]."""
+    r = model.predict(img, device=device, verbose=False, conf=0.4, iou=0.45, **precision_kwargs(half))[0]
+    if r.boxes is None or len(r.boxes) == 0:
+        return []
+    return [{'nome': str(model.names[c]).replace('_', ' '), 'confidence': round(float(p), 4),
+             'bbox': [round(float(v), 2) for v in xyxy]}
+            for xyxy, p, c in zip(r.boxes.xyxy.cpu().tolist(), r.boxes.conf.cpu().tolist(), r.boxes.cls.int().cpu().tolist())]

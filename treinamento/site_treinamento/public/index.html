@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Acompanhar treinamento · Argos EPI</title>
+<link rel="icon" href="/favicon.ico">
+<style>
+:root {
+  color-scheme: light;
+  --navy: #05075a; --gold: #fbc343;
+  --page: #f3f5fc; --surface: #fcfcfb;
+  --tx: #0b0b0b; --tx2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11, 11, 11, .10);
+  --s1: #2a78d6; --s2: #eb6834;
+  --fill: #2a78d6; --track: #cde2fb;
+  --good: #0ca30c; --good-tx: #006300; --warning: #fab219; --critical: #d03b3b;
+  --warn-bg: #fff4dc; --crit-bg: #fdecec;
+  --r: 12px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19;
+    --tx: #ffffff; --tx2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255, 255, 255, .10);
+    --s1: #3987e5; --s2: #d95926;
+    --fill: #3987e5; --track: #0d366b;
+    --good-tx: #0ca30c; --warn-bg: #2b2208; --crit-bg: #2e1111;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--tx); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+body.offline main { opacity: .55; }
+.topo { background: var(--navy); color: #fff; display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 12px max(16px, calc((100vw - 1240px) / 2)); border-bottom: 3px solid var(--gold); flex-wrap: wrap; }
+.marca { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.marca img { height: 38px; width: auto; border-radius: 6px; background: #fff; }
+.titulo { font-size: 18px; font-weight: 650; }
+.sub { font-size: 12px; color: #c9cdf2; }
+.topo-dir { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.pill { display: inline-flex; align-items: center; gap: 8px; background: #fff; color: #0b0b0b; border-radius: 999px; padding: 5px 12px 5px 10px; font-weight: 600; }
+.pill .ico { font-size: 13px; line-height: 1; }
+.pill.bom .ico { color: var(--good); } .pill.atencao .ico { color: #b77900; } .pill.critico .ico { color: var(--critical); }
+.pill.bom .ico.pulsa { animation: pulsa 1.6s ease-in-out infinite; }
+@keyframes pulsa { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .pill .ico.pulsa { animation: none; } }
+.atualizado { font-size: 12px; color: #c9cdf2; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+#conexao:empty { display: none; }
+main { max-width: 1240px; margin: 0 auto; padding: 20px 16px 40px; display: grid; gap: 16px; transition: opacity .2s; }
+.card { background: var(--surface); border-radius: var(--r); box-shadow: 0 0 0 1px var(--ring); padding: 18px 20px; min-width: 0; }
+h2 { font-size: 15px; margin: 0; font-weight: 650; }
+h3 { font-size: 13px; margin: 0; font-weight: 600; color: var(--tx); }
+.nota { margin: 2px 0 12px; font-size: 12px; color: var(--muted); }
+.rotulo { font-size: 12px; color: var(--tx2); }
+.grade { display: grid; gap: 16px; }
+.duas { grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
+.tiles { grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); }
+.hero { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 28px; }
+@media (max-width: 760px) { .hero { grid-template-columns: 1fr; } }
+.hero-num { font-size: 56px; font-weight: 650; line-height: 1.05; margin: 2px 0 10px; }
+.meter { height: 8px; border-radius: 99px; background: var(--track); overflow: hidden; margin: 8px 0; }
+.meter.grande { height: 12px; }
+.meter > span { display: block; height: 100%; width: 0; background: var(--fill); border-radius: 99px; transition: width .6s ease; }
+.linha-forte { font-size: 15px; font-weight: 600; margin-top: 12px; }
+.linha { color: var(--tx2); margin-top: 2px; }
+.aviso { margin-top: 14px; border-radius: 10px; padding: 10px 12px; display: grid; grid-template-columns: auto 1fr; gap: 10px; color: var(--tx); }
+.aviso.atencao { background: var(--warn-bg); } .aviso.critico { background: var(--crit-bg); }
+.aviso .ico { font-weight: 700; } .aviso.atencao .ico { color: #b77900; } .aviso.critico .ico { color: var(--critical); }
+.aviso .det { font: 12px ui-monospace, Consolas, monospace; color: var(--tx2); margin-top: 4px; word-break: break-word; }
+.etapas { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; align-content: start; }
+.etapas li { display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; }
+.etapas li.andamento, .etapas li.parada, .etapas li.erro { background: var(--page); }
+.etapas .ico { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; box-shadow: inset 0 0 0 1.5px var(--axis); color: var(--muted); }
+.etapas li.concluida .ico { background: var(--good); box-shadow: none; color: #fff; }
+.etapas li.andamento .ico { box-shadow: inset 0 0 0 2px var(--fill); color: var(--fill); }
+.etapas li.parada .ico { box-shadow: inset 0 0 0 2px #b77900; color: #b77900; }
+.etapas li.erro .ico { box-shadow: inset 0 0 0 2px var(--critical); color: var(--critical); }
+.etapas .nome { font-weight: 550; } .etapas li.pendente .nome { color: var(--tx2); font-weight: 450; }
+.etapas .quando { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tile .valor { font-size: 26px; font-weight: 650; margin-top: 2px; }
+.tile .det { font-size: 12px; color: var(--tx2); }
+.cab { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.filtros { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.seg { display: inline-flex; background: var(--page); border-radius: 9px; padding: 3px; box-shadow: inset 0 0 0 1px var(--ring); }
+.seg button, .botao { font: inherit; border: 0; background: transparent; color: var(--tx2); padding: 5px 12px; border-radius: 7px; cursor: pointer; }
+.seg button[aria-selected="true"] { background: var(--surface); color: var(--tx); font-weight: 600; box-shadow: 0 0 0 1px var(--ring); }
+.seg button:disabled { opacity: .45; cursor: default; }
+.botao { box-shadow: inset 0 0 0 1px var(--ring); background: var(--surface); }
+.botao[aria-pressed="true"] { color: var(--tx); font-weight: 600; }
+button:focus-visible, svg:focus-visible, rect:focus-visible { outline: 2px solid var(--fill); outline-offset: 2px; }
+.metricas { grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); margin-bottom: 18px; }
+.metrica { padding: 10px 12px; border-radius: 10px; box-shadow: inset 0 0 0 1px var(--ring); }
+.metrica .valor { font-size: 24px; font-weight: 650; }
+.metrica .delta { font-size: 12px; color: var(--tx2); }
+.metrica .delta.sobe { color: var(--good-tx); }
+.grafico-card { margin-top: 6px; }
+.grafico-card + .grade { margin-top: 18px; }
+.legenda { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--tx2); margin: 6px 0 4px; }
+.leg-item { display: inline-flex; align-items: center; gap: 6px; }
+.leg-linha { display: inline-block; width: 16px; height: 2px; border-radius: 2px; }
+.grafico { position: relative; min-height: 60px; }
+.grafico svg { display: block; overflow: visible; touch-action: pan-y; }
+.grade-linha { stroke: var(--grid); stroke-width: 1; shape-rendering: crispEdges; }
+.eixo { stroke: var(--axis); stroke-width: 1; shape-rendering: crispEdges; }
+.tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.tick.forte { fill: var(--tx2); font-size: 12px; font-variant-numeric: normal; }
+.linha-serie { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.ponto { stroke: var(--surface); stroke-width: 2; }
+.cruz { stroke: var(--axis); stroke-width: 1; shape-rendering: crispEdges; }
+.rotulo-direto { fill: var(--tx2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.barra { fill: var(--s1); }
+.dica { position: absolute; z-index: 5; pointer-events: none; background: var(--surface); color: var(--tx); border-radius: 8px;
+  box-shadow: 0 0 0 1px var(--ring), 0 6px 18px rgba(0, 0, 0, .12); padding: 8px 10px; font-size: 12px; min-width: 130px; white-space: nowrap; }
+.dica-tit { color: var(--muted); margin-bottom: 4px; }
+.dica-linha { display: flex; align-items: center; gap: 8px; }
+.dica-linha strong { font-variant-numeric: tabular-nums; }
+.dica-nome { color: var(--tx2); }
+.tabela-wrap { margin-top: 16px; }
+.rolagem { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 600; color: var(--tx2); font-size: 12px; padding: 6px 10px; border-bottom: 1px solid var(--axis); white-space: nowrap; }
+td { padding: 6px 10px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.num, th.num { text-align: right; }
+.vazio { color: var(--muted); margin: 8px 0; }
+.log { margin: 0; background: #0b0d2e; color: #d8dcff; border-radius: 10px; padding: 12px; font: 12px/1.5 ui-monospace, Consolas, monospace;
+  white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; }
+footer { max-width: 1240px; margin: 0 auto; padding: 0 16px 24px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header class="topo">
+  <div class="marca">
+    <img src="/logo.png" alt="" onerror="this.remove()">
+    <div><div class="titulo">Acompanhar treinamento</div><div class="sub" id="sub">Argos EPI · detector de EPIs</div></div>
+  </div>
+  <div class="topo-dir">
+    <span class="pill" id="pill"><span class="ico" id="pill-ico">…</span><span id="pill-tx">Conectando</span></span>
+    <span class="atualizado"><span id="conexao"></span><span id="atualizado"></span></span>
+  </div>
+</header>
+
+<main>
+  <section class="card hero">
+    <div>
+      <div class="rotulo">Treino completo (professor, pseudo-rótulos, final e avaliação)</div>
+      <div class="hero-num" id="geral-pct">–</div>
+      <div class="meter grande" role="progressbar" aria-label="Progresso do treino completo" aria-valuemin="0" aria-valuemax="100"><span id="geral-bar"></span></div>
+      <div class="linha-forte" id="atual-desc">–</div>
+      <div class="linha" id="eta">–</div>
+      <div id="avisos"></div>
+    </div>
+    <ol class="etapas" id="etapas" aria-label="Etapas do pipeline"></ol>
+  </section>
+
+  <section class="grade tiles">
+    <div class="card tile"><div class="rotulo" id="t-atual-rot">Etapa atual</div><div class="valor" id="t-atual">–</div>
+      <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100"><span id="t-atual-bar"></span></div><div class="det" id="t-atual-det">–</div></div>
+    <div class="card tile"><div class="rotulo">Uso da GPU</div><div class="valor" id="t-gpu">–</div>
+      <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100"><span id="t-gpu-bar"></span></div><div class="det" id="t-gpu-det">–</div></div>
+    <div class="card tile"><div class="rotulo">Memória da GPU</div><div class="valor" id="t-vram">–</div>
+      <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100"><span id="t-vram-bar"></span></div><div class="det" id="t-vram-det">–</div></div>
+    <div class="card tile"><div class="rotulo">Memória RAM</div><div class="valor" id="t-ram">–</div>
+      <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100"><span id="t-ram-bar"></span></div><div class="det" id="t-ram-det">–</div></div>
+  </section>
+
+  <section class="card">
+    <div class="cab">
+      <h2>Qualidade na validação</h2>
+      <div class="filtros">
+        <div class="seg" role="tablist" aria-label="Treino">
+          <button role="tab" data-run="professor">Professor</button>
+          <button role="tab" data-run="final">Final</button>
+        </div>
+        <button class="botao" id="btn-tabela" aria-pressed="false">Ver tabela</button>
+      </div>
+    </div>
+    <p class="vazio" id="run-vazio" hidden>Este treino ainda não começou.</p>
+    <div id="run-conteudo">
+      <div class="grade metricas" id="metricas"></div>
+      <div class="grafico-card">
+        <h3>mAP por época</h3>
+        <p class="nota">mAP50 conta como acerto uma caixa com 50% de sobreposição; o mAP50-95 é mais exigente. Quanto maior, melhor.</p>
+        <div class="legenda" id="leg-map"></div><div class="grafico" id="g-map"></div>
+      </div>
+      <div class="grade duas">
+        <div class="grafico-card"><h3>Perda de caixa</h3><p class="nota">Erro na posição das caixas. Quanto menor, melhor.</p><div class="legenda" id="leg-box"></div><div class="grafico" id="g-box"></div></div>
+        <div class="grafico-card"><h3>Perda de classe</h3><p class="nota">Erro em qual EPI é. Quanto menor, melhor.</p><div class="legenda" id="leg-cls"></div><div class="grafico" id="g-cls"></div></div>
+      </div>
+      <div class="tabela-wrap" id="tabela-epocas" hidden></div>
+    </div>
+  </section>
+
+  <section class="grade duas">
+    <div class="card"><h2>Resultado no teste</h2><p class="nota">Medido em imagens que o modelo nunca viu durante o treino.</p><div id="teste"></div></div>
+    <div class="card"><h2>Pseudo-rótulos</h2><p class="nota">Caixas que o professor acrescentou onde o dataset de origem não anotava aquele EPI.</p><div id="pseudo"></div></div>
+  </section>
+
+  <section class="grade duas">
+    <div class="card"><h2>Checkpoints</h2><p class="nota">Se o PC desligar, o treino retoma do last.pt (ou do epochN.pt mais recente).</p><div id="checkpoints"></div></div>
+    <div class="card"><h2>Log recente</h2><p class="nota" id="log-nota">&nbsp;</p><pre class="log" id="log"></pre></div>
+  </section>
+</main>
+<footer>O painel só lê os arquivos do treino e se atualiza a cada 2 segundos. Fechar esta página não afeta o treino.</footer>
+
+<script>
+const PT = 'pt-BR';
+const SVGNS = 'http://www.w3.org/2000/svg';
+const $ = s => document.querySelector(s);
+const num = (v, d = 3) => (v == null || !isFinite(v)) ? '–' : Number(v).toLocaleString(PT, { minimumFractionDigits: d, maximumFractionDigits: d });
+const inteiro = v => (v == null || !isFinite(v)) ? '–' : Math.round(v).toLocaleString(PT);
+
+function el(tag, attrs = {}, texto) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (texto != null) e.textContent = texto;
+  return e;
+}
+function sv(tag, attrs = {}) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  return e;
+}
+function dur(s) {
+  if (s == null || !isFinite(s)) return '–';
+  s = Math.max(0, Math.round(s));
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  if (h) return `${h} h ${String(m).padStart(2, '0')} min`;
+  return m ? `${m} min` : `${s} s`;
+}
+function hora(ts) {
+  const d = new Date(ts * 1000), hoje = new Date();
+  const hm = d.toLocaleTimeString(PT, { hour: '2-digit', minute: '2-digit' });
+  return d.toDateString() === hoje.toDateString() ? hm : `${hm} de ${d.toLocaleDateString(PT, { day: '2-digit', month: '2-digit' })}`;
+}
+function horaTexto(txt) {  // "2026-09-11 14:24:43" -> "14:24" (ou "14:24 de 11/09")
+  if (!txt) return '';
+  const d = new Date(txt.replace(' ', 'T'));
+  return isNaN(d) ? txt : hora(d.getTime() / 1000);
+}
+function medidor(span, pct, severidade = false) {
+  const p = Math.max(0, Math.min(100, pct || 0));
+  span.style.width = p + '%';
+  span.style.background = severidade && p >= 95 ? 'var(--critical)' : severidade && p >= 85 ? 'var(--warning)' : 'var(--fill)';
+  span.parentElement.setAttribute('aria-valuenow', Math.round(p));
+}
+// a cor da barra de memoria sempre vem com um texto (a cor nunca e o unico sinal)
+const alerta = pct => pct >= 95 ? ' · quase cheia' : pct >= 85 ? ' · uso alto' : '';
+function passoBonito(v) {
+  if (!(v > 0)) return 1;
+  const e = Math.pow(10, Math.floor(Math.log10(v))), f = v / e;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * e;
+}
+const casas = passo => (String(+passo.toFixed(6)).split('.')[1] || '').length;
+
+// ── Gráfico de linhas: crosshair + dica, legenda, rótulo direto no fim ──
+function graficoLinhas(cont, legenda, series, opc = {}) {
+  const validas = series.map(s => ({ ...s, pontos: s.pontos.filter(p => p[1] != null && isFinite(p[1])) }));
+  const assin = JSON.stringify(validas.map(s => [s.pontos.length, s.pontos[s.pontos.length - 1]])) + '|' + cont.clientWidth;
+  if (cont.dataset.assin === assin) return;
+  cont.dataset.assin = assin;
+  legenda.textContent = '';
+  for (const s of validas) {
+    const item = el('span', { class: 'leg-item' }), chave = el('span', { class: 'leg-linha' });
+    chave.style.background = `var(${s.cor})`;
+    item.append(chave, document.createTextNode(s.nome));
+    legenda.append(item);
+  }
+  cont.textContent = '';
+  const todos = validas.flatMap(s => s.pontos);
+  if (!todos.length) { cont.append(el('p', { class: 'vazio' }, 'Nenhuma época concluída ainda.')); return; }
+  const dec = opc.dec ?? 3;
+  const W = Math.max(280, cont.clientWidth), H = 236;
+  const diretos = W >= 520;
+  const m = { t: 12, r: diretos ? 118 : 14, b: 30, l: 46 };
+  const xMin = Math.min(...todos.map(p => p[0])), xMax = Math.max(xMin + 1, ...todos.map(p => p[0]));
+  const passo = passoBonito(Math.max(...todos.map(p => p[1])) / 4);
+  const yMax = Math.max(passo, Math.ceil(Math.max(...todos.map(p => p[1])) / passo) * passo);
+  const X = x => m.l + (x - xMin) / (xMax - xMin) * (W - m.l - m.r);
+  const Y = y => m.t + (1 - y / yMax) * (H - m.t - m.b);
+  const svg = sv('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', tabindex: 0, 'aria-label': opc.aria || '' });
+  for (let v = 0; v <= yMax + passo / 2; v += passo) {
+    svg.append(sv('line', { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), class: v === 0 ? 'eixo' : 'grade-linha' }));
+    const t = sv('text', { x: m.l - 8, y: Y(v) + 4, 'text-anchor': 'end', class: 'tick' });
+    t.textContent = num(v, casas(passo)); svg.append(t);
+  }
+  const passoX = Math.max(1, Math.ceil((xMax - xMin) / 8));
+  for (let x = xMin; x <= xMax; x += passoX) {
+    const t = sv('text', { x: X(x), y: H - 9, 'text-anchor': 'middle', class: 'tick' });
+    t.textContent = x; svg.append(t);
+  }
+  const finais = [];
+  for (const s of validas) {
+    if (!s.pontos.length) continue;
+    const d = s.pontos.map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join('');
+    const caminho = sv('path', { d, class: 'linha-serie' }); caminho.style.stroke = `var(${s.cor})`; svg.append(caminho);
+    const u = s.pontos[s.pontos.length - 1];
+    const ponto = sv('circle', { cx: X(u[0]), cy: Y(u[1]), r: 4, class: 'ponto' }); ponto.style.fill = `var(${s.cor})`; svg.append(ponto);
+    finais.push({ nome: s.nome, x: X(u[0]), y: Y(u[1]), v: u[1] });
+  }
+  if (diretos) {
+    const ys = finais.map(f => f.y).sort((a, b) => a - b);
+    if (!ys.some((y, i) => i && y - ys[i - 1] < 15)) {
+      for (const f of finais) {
+        const t = sv('text', { x: f.x + 10, y: f.y + 4, class: 'rotulo-direto' });
+        t.textContent = `${f.nome} ${num(f.v, dec)}`; svg.append(t);
+      }
+    }
+  }
+  const xs = [...new Set(todos.map(p => p[0]))].sort((a, b) => a - b);
+  const cruz = sv('line', { y1: m.t, y2: H - m.b, class: 'cruz', visibility: 'hidden' });
+  const marcas = validas.map(s => { const c = sv('circle', { r: 4, class: 'ponto', visibility: 'hidden' }); c.style.fill = `var(${s.cor})`; return c; });
+  svg.append(cruz, ...marcas, sv('rect', { x: m.l - 6, y: 0, width: W - m.l - m.r + 12, height: H, fill: 'transparent' }));
+  const dica = el('div', { class: 'dica' }); dica.hidden = true;
+  cont.append(svg, dica);
+  let idx = xs.length - 1;
+  const mostrar = i => {
+    idx = Math.max(0, Math.min(xs.length - 1, i));
+    const x = xs[idx];
+    cruz.setAttribute('x1', X(x)); cruz.setAttribute('x2', X(x)); cruz.setAttribute('visibility', 'visible');
+    dica.textContent = '';
+    dica.append(el('div', { class: 'dica-tit' }, `Época ${x}`));
+    validas.forEach((s, k) => {
+      const p = s.pontos.find(q => q[0] === x);
+      if (!p) { marcas[k].setAttribute('visibility', 'hidden'); return; }
+      marcas[k].setAttribute('cx', X(x)); marcas[k].setAttribute('cy', Y(p[1])); marcas[k].setAttribute('visibility', 'visible');
+      const linha = el('div', { class: 'dica-linha' }), chave = el('span', { class: 'leg-linha' });
+      chave.style.background = `var(${s.cor})`;
+      linha.append(chave, el('strong', {}, num(p[1], dec)), el('span', { class: 'dica-nome' }, s.nome));
+      dica.append(linha);
+    });
+    dica.hidden = false;
+    const larg = dica.offsetWidth, px = X(x);
+    dica.style.left = (px + 14 + larg > W ? Math.max(0, px - larg - 14) : px + 14) + 'px';
+    dica.style.top = m.t + 'px';
+  };
+  const esconder = () => { cruz.setAttribute('visibility', 'hidden'); marcas.forEach(c => c.setAttribute('visibility', 'hidden')); dica.hidden = true; };
+  svg.addEventListener('pointermove', ev => {
+    const r = svg.getBoundingClientRect();
+    const xv = xMin + ((ev.clientX - r.left) * W / r.width - m.l) / (W - m.l - m.r) * (xMax - xMin);
+    let melhor = 0;
+    xs.forEach((x, i) => { if (Math.abs(x - xv) < Math.abs(xs[melhor] - xv)) melhor = i; });
+    mostrar(melhor);
+  });
+  svg.addEventListener('pointerleave', esconder);
+  svg.addEventListener('focus', () => mostrar(idx));
+  svg.addEventListener('blur', esconder);
+  svg.addEventListener('keydown', ev => {
+    if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') { mostrar(idx + (ev.key === 'ArrowLeft' ? -1 : 1)); ev.preventDefault(); }
+  });
+}
+
+// ── Barras horizontais (uma série): valor na ponta, dica por barra ──
+function graficoBarras(cont, itens) {
+  const assin = JSON.stringify(itens) + '|' + cont.clientWidth;
+  if (cont.dataset.assin === assin) return;
+  cont.dataset.assin = assin;
+  cont.textContent = '';
+  const W = Math.max(280, cont.clientWidth), passoL = 28, esp = 16, H = itens.length * passoL + 4;
+  const x0 = 136, larg = W - x0 - 70, max = Math.max(1, ...itens.map(i => i.valor));
+  const svg = sv('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Caixas adicionadas por classe' });
+  const dica = el('div', { class: 'dica' }); dica.hidden = true;
+  svg.append(sv('line', { x1: x0, x2: x0, y1: 0, y2: H, class: 'eixo' }));
+  itens.forEach((it, k) => {
+    const y = k * passoL + (passoL - esp) / 2, w = larg * it.valor / max, x1 = x0 + w, r = Math.min(4, w);
+    const nome = sv('text', { x: x0 - 10, y: y + esp - 3, 'text-anchor': 'end', class: 'tick forte' });
+    nome.textContent = it.nome; svg.append(nome);
+    if (w > 0) svg.append(sv('path', { class: 'barra', d: `M${x0},${y}H${x1 - r}Q${x1},${y} ${x1},${y + r}V${y + esp - r}Q${x1},${y + esp} ${x1 - r},${y + esp}H${x0}Z` }));
+    const valor = sv('text', { x: x1 + 6, y: y + esp - 3, class: 'rotulo-direto' });
+    valor.textContent = inteiro(it.valor); svg.append(valor);
+    const alvo = sv('rect', { x: 0, y: k * passoL, width: W, height: passoL, fill: 'transparent', tabindex: 0 });
+    const mostrar = () => {
+      dica.textContent = '';
+      dica.append(el('div', { class: 'dica-tit' }, it.nome), el('strong', {}, `${inteiro(it.valor)} caixas`));
+      dica.hidden = false;
+      dica.style.left = Math.min(x1 + 50, W - dica.offsetWidth) + 'px';
+      dica.style.top = (k * passoL - 6) + 'px';
+    };
+    alvo.addEventListener('pointerenter', mostrar); alvo.addEventListener('focus', mostrar);
+    alvo.addEventListener('pointerleave', () => { dica.hidden = true; }); alvo.addEventListener('blur', () => { dica.hidden = true; });
+    svg.append(alvo);
+  });
+  cont.append(svg, dica);
+}
+
+function tabela(colunas, linhas) {
+  const t = el('table'), thead = el('thead'), cab = el('tr');
+  for (const c of colunas) cab.append(el('th', c.num ? { class: 'num' } : {}, c.nome));
+  thead.append(cab);
+  t.append(thead);
+  const corpo = el('tbody');
+  for (const l of linhas) {
+    const tr = el('tr');
+    colunas.forEach((c, i) => tr.append(el('td', c.num ? { class: 'num' } : {}, l[i])));
+    corpo.append(tr);
+  }
+  t.append(corpo);
+  const rolagem = el('div', { class: 'rolagem' });
+  rolagem.append(t);
+  return rolagem;
+}
+
+// ── Estado da página ──
+let dados = null, runEscolhido = null, verTabela = false, ultimoOk = 0;
+const SITUACOES = {
+  rodando: ['Treinando', '●', 'bom'], concluido: ['Concluído', '✓', 'bom'],
+  parado: ['Parado', 'Ⅱ', 'atencao'], erro: ['Parou com erro', '!', 'critico'], offline: ['Painel sem conexão', '!', 'critico'],
+};
+const ICONES_ETAPA = { concluida: '✓', andamento: '●', parada: 'Ⅱ', erro: '!', pendente: '' };
+const TEXTO_ETAPA = { andamento: 'em andamento', parada: 'parada', erro: 'com erro', pendente: 'pendente' };
+
+function pilula(chave) {
+  const [tx, ico, cls] = SITUACOES[chave] || SITUACOES.offline;
+  $('#pill').className = 'pill ' + cls;
+  $('#pill-ico').textContent = ico;
+  $('#pill-ico').classList.toggle('pulsa', chave === 'rodando');
+  $('#pill-tx').textContent = tx;
+}
+
+function conexaoTexto(c) {
+  if (!c) return '';                                   // painel aberto no proprio PC
+  const quem = c.host || c.node_id || 'PC de treino';
+  return c.origem === 'hub' ? `${quem} · encontrado pelo hub` : `${quem} · endereço fixo`;
+}
+
+function desconectado(corpo) {
+  document.body.classList.add('offline');
+  pilula('offline');
+  const c = corpo && corpo.conexao;
+  $('#conexao').textContent = (corpo && corpo.falha) || 'Sem conexão com o painel.';
+  if (c && c.erro) $('#log-nota').textContent = c.erro;
+}
+
+function renderHero(d) {
+  const pct = d.situacao === 'concluido' ? 100 : d.progresso_geral;
+  $('#geral-pct').textContent = `${num(pct, pct < 100 ? 1 : 0)}%`;
+  medidor($('#geral-bar'), pct);
+  const a = d.atual || {}, etapa = d.etapas.find(e => e.id === a.etapa);
+  let desc = etapa ? etapa.nome : 'Aguardando';
+  if (d.situacao === 'concluido') desc = 'Todas as etapas foram concluídas';
+  else if (a.tipo === 'treino') desc += a.fase === 'teste' ? ' · avaliando no conjunto de teste' : ` · época ${a.epoca} de ${a.epocas}${a.fase === 'validacao' ? ' (validando)' : ''}`;
+  else if (a.tipo === 'pseudo') desc += ` · ${inteiro(a.imagens_feitas)} de ${inteiro(a.imagens_total)} imagens`;
+  $('#atual-desc').textContent = desc;
+  let eta = '';
+  if (d.situacao === 'concluido') eta = 'O modelo final está em models/.';
+  else if (d.eta) eta = d.situacao === 'rodando'
+    ? `Termina por volta das ${hora(d.eta.fim_ts)} · faltam ~${dur(d.eta.restante_s)} (pelo ritmo das últimas épocas; o final pode parar antes se não melhorar)`
+    : `Faltam ~${dur(d.eta.restante_s)} de treino quando for retomado`;
+  $('#eta').textContent = eta;
+  const cx = $('#avisos'); cx.textContent = '';
+  for (const av of d.avisos || []) {
+    const box = el('div', { class: `aviso ${av.nivel}`, role: 'status' });
+    const texto = el('div', {}, av.texto);
+    if (av.detalhe) texto.append(el('div', { class: 'det' }, av.detalhe));
+    box.append(el('span', { class: 'ico' }, av.nivel === 'critico' ? '!' : 'Ⅱ'), texto);
+    if (av.nivel === 'atencao' && !/retomar/.test(av.texto)) box.firstChild.textContent = '!';
+    cx.append(box);
+  }
+  const lista = $('#etapas'); lista.textContent = '';
+  for (const e of d.etapas) {
+    const li = el('li', { class: e.estado });
+    li.append(el('span', { class: 'ico', 'aria-hidden': 'true' }, ICONES_ETAPA[e.estado]), el('span', { class: 'nome' }, e.nome),
+      el('span', { class: 'quando' }, e.estado === 'concluida' ? `concluída ${horaTexto(e.concluida_em)}` : TEXTO_ETAPA[e.estado]));
+    lista.append(li);
+  }
+}
+
+function renderTiles(d) {
+  const a = d.atual || {};
+  if (a.tipo === 'treino') {
+    $('#t-atual-rot').textContent = a.fase === 'validacao' ? 'Época atual · validando' : 'Época atual';
+    $('#t-atual').textContent = `${a.epoca} de ${a.epocas}`;
+    medidor($('#t-atual-bar'), a.fase === 'teste' ? 100 : (a.fracao_epoca || 0) * 100);
+    $('#t-atual-det').textContent = a.fase === 'treino'
+      ? `${a.ritmo || ''} · faltam ${dur(a.restante_fase_s)} de treino${a.lento ? ' · mais lenta que o normal' : ''}`
+      : a.fase === 'validacao' ? `Validação em ${inteiro(a.pct_fase)}%` : a.fase === 'teste' ? 'Avaliando no conjunto de teste' : 'Aguardando o próximo registro';
+  } else if (a.tipo === 'pseudo') {
+    $('#t-atual-rot').textContent = 'Pseudo-rótulos';
+    $('#t-atual').textContent = `${num((a.fracao || 0) * 100, 0)}%`;
+    medidor($('#t-atual-bar'), (a.fracao || 0) * 100);
+    $('#t-atual-det').textContent = `${inteiro(a.imagens_feitas)} de ${inteiro(a.imagens_total)} imagens`;
+  } else {
+    $('#t-atual-rot').textContent = 'Etapa atual';
+    $('#t-atual').textContent = d.situacao === 'concluido' ? 'Concluído' : '–';
+    medidor($('#t-atual-bar'), d.situacao === 'concluido' ? 100 : 0);
+    $('#t-atual-det').textContent = '';
+  }
+  const g = d.gpu;
+  if (g) {
+    $('#t-gpu').textContent = `${inteiro(g.util)}%`; medidor($('#t-gpu-bar'), g.util);
+    $('#t-gpu-det').textContent = `${inteiro(g.temp)} °C · ${inteiro(g.potencia)} W · ${g.nome}`;
+    const pv = 100 * g.usada_mb / g.total_mb;
+    $('#t-vram').textContent = `${num(g.usada_mb / 1024, 1)} GB`; medidor($('#t-vram-bar'), pv, true);
+    $('#t-vram-det').textContent = `de ${num(g.total_mb / 1024, 1)} GB${a.vram_gb ? ` · ${num(a.vram_gb, 1)} GB do treino` : ''}${alerta(pv)}`;
+  }
+  const s = d.sistema;
+  if (s) {
+    const pr = 100 * s.ram_usada_gb / s.ram_total_gb;
+    $('#t-ram').textContent = `${num(s.ram_usada_gb, 1)} GB`; medidor($('#t-ram-bar'), pr, true);
+    $('#t-ram-det').textContent = `de ${num(s.ram_total_gb, 0)} GB · CPU ${inteiro(s.cpu_pct)}%${alerta(pr)}`;
+  }
+}
+
+function renderRun(d) {
+  const disponivel = k => d.runs[k] && d.runs[k].resultados.length;
+  const auto = d.etapa_atual === 'final' || disponivel('final') ? 'final' : 'professor';
+  const chave = runEscolhido && d.runs[runEscolhido] ? runEscolhido : auto;
+  document.querySelectorAll('.seg button').forEach(b => {
+    b.setAttribute('aria-selected', String(b.dataset.run === chave));
+    b.disabled = !d.runs[b.dataset.run];
+  });
+  const run = d.runs[chave], res = run ? run.resultados : [];
+  $('#run-vazio').hidden = !!res.length;
+  $('#run-conteudo').hidden = !res.length;
+  if (!res.length) return;
+  const cx = $('#metricas'); cx.textContent = '';
+  const ult = res[res.length - 1], ant = res[res.length - 2];
+  for (const [nome, k] of [['mAP50', 'map50'], ['mAP50-95', 'map5095'], ['Precisão', 'precisao'], ['Recall', 'recall']]) {
+    const melhor = res.reduce((a, b) => (b[k] ?? -1) > (a[k] ?? -1) ? b : a);
+    const card = el('div', { class: 'metrica' });
+    card.append(el('div', { class: 'rotulo' }, `${nome} · época ${ult.epoca}`), el('div', { class: 'valor' }, num(ult[k])));
+    if (ant && ult[k] != null && ant[k] != null) {
+      const dv = ult[k] - ant[k];
+      card.append(el('div', { class: 'delta' + (dv > 0.0005 ? ' sobe' : '') }, `${dv > 0.0005 ? '▲' : dv < -0.0005 ? '▼' : '='} ${num(Math.abs(dv))} vs época anterior`));
+    }
+    card.append(el('div', { class: 'delta' }, `melhor ${num(melhor[k])} (época ${melhor.epoca})`));
+    cx.append(card);
+  }
+  const serie = (k, nome, cor) => ({ nome, cor, pontos: res.map(r => [r.epoca, r[k]]) });
+  graficoLinhas($('#g-map'), $('#leg-map'), [serie('map50', 'mAP50', '--s1'), serie('map5095', 'mAP50-95', '--s2')], { aria: 'mAP50 e mAP50-95 por época' });
+  graficoLinhas($('#g-box'), $('#leg-box'), [serie('box_treino', 'treino', '--s1'), serie('box_val', 'validação', '--s2')], { aria: 'Perda de caixa por época' });
+  graficoLinhas($('#g-cls'), $('#leg-cls'), [serie('cls_treino', 'treino', '--s1'), serie('cls_val', 'validação', '--s2')], { aria: 'Perda de classe por época' });
+  const wrap = $('#tabela-epocas');
+  wrap.hidden = !verTabela;
+  if (verTabela) {
+    wrap.textContent = '';
+    wrap.append(tabela(
+      [{ nome: 'Época' }, { nome: 'mAP50', num: 1 }, { nome: 'mAP50-95', num: 1 }, { nome: 'Precisão', num: 1 }, { nome: 'Recall', num: 1 },
+       { nome: 'Caixa (treino)', num: 1 }, { nome: 'Caixa (val.)', num: 1 }, { nome: 'Classe (treino)', num: 1 }, { nome: 'Classe (val.)', num: 1 }, { nome: 'Duração', num: 1 }],
+      [...res].reverse().map(r => [r.epoca, num(r.map50), num(r.map5095), num(r.precisao), num(r.recall), num(r.box_treino), num(r.box_val), num(r.cls_treino), num(r.cls_val), dur(r.duracao)])));
+  }
+  const ck = $('#checkpoints'); ck.textContent = '';
+  ck.append(run.pesos.length
+    ? tabela([{ nome: `Arquivo (${chave})` }, { nome: 'Tamanho', num: 1 }, { nome: 'Gravado', num: 1 }],
+        run.pesos.map(p => [p.arquivo, `${num(p.mb, 1)} MB`, hora(p.gravado)]))
+    : el('p', { class: 'vazio' }, 'Nenhum checkpoint gravado ainda.'));
+}
+
+function renderResultados(d) {
+  const linhas = [];
+  for (const [k, nome] of [['professor', 'Professor'], ['final', 'Final']]) {
+    const r = d.runs[k] && d.runs[k].resumo;
+    if (r) linhas.push([nome, num(r.map50_teste), num(r.map50_95_teste), num(r.precisao_teste), num(r.recall_teste), horaTexto(r.treinado_em)]);
+  }
+  const t = $('#teste'); t.textContent = '';
+  t.append(linhas.length
+    ? tabela([{ nome: 'Modelo' }, { nome: 'mAP50', num: 1 }, { nome: 'mAP50-95', num: 1 }, { nome: 'Precisão', num: 1 }, { nome: 'Recall', num: 1 }, { nome: 'Concluído', num: 1 }], linhas)
+    : el('p', { class: 'vazio' }, 'Aparece quando o primeiro treino terminar.'));
+  const p = $('#pseudo');
+  const pr = d.pseudo_rotulos;
+  if (pr && pr.adicionadas) {
+    const soma = {};
+    for (const [chave, n] of Object.entries(pr.adicionadas)) { const c = chave.split('/').pop(); soma[c] = (soma[c] || 0) + n; }
+    const itens = Object.entries(soma).map(([nome, valor]) => ({ nome, valor })).sort((a, b) => b.valor - a.valor);
+    if (!p.querySelector('.grafico')) { p.textContent = ''; p.append(el('div', { class: 'grafico' })); }
+    graficoBarras(p.querySelector('.grafico'), itens);
+  } else {
+    p.textContent = '';
+    const a = d.atual || {};
+    p.append(el('p', { class: 'vazio' }, a.tipo === 'pseudo'
+      ? `Em andamento: ${inteiro(a.imagens_feitas)} de ${inteiro(a.imagens_total)} imagens.`
+      : 'Aparece quando a etapa de pseudo-rótulos terminar.'));
+  }
+}
+
+function render() {
+  if (!dados || dados.falha) return;
+  pilula(dados.situacao);
+  $('#sub').textContent = `Argos EPI · ${dados.nome}`;
+  $('#conexao').textContent = conexaoTexto(dados.conexao);
+  renderHero(dados); renderTiles(dados); renderRun(dados); renderResultados(dados);
+  $('#log').textContent = (dados.log.linhas || []).join('\n');
+  $('#log-nota').textContent = dados.log.idade_s != null ? `Última escrita no log há ${dur(dados.log.idade_s)}.` : 'Log não encontrado.';
+}
+
+async function atualizar() {
+  try {
+    const r = await fetch('/api/status', { cache: 'no-store' });
+    const corpo = await r.json().catch(() => null);
+    if (!r.ok || !corpo || corpo.falha) {       // o site devolve o motivo quando nao acha o PC
+      desconectado(corpo);
+      setTimeout(atualizar, 3000);
+      return;
+    }
+    dados = corpo;
+    ultimoOk = Date.now();
+    document.body.classList.remove('offline');
+  } catch (e) {
+    desconectado(null);
+    setTimeout(atualizar, 2000);
+    return;
+  }
+  try {
+    render();  // erro de desenho nao e "sem conexao": registra e segue atualizando
+  } catch (e) {
+    console.error('Falha ao desenhar o painel:', e);
+  }
+  setTimeout(atualizar, 2000);
+}
+setInterval(() => {
+  $('#atualizado').textContent = ultimoOk ? `atualizado há ${Math.round((Date.now() - ultimoOk) / 1000)} s` : '';
+}, 1000);
+document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => { runEscolhido = b.dataset.run; render(); }));
+$('#btn-tabela').addEventListener('click', () => {
+  verTabela = !verTabela;
+  $('#btn-tabela').setAttribute('aria-pressed', String(verTabela));
+  $('#btn-tabela').textContent = verTabela ? 'Ocultar tabela' : 'Ver tabela';
+  render();
+});
+let espera;
+window.addEventListener('resize', () => { clearTimeout(espera); espera = setTimeout(render, 150); });
+atualizar();
+</script>
+</body>
+</html>
