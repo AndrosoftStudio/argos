@@ -22,7 +22,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Outfit:wght@300;400;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="painel.css?v=20260922">
+<link rel="stylesheet" href="painel.css?v=20260922-2">
 </head>
 <body><div id="root"></div>
 <script type="text/babel">
@@ -524,11 +524,6 @@ function AuthScreen({onLogin,backendUrl}){
           <Brand size="xl" logo={false}/>
         </h1>
         <p className="auth-frase">Monitoramento inteligente do uso de EPIs com câmeras e visão computacional.</p>
-        <ul className="auth-selos" aria-hidden="true">
-          {['capacete','oculos','protetor_auricular','colete','luvas','botas'].map(k=>(
-            <li key={k} className="epi-b"><EpiGlifo item={k}/></li>
-          ))}
-        </ul>
       </header>
       <section className="auth-box" aria-label="Acesso">
         <div className="auth-tabs" role="tablist" aria-label="Entrar ou criar conta">
