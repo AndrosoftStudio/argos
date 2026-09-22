@@ -43,7 +43,11 @@ function buildCamLink(token,{nodeId,fallback}={}){
   return `${CAM_SHARE_BASE}/cam.html?${q}`;
 }
 const SAVED_BACKEND_URL = cleanUrl(localStorage.getItem('epi_backendUrl') || '');
-const PAGE_IS_LOCAL = ['localhost','127.0.0.1','0.0.0.0'].includes(window.location.hostname) || window.location.port === '8088';
+// Pagina servida pelo proprio servidor (localhost, rede local ou o link do tunel): o backend e
+// a mesma origem. Antes o link do tunel caia na busca pelo hub e nao achava um servidor que
+// nao estivesse registrado nele ("Servidor nao encontrado").
+const PAGE_IS_LOCAL = ['localhost','127.0.0.1','0.0.0.0'].includes(window.location.hostname) || window.location.port === '8088'
+  || /\.trycloudflare\.com$/i.test(window.location.hostname);
 const LOCAL_BACKEND_ORIGIN = PAGE_IS_LOCAL ? cleanUrl(window.location.origin) : '';
 const INITIAL_API = CONFIG_BACKEND_URL || LOCAL_BACKEND_ORIGIN || (CONFIG_HUB_URL ? '' : (SAVED_BACKEND_URL || cleanUrl(window.location.origin)));
 const EPI_CONSOLE_BANNER = `
