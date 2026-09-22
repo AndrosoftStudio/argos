@@ -513,6 +513,7 @@ dialog.modal.largo{width:min(900px,calc(100vw - 32px));}
 .modal-titulo>.ic{width:28px;height:28px;color:var(--brand);}
 .modal-titulo h2{flex:1;min-width:0;overflow-wrap:anywhere;}
 .modal-actions{margin-top:4px;}
+.pergunta-texto{font-size:.95rem;color:var(--tx);line-height:1.55;}
 .previa{display:flex;align-items:center;gap:12px;padding:12px;background:var(--sf2);border-radius:12px;}
 .scan-form{display:grid;grid-template-columns:1fr 1fr minmax(150px,1.2fr) auto;gap:8px;align-items:center;}
 .scan-bar{height:6px;background:var(--sf3);border-radius:999px;overflow:hidden;}
@@ -973,6 +974,65 @@ function Aviso({toast,onClose}){
   );
 }
 
+/* ═══ PERGUNTAS NA TELA ═══════════════════════════════════════
+   No lugar das caixas cinzas do navegador (confirm, prompt, alert), uma janela
+   do próprio sistema: ícone, frase curta e botões com o nome da ação.
+   Uso: if(!await confirmar({titulo:'Remover a câmera?'})) return;           */
+let _abrirPergunta=null;
+function _perguntar(opcoes,reserva){
+  return new Promise(res=>{
+    if(_abrirPergunta) _abrirPergunta({...opcoes,res});
+    else res(reserva());   // sem o componente montado (não deve acontecer), cai na caixa do navegador
+  });
+}
+const confirmar=(o)=>_perguntar({tipo:'confirmar',ic:'trash',perigo:true,botao:'Remover',...o},
+  ()=>window.confirm([o.titulo,o.texto].filter(Boolean).join('\n')));
+const pedirTexto=(o)=>_perguntar({tipo:'texto',ic:'text',botao:'Salvar',...o},
+  ()=>window.prompt(o.titulo)||null);
+const informar=(o)=>_perguntar({tipo:'info',ic:'check',botao:'Entendi',...o},
+  ()=>{window.alert([o.titulo,o.texto].filter(Boolean).join('\n'));return true;});
+
+function Perguntas(){
+  const [p,setP]=useState(null);
+  const [valor,setValor]=useState('');
+  useEffect(()=>{
+    _abrirPergunta=(nova)=>{setValor(nova.valor||'');setP(nova);};
+    return()=>{_abrirPergunta=null;};
+  },[]);
+  if(!p) return null;
+  const responder=(v)=>{setP(null);p.res(v);};
+  const cancelar=()=>responder(p.tipo==='texto'?null:false);
+  const ok=()=>{
+    if(p.tipo==='texto'){const v=valor.trim();if(!v) return;responder(v);}
+    else responder(true);
+  };
+  return(
+    <Janela titulo={p.titulo} ic={p.ic} onClose={cancelar}>
+      <form onSubmit={enviar(ok)}>
+        {p.texto&&<p className="pergunta-texto">{p.texto}</p>}
+        {p.tipo==='texto'&&(
+          <Campo ic={p.ic} rotulo={p.titulo}><input value={valor} onChange={e=>setValor(e.target.value)} placeholder={p.placeholder||''} data-foco required/></Campo>
+        )}
+        <footer className="modal-actions">
+          {p.tipo!=='info'&&<button type="button" className="btn btn-secondary" onClick={cancelar}>Cancelar</button>}
+          <button type="submit" className={'btn '+(p.perigo&&p.tipo==='confirmar'?'btn-danger':'btn-primary')} data-foco={p.tipo!=='texto'||undefined}>
+            <Icon n={p.perigo&&p.tipo==='confirmar'?'trash':'check'}/>{p.botao}
+          </button>
+        </footer>
+      </form>
+    </Janela>
+  );
+}
+
+/* Erro que a pessoa entende. "Failed to fetch" e afins viram "sem conexão". */
+function mensagemErro(e,padrao='Algo deu errado. Tente de novo.'){
+  const m=String((e&&e.message)||e||'');
+  if(/failed to fetch|networkerror|load failed|network request failed/i.test(m))
+    return 'Sem conexão com o servidor. Confira a internet e tente de novo.';
+  if(/unexpected token|json/i.test(m)) return 'O servidor respondeu de um jeito inesperado. Tente de novo.';
+  return m||padrao;
+}
+
 const VISUAIS=[
   {id:'lista',  txt:'Lista'},
   {id:'pequeno',txt:'Pequeno'},
@@ -1091,7 +1151,7 @@ function AuthScreen({onLogin,backendUrl}){
       const d=await r.json();
       if(!r.ok){setErr(d.error||'Erro');setLoading(false);return;}
       onLogin(d.token,d.user);
-    }catch(e){setErr('Falha ao conectar: '+e.message);}
+    }catch(e){setErr(mensagemErro(e));}
     setLoading(false);
   };
 
@@ -1105,7 +1165,7 @@ function AuthScreen({onLogin,backendUrl}){
       const d=await r.json();
       if(!r.ok){setErr(d.error||'Erro');setLoading(false);return;}
       setOk('Conta criada! Agora é só entrar.');setTab('login');
-    }catch(e){setErr('Erro de conexão: '+e.message);}
+    }catch(e){setErr(mensagemErro(e));}
     setLoading(false);
   };
 
@@ -1356,11 +1416,11 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
       else{
         const remoteCamera = sourceType==='remote' ? 'webcam' : camUrl;
         const r=await authFetch(backendUrl+'/update',token,{method:'POST',body:JSON.stringify({model:streamModel,device,camera:remoteCamera,stream_id:streamId,required_items:getModelRequiredItems(selectedModel)})});
-        if(!r.ok){const d=await r.json();alert(d.error||'Erro');}
+        if(!r.ok){const d=await r.json().catch(()=>({}));onToast&&onToast(d.error||'Não foi possível ligar a câmera.','err');}
       }
     }catch(e){
       await stopCam();
-      alert('Erro ao iniciar: '+e.message);
+      onToast&&onToast('Não foi possível ligar a câmera: '+mensagemErro(e),'err');
     }
     setApplying(false);
   };
@@ -1570,7 +1630,7 @@ function Pagina({ic,titulo,total,acoes,children}){
 }
 
 /* ═══ EPI CARD ═══════════════════════════════════════════════ */
-function EpiCard({epi,token,backendUrl,onUpdate,onDelete,nivel=2}){
+function EpiCard({epi,token,backendUrl,onUpdate,onDelete,onToast,nivel=2}){
   const [uploading,setUploading]=useState(false);
   const [treinando,setTreinando]=useState(false);
   const [importando,setImportando]=useState(false);
@@ -1600,7 +1660,7 @@ function EpiCard({epi,token,backendUrl,onUpdate,onDelete,nivel=2}){
   const importarDataset=async(e)=>{
     const file=e.target.files[0];
     if(!file) return;
-    if(!file.name.endsWith('.zip')){alert('Envie um arquivo .zip do Roboflow');return;}
+    if(!file.name.toLowerCase().endsWith('.zip')){onToast&&onToast('Escolha um arquivo .zip exportado do Roboflow.','err');e.target.value='';return;}
     setImportando(true);
     const fd=new FormData();
     fd.append('dataset',file);
@@ -1608,26 +1668,26 @@ function EpiCard({epi,token,backendUrl,onUpdate,onDelete,nivel=2}){
       const r=await authFetchForm(backendUrl+'/epis/'+epi.id+'/importar_dataset',token,fd);
       const d=await r.json();
       if(r.ok){
-        alert(`Dataset importado!\n${d.total} imagens, ${d.anotadas} com anotacao real.\n${d.sem_label} sem label (usara bbox de tela cheia).`);
+        informar({titulo:'Dataset importado',ic:'box',texto:`${d.total} imagens, ${d.anotadas} com marcação feita à mão.`+(d.sem_label?` ${d.sem_label} sem marcação: nelas o EPI vale para a foto inteira.`:'')});
         onUpdate();
-      }else{alert(d.error||'Erro ao importar');}
-    }catch(e){alert('Erro: '+e.message);}
+      }else{onToast&&onToast(d.error||'Não foi possível importar o arquivo.','err');}
+    }catch(e){onToast&&onToast(mensagemErro(e),'err');}
     setImportando(false);
     e.target.value='';
   };
 
   const treinar=async()=>{
-    if(!confirm(`Treinar modelo para "${epi.nome}"?\nIsso pode levar vários minutos.`)) return;
+    if(!await confirmar({titulo:`Treinar "${epi.nome}"?`,texto:'O treino roda no servidor e leva alguns minutos. Pode continuar usando o sistema.',ic:'dumbbell',perigo:false,botao:'Treinar'})) return;
     setTreinando(true);
     const r=await authFetch(backendUrl+'/epis/'+epi.id+'/treinar',token,{method:'POST'}).catch(()=>null);
-    if(r&&r.status===202) alert('Treinamento iniciado! Aguarde — isso leva alguns minutos.\nVerifique novamente depois.');
-    else alert('Erro ao iniciar treinamento.');
+    if(r&&r.status===202) onToast&&onToast('Treino iniciado. O selo fica verde quando terminar.');
+    else onToast&&onToast('Não foi possível iniciar o treino.','err');
     setTreinando(false);
     onUpdate();
   };
 
   const deleteEpi=async()=>{
-    if(!confirm(`Remover EPI "${epi.nome}"? Isso apaga todas as fotos e o modelo.`)) return;
+    if(!await confirmar({titulo:`Remover "${epi.nome}"?`,texto:'As fotos e o modelo treinado deste EPI também serão apagados.'})) return;
     await authFetch(backendUrl+'/epis/'+epi.id,token,{method:'DELETE'}).catch(()=>{});
     onUpdate();
   };
@@ -1713,7 +1773,7 @@ function FuncCard({func,token,backendUrl,onUpdate,onDelete,onToast,nivel=2}){
   };
 
   const deleteFunc=async()=>{
-    if(!confirm(`Remover funcionário "${func.nome}"?`)) return;
+    if(!await confirmar({titulo:`Remover ${func.nome}?`,texto:'As fotos do rosto saem do sistema e a pessoa deixa de ser reconhecida nas câmeras.'})) return;
     await authFetch(backendUrl+'/funcionarios/'+func.id,token,{method:'DELETE'}).catch(()=>{});
     onUpdate();
   };
@@ -1833,19 +1893,19 @@ function ModelCard({model,token,backendUrl,onRefresh,onToast,onSetDefault,defaul
       if(!r.ok) throw new Error(d.error||'Erro ao salvar');
       onToast&&onToast(model.tipo==='base'?'Cópia da regra salva no seu usuário!':'Configuração salva!');
       onRefresh&&onRefresh();
-    }catch(e){onToast&&onToast(e.message||'Erro ao salvar','err');}
+    }catch(e){onToast&&onToast(mensagemErro(e,'Erro ao salvar'),'err');}
     setSaving(false);
   };
   const removeModel=async()=>{
     if(!model.editable) return;
-    if(!confirm('Remover este modelo do usuário atual?')) return;
+    if(!await confirmar({titulo:'Remover este modelo?',texto:'Câmeras que usam este modelo passam a usar o modelo padrão.'})) return;
     try{
       const r=await authFetch(backendUrl+'/models/'+encodeURIComponent(model.name),token,{method:'DELETE'});
       const d=await r.json();
       if(!r.ok) throw new Error(d.error||'Erro ao remover');
       onToast&&onToast('Modelo removido!');
       onRefresh&&onRefresh();
-    }catch(e){onToast&&onToast(e.message||'Erro ao remover','err');}
+    }catch(e){onToast&&onToast(mensagemErro(e,'Erro ao remover'),'err');}
   };
   const convertTensorRT=async()=>{
     setConverting(true);
@@ -1855,7 +1915,7 @@ function ModelCard({model,token,backendUrl,onRefresh,onToast,onSetDefault,defaul
       if(!r.ok) throw new Error(d.tensorrt?.error||d.error||'Erro ao converter');
       onToast&&onToast('Conversao TensorRT iniciada');
       onRefresh&&onRefresh();
-    }catch(e){onToast&&onToast(e.message||'Erro ao converter','err');}
+    }catch(e){onToast&&onToast(mensagemErro(e,'Erro ao converter'),'err');}
     setConverting(false);
   };
   const exigidos=requiredText.split(',').map(x=>x.trim()).filter(Boolean);
@@ -1922,7 +1982,7 @@ function NetworkCameraModal({open,onClose,backendUrl,token,onUseStream,onToast})
       setJobId(d.job_id);
       setJob(d.job);
     }catch(e){
-      onToast&&onToast(e.message||'Erro ao analisar a rede','err');
+      onToast&&onToast(mensagemErro(e,'Erro ao analisar a rede'),'err');
       setJob(null);
     }
   };
@@ -1950,7 +2010,7 @@ function NetworkCameraModal({open,onClose,backendUrl,token,onUseStream,onToast})
         if(alive){
           setJobId('');
           setJob(null);
-          onToast&&onToast(e.message||'Erro ao acompanhar analise','err');
+          onToast&&onToast(mensagemErro(e,'Erro ao acompanhar analise'),'err');
         }
       }
     };
@@ -2229,12 +2289,12 @@ function AnalysesPage({token,backendUrl,availableModels,defaultModel,onToast,foc
       setFile(null);
       setSelected(job.id);
       load();
-    }catch(e){onToast(e.message,'err');}
+    }catch(e){onToast(mensagemErro(e),'err');}
     setUploadPct(null);
   };
   const remove=async(job)=>{
     const running=!['concluido','erro'].includes(job.status);
-    if(!confirm(running?`Cancelar a análise "${job.nome}"?`:`Remover a análise "${job.nome}"?`)) return;
+    if(!await confirmar(running?{titulo:`Cancelar a análise "${job.nome}"?`,botao:'Cancelar análise',ic:'x'}:{titulo:`Remover a análise "${job.nome}"?`,texto:'O vídeo analisado e os alertas dele serão apagados.'})) return;
     await authFetch(backendUrl+'/analises/'+job.id,token,{method:'DELETE'}).catch(()=>{});
     setSelected(null);
     load();
@@ -2429,7 +2489,7 @@ function FuncDesempenho({func,token,backendUrl,onClose}){
     authFetch(backendUrl+'/funcionarios/'+func.id+'/desempenho?dias='+dias,token)
       .then(r=>r.json().then(d=>{if(!r.ok) throw new Error(d.error||'Erro');return d;}))
       .then(d=>{if(vivo) setDados(d);})
-      .catch(e=>{if(vivo) setErro(e.message);});
+      .catch(e=>{if(vivo) setErro(mensagemErro(e));});
     return ()=>{vivo=false;};
   },[func.id,dias,token,backendUrl]);
 
@@ -2598,7 +2658,7 @@ function AreasBoard({token,backendUrl,onToast}){
       const d=await r.json();
       if(!r.ok) throw new Error(d.error||'Erro');
       setNovo('');carregar();onToast&&onToast('Área criada! Escolha os EPIs e desenhe na câmera.');
-    }catch(e){onToast&&onToast(e.message,'err');}
+    }catch(e){onToast&&onToast(mensagemErro(e),'err');}
   };
 
   const salvar=async(area)=>{
@@ -2608,15 +2668,15 @@ function AreasBoard({token,backendUrl,onToast}){
       const d=await r.json();
       if(!r.ok) throw new Error(d.error||'Erro');
       carregar();onToast&&onToast('Área salva!');
-    }catch(e){onToast&&onToast(e.message,'err');}
+    }catch(e){onToast&&onToast(mensagemErro(e),'err');}
   };
 
   const remover=async(area)=>{
-    if(!confirm('Remover a área "'+area.nome+'"? Os polígonos dela saem de todas as câmeras.')) return;
+    if(!await confirmar({titulo:`Remover a área "${area.nome}"?`,texto:'Os desenhos dela saem de todas as câmeras.'})) return;
     try{
       await authFetch(backendUrl+'/areas/'+area.id,token,{method:'DELETE'});
       carregar();onToast&&onToast('Área removida!');
-    }catch(e){onToast&&onToast(e.message,'err');}
+    }catch(e){onToast&&onToast(mensagemErro(e),'err');}
   };
 
   return(
@@ -2687,7 +2747,7 @@ function ZonaEditor({streamId,token,backendUrl,onClose,onToast}){
       if(!r.ok) throw new Error(d.error||'Erro');
       onToast&&onToast('Áreas mapeadas nesta câmera!');
       onClose();
-    }catch(e){onToast&&onToast(e.message,'err');}
+    }catch(e){onToast&&onToast(mensagemErro(e),'err');}
     setSalvando(false);
   };
 
@@ -2844,11 +2904,11 @@ function App(){
   },[token,backendUrl]);
 
   const addToken=async()=>{
-    const n=prompt("Nome do celular (ex.: Celular da portaria):");if(!n)return;
+    const n=await pedirTexto({titulo:'Novo celular',ic:'phone',placeholder:'Nome (ex.: Celular da portaria)',botao:'Criar link'});if(!n)return;
     try{await authFetch(backendUrl+'/cam_tokens',token,{method:'POST',body:JSON.stringify({nome:n})});loadTokens(backendUrl,token);}catch{}
   };
   const delToken=async(t)=>{
-    if(!confirm("Remover o acesso deste celular? A transmissão dele para na hora."))return;
+    if(!await confirmar({titulo:'Remover este celular?',texto:'O link para de funcionar e a transmissão dele para na hora.'}))return;
     try{await authFetch(backendUrl+'/cam_tokens/'+t,token,{method:'DELETE'});loadTokens(backendUrl,token);}catch{}
   };
 
@@ -2867,7 +2927,7 @@ function App(){
         showToast('Backend selecionado pelo hub');
       }
     }catch(e){
-      showToast(e.message||'Hub indisponivel','err');
+      showToast(mensagemErro(e,'Hub indisponivel'),'err');
     }
     setResolvingBackend(false);
   },[]);
@@ -2960,7 +3020,7 @@ function App(){
       setDefaultModel(modelName);
       showToast('Modelo padrão salvo!');
       loadModels();
-    }catch(e){showToast(e.message||'Erro ao definir padrão','err');}
+    }catch(e){showToast(mensagemErro(e,'Erro ao definir padrão'),'err');}
   };
 
   const go=(p)=>{
@@ -2996,7 +3056,7 @@ function App(){
       await loadModels();
       showToast('Modelo enviado com sucesso!');
       go('config');
-    }catch(e){showToast(e.message||'Erro ao enviar modelo','err');}
+    }catch(e){showToast(mensagemErro(e,'Erro ao enviar modelo'),'err');}
     setTimeout(()=>setUploadPct(0),700);
     setUploadingModel(false);
   };
@@ -3042,7 +3102,7 @@ function App(){
       if(!r.ok) throw new Error(d.error||'Erro ao iniciar stream');
       showToast('Camera adicionada');
     }catch(e){
-      showToast(e.message||'Camera adicionada; clique em Ligar para iniciar','err');
+      showToast(mensagemErro(e,'Camera adicionada; clique em Ligar para iniciar'),'err');
     }
   };
 
@@ -3099,7 +3159,7 @@ function App(){
         showToast(d.message||'Processando rostos...');
         setTimeout(()=>{carregarRostos();loadFuncs();},4000);
       }
-    }catch(e){showToast(e.message||'Erro ao processar rostos','err');}
+    }catch(e){showToast(mensagemErro(e,'Erro ao processar rostos'),'err');}
     setTreinandoFaces(false);
     carregarRostos();
   };
@@ -3214,7 +3274,7 @@ function App(){
             <ul className="cards" aria-label="EPIs cadastrados">
               {epis.map(epi=>(
                 <li key={epi.id}>
-                  <EpiCard epi={epi} token={token} backendUrl={backendUrl} onUpdate={loadEpis} onDelete={loadEpis}/>
+                  <EpiCard epi={epi} token={token} backendUrl={backendUrl} onUpdate={loadEpis} onDelete={loadEpis} onToast={showToast}/>
                 </li>
               ))}
             </ul>
@@ -3420,6 +3480,7 @@ function App(){
       </main>
       <footer className="rodape"><small>Argos EPI · SENAI Lauro de Freitas/BA · TCC Desenvolvimento de Sistemas</small></footer>
 
+      <Perguntas/>
       <NetworkCameraModal open={showNetCam} onClose={()=>setShowNetCam(false)} backendUrl={backendUrl} token={token} onUseStream={addDiscoveredStream} onToast={showToast}/>
       {aviso}
     </div>
