@@ -3401,6 +3401,18 @@ function App(){
             )}
           </section>
 
+          {/* o link para abrir o sistema em outro aparelho so aparecia no log do servidor */}
+          <section className="bloco" aria-labelledby="titulo-acesso">
+            <header className="bloco-titulo"><Icon n="globe"/><h2 id="titulo-acesso">Abrir em outro aparelho</h2></header>
+            {cfURL
+              ? <div className="aj-linha">
+                  <code className="chip" style={{fontSize:'.85rem'}}>{cfURL}</code>
+                  <button type="button" className="btn btn-primary btn-sm" onClick={()=>copyURL(cfURL)}><Icon n="link"/>Copiar link</button>
+                </div>
+              : <p className="dica-linha"><Icon n="globe"/>O link aparece aqui quando o servidor estiver publicado na internet.</p>}
+            {flURL&&<p className="dica-linha" style={{marginTop:8}}><Icon n="wifi"/>Na mesma rede Wi-Fi: {flURL}</p>}
+          </section>
+
           <AreasBoard token={token} backendUrl={backendUrl} onToast={showToast}/>
 
           <section className="bloco" aria-labelledby="titulo-conta">
