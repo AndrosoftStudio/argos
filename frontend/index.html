@@ -71,7 +71,7 @@ const NAV_ITEMS = [
   {id:'analises',label:'Análises',icon:'film'},
   {id:'epis',label:'EPIs',icon:'helmet'},
   {id:'funcionarios',label:'Equipe',icon:'users'},
-  {id:'devices',label:'Celulares',icon:'phone'},
+  {id:'devices',label:'Dispositivos',icon:'phone'},
   {id:'config',label:'Ajustes',icon:'gear'},
 ];
 
@@ -2675,7 +2675,7 @@ function App(){
 
 
       {page==='devices'&&(
-        <Pagina ic="phone" titulo="Celulares" total={camTokens.length} acoes={camTokens.length>0&&
+        <Pagina ic="phone" titulo="Dispositivos remotos" total={camTokens.length} acoes={camTokens.length>0&&
           <button type="button" className="btn btn-gold" onClick={addToken} aria-label="Criar link para celular"><Icon n="plus"/><span className="btn-rotulo" aria-hidden="true">Link</span></button>}>
           {camTokens.length===0&&(
             <Vazio ic="phone" titulo="Celular como câmera">
@@ -2684,7 +2684,7 @@ function App(){
             </Vazio>
           )}
           {camTokens.length>0&&(
-            <ul className="cards" aria-label="Celulares com acesso">
+            <ul className="cards" aria-label="Dispositivos com acesso">
               {camTokens.map(t=>(
                 <li key={t.token}>
                   <article className="card" aria-label={t.nome}>
