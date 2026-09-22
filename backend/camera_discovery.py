@@ -134,9 +134,12 @@ def _merge_device(rec, item):
             rec[key] = item[key]
 
 
+MAX_REDES_POR_BUSCA = 4  # cada rede ja e limitada a /24; sem teto, uma lista longa varria milhares de IPs
+
+
 def _requested_networks(value):
     networks = []
-    for part in str(value or "").split(","):
+    for part in str(value or "").split(",")[:MAX_REDES_POR_BUSCA]:
         raw = part.strip()
         if not raw:
             continue

@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from processor import VideoProcessor
 import db
 import face_id
+import seguranca
 import users as user_mgr
 import areas as areas_mod
 import auditoria
@@ -56,6 +57,48 @@ except ImportError:  # sem flask-sock o tempo real usa so HTTP binario
 
 app = Flask(__name__, static_folder='../frontend', static_url_path='/')
 sock = Sock(app) if Sock else None
+
+# Tamanho maximo de um envio (video, modelo .pt, zip de dataset). Sem limite, um
+# envio so enchia o disco do servidor.
+MAX_UPLOAD_MB = int(os.environ.get('ARGOS_MAX_UPLOAD_MB', '2048') or '2048')
+app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_MB * 1024 * 1024
+
+
+def _ligado(nome, padrao='1'):
+    return os.environ.get(nome, padrao).strip().lower() not in ('0', 'false', 'no', 'off', 'nao', 'não')
+
+
+# Cadastro aberto: qualquer pessoa que chegue ao endereco do servidor cria conta.
+# Bom para demonstracao; numa empresa, desligue (ARGOS_CADASTRO_ABERTO=0).
+CADASTRO_ABERTO = _ligado('ARGOS_CADASTRO_ABERTO')
+# Envio de modelo .pt: o arquivo e carregado pelo PyTorch, que executa codigo
+# embutido nele. 'todos' (padrao), 'admin' (so administradores) ou 'desligado'.
+UPLOAD_MODELOS = os.environ.get('ARGOS_UPLOAD_MODELOS', 'todos').strip().lower()
+tentativas_login = seguranca.LimiteTentativas()
+
+
+# ── Erros com mensagem que a pessoa entende ─────────────────────
+# Sem isto o Flask devolvia uma pagina HTML, e o painel mostrava
+# "Unexpected token <" no lugar de uma explicacao.
+@app.errorhandler(413)
+def _grande_demais(_e):
+    return jsonify({'error': f'Arquivo grande demais. O limite é {MAX_UPLOAD_MB} MB.'}), 413
+
+
+@app.errorhandler(404)
+def _nao_encontrado(_e):
+    return jsonify({'error': 'Endereço não encontrado.'}), 404
+
+
+@app.errorhandler(405)
+def _metodo_invalido(_e):
+    return jsonify({'error': 'Operação não permitida neste endereço.'}), 405
+
+
+@app.errorhandler(500)
+def _erro_interno(e):
+    print(f'[erro] {request.method} {request.path}: {e}')
+    return jsonify({'error': 'Algo deu errado no servidor. Tente de novo em instantes.'}), 500
 
 DEFAULT_CORS_ORIGINS = 'https://argosepi.vercel.app,http://localhost:8088,http://127.0.0.1:8088'
 CORS_ORIGINS = {o.strip().rstrip('/') for o in os.environ.get('CORS_ORIGINS', DEFAULT_CORS_ORIGINS).split(',') if o.strip()}
@@ -149,17 +192,41 @@ def _token():
 
 def _auth():
     t = _token()
-    if not t: return None, (jsonify({'error':'Token obrigatório'}), 401)
+    if not t: return None, (jsonify({'error':'Faça login para continuar.'}), 401)
     if t.startswith('cam_'):
         cam_info = user_mgr.validate_cam_token(t)
-        if not cam_info: return None, (jsonify({'error':'Sessão de câmera inválida'}), 401)
+        if not cam_info: return None, (jsonify({'error':'Este link de celular foi removido. Peça um link novo no painel.'}), 401)
         u = user_mgr.get_user(cam_info['uid'])
-        if not u: return None, (jsonify({'error':'Dono da câmera não encontrado'}), 401)
+        if not u or u.get('blocked'):
+            return None, (jsonify({'error':'A conta dona deste celular não está ativa.'}), 401)
         u['_cam_session'] = cam_info
         return u, None
     u = user_mgr.get_user_by_token(t)
-    if not u: return None, (jsonify({'error':'Sessão inválida'}), 401)
+    if not u: return None, (jsonify({'error':'Sua sessão expirou. Entre de novo.'}), 401)
     return u, None
+
+
+def _stream_permitido(u, sid) -> bool:
+    """A camera `sid` e de quem esta pedindo?
+
+    Antes as rotas de camera confiavam no stream_id enviado pelo cliente: qualquer
+    conta via, trocava o modelo ou removia a camera de outra conta, e /streams/notify
+    ainda deixava "adotar" a camera alheia. Agora:
+      - o celular (token cam_) so fala com o proprio stream (remote_<token>);
+      - o painel so com os streams que criou (<uid>_N) e os dos celulares da conta."""
+    if not seguranca.sid_valido(sid):
+        return False
+    if '_cam_session' in u:
+        return sid == seguranca.sid_do_token_camera(u['_cam_session'].get('token'))
+    uid = u.get('id')
+    if _owns_stream(uid, sid):
+        return True
+    tokens = [t['token'] for t in user_mgr.list_cam_tokens(uid)] if sid.startswith('remote_') else ()
+    return seguranca.stream_da_conta(sid, uid, tokens)
+
+
+def _stream_negado():
+    return jsonify({'error': 'Esta câmera pertence a outra conta.'}), 403
 
 def _auth_admin():
     """Sessao de administrador. As rotas /admin expoem a lista de contas, o bloqueio
@@ -174,21 +241,9 @@ def _auth_admin():
 
 
 def _get_model_path(model_name: str) -> str:
-    """Resolve caminho do modelo.
-    Aceita: nome simples (yolo26n.pt), caminho absoluto, ou nome de modelo customizado."""
-    # Caminho absoluto direto
-    if os.path.isabs(model_name) and os.path.exists(model_name):
-        return model_name
-    # Nome simples na pasta global
-    mp = os.path.join(MODELS_DIR, model_name)
+    """Modelo global de models/ (usado como base do treino de EPI)."""
+    mp = os.path.join(MODELS_DIR, os.path.basename(model_name or ''))
     if os.path.exists(mp): return mp
-    # Procura em todas as pastas de modelos de usuários
-    dados_users = os.path.join(BASE_DIR, 'dados', 'users')
-    if os.path.isdir(dados_users):
-        for uid_dir in os.listdir(dados_users):
-            candidate = os.path.join(dados_users, uid_dir, 'models', model_name)
-            if os.path.exists(candidate): return candidate
-    # Fallback para modelo padrão
     for fname in ['yolo26n.pt', 'yolo26s.pt']:
         fb = os.path.join(MODELS_DIR, fname)
         if os.path.exists(fb): return fb
@@ -698,22 +753,17 @@ def _upsert_model_meta(uid: str, model_name: str, classes=None, required_items=N
 
 
 def _resolve_model_path_for_user(uid, model_name: str) -> str:
-    if os.path.isabs(model_name) and os.path.exists(model_name):
-        return model_name
+    """Modelo pelo nome: primeiro os globais de models/, depois os da propria conta.
+    Antes aceitava caminho absoluto e procurava nas pastas de TODAS as contas: bastava
+    saber o nome do .pt de outra empresa para usar o modelo treinado dela."""
     name = os.path.basename((model_name or '').strip())
     mp = os.path.join(MODELS_DIR, name)
-    if os.path.exists(mp):
+    if name and os.path.exists(mp):
         return mp
-    if uid:
+    if uid and name:
         up = os.path.join(_user_models_dir(uid), name)
         if os.path.exists(up):
             return up
-    # backward-compat fallback
-    if os.path.isdir(DADOS_DIR):
-        for uid_dir in os.listdir(DADOS_DIR):
-            candidate = os.path.join(DADOS_DIR, uid_dir, 'models', name)
-            if os.path.exists(candidate):
-                return candidate
     for fname in ['yolo26n.pt', 'yolo26s.pt']:
         fb = os.path.join(MODELS_DIR, fname)
         if os.path.exists(fb):
@@ -873,6 +923,9 @@ def _auditoria_loop():
         if time.time() - ultima_limpeza < 3600:
             continue
         ultima_limpeza = time.time()
+        n = user_mgr.limpar_sessoes_vencidas()
+        if n:
+            print(f"[sessoes] {n} sessao(oes) vencida(s) removida(s)")
         try:
             uids = [u['uid'] for u in db.consultar('SELECT uid FROM usuarios')]
         except Exception:
@@ -912,25 +965,42 @@ def start_hub_registration():
 # ═══════════════════════════════════════════════════════════════
 # AUTH
 # ═══════════════════════════════════════════════════════════════
+CAMPOS_CADASTRO = {'nome': 'o nome completo', 'doc': 'o CPF ou CNPJ', 'email': 'o e-mail', 'senha': 'a senha'}
+
+
 @app.route('/auth/register', methods=['POST'])
 def register():
-    d = request.get_json(force=True)
+    if not CADASTRO_ABERTO:
+        return jsonify({'error':'O cadastro está fechado neste servidor. Peça uma conta ao administrador.'}), 403
+    d = request.get_json(force=True, silent=True) or {}
     # telefone e setor sao opcionais na tela de cadastro; exigi-los aqui quebrava o cadastro
-    for f in ['nome','doc','email','senha']:
-        if not d.get(f): return jsonify({'error':f'Campo obrigatório: {f}'}), 400
+    for f, nome in CAMPOS_CADASTRO.items():
+        if not str(d.get(f) or '').strip(): return jsonify({'error':f'Preencha {nome}.'}), 400
     if d.get('confirmar_senha') and d['senha'] != d['confirmar_senha']:
-        return jsonify({'error':'Senhas não conferem'}), 400
+        return jsonify({'error':'As duas senhas não são iguais.'}), 400
     ok, res = user_mgr.register(d['nome'],d['doc'],d.get('telefone','') or '',d['email'],
                                 d.get('setor','') or '',d['senha'])
-    if not ok: return jsonify({'error':res}), 409
+    if not ok: return jsonify({'error':res}), 409 if 'Já existe' in res else 400
     return jsonify({'message':'Cadastro realizado!','uid':res}), 201
 
 @app.route('/auth/login', methods=['POST'])
 def do_login():
-    d = request.get_json(force=True)
-    cred = d.get('credencial') or d.get('email') or d.get('doc') or ''
-    ok, token, user = user_mgr.login(cred, d.get('senha',''))
-    if not ok: return jsonify({'error':'Credenciais inválidas ou usuário bloqueado'}), 401
+    d = request.get_json(force=True, silent=True) or {}
+    cred = str(d.get('credencial') or d.get('email') or d.get('doc') or '').strip()
+    if not cred or not d.get('senha'):
+        return jsonify({'error':'Preencha o CPF (ou e-mail) e a senha.'}), 400
+    chave = cred.lower()
+    espera = tentativas_login.bloqueado(chave)
+    if espera:
+        minutos = max(1, round(espera / 60))
+        return jsonify({'error':f'Muitas tentativas com senha errada. Tente de novo em {minutos} min.'}), 429
+    ok, token, user, motivo = user_mgr.login(cred, d.get('senha',''))
+    if not ok:
+        if motivo == 'bloqueado':
+            return jsonify({'error':'Esta conta está bloqueada. Fale com o administrador.'}), 403
+        tentativas_login.falhou(chave)
+        return jsonify({'error':'CPF/e-mail ou senha incorretos.'}), 401
+    tentativas_login.acertou(chave)
     return jsonify({'token':token,'user':user})
 
 @app.route('/auth/logout', methods=['POST'])
@@ -1017,11 +1087,14 @@ def upload_model():
     u, err = _auth()
     if err: return err
     if '_cam_session' in u: return jsonify({'error':'Câmeras não podem enviar modelos'}), 403
+    if UPLOAD_MODELOS in ('desligado', 'off', '0') or (
+            UPLOAD_MODELOS == 'admin' and (u.get('role') or 'user') != 'admin'):
+        return jsonify({'error':'O envio de modelos está restrito ao administrador deste servidor.'}), 403
     if 'model' not in request.files:
-        return jsonify({'error':'Arquivo .pt obrigatório no campo model'}), 400
+        return jsonify({'error':'Escolha um arquivo .pt para enviar.'}), 400
     f = request.files['model']
     if not f or not (f.filename or '').lower().endswith('.pt'):
-        return jsonify({'error':'Envie um arquivo .pt válido'}), 400
+        return jsonify({'error':'O modelo precisa ser um arquivo .pt (YOLO).'}), 400
     safe_name = _safe_model_name(f.filename)
     dest = os.path.join(_user_models_dir(u['id']), safe_name)
     f.save(dest)
@@ -1158,6 +1231,7 @@ def get_frame():
     u, err = _auth()
     if err: return err
     sid = request.args.get('stream', f"{u['id']}_0")
+    if not _stream_permitido(u, sid): return _stream_negado()
     p = _stream(sid, u['id'])
     if not p: return ('', 204)
     fb = p.get_frame_b64()
@@ -1248,6 +1322,7 @@ def recv_frame():
     d = request.get_json(force=True)
     fb = d.get('frame')
     sid = d.get('stream_id', f"{u['id']}_0")
+    if not _stream_permitido(u, sid): return _stream_negado()
     if not fb: return jsonify({"error":"Frame não fornecido"}), 400
     try:
         raw = fb.split(',')[1] if ',' in fb else fb
@@ -1293,6 +1368,7 @@ def recv_frame_bin():
     u, err = _auth()
     if err: return err
     sid = request.headers.get('X-Stream-Id') or request.args.get('stream_id') or f"{u['id']}_0"
+    if not _stream_permitido(u, sid): return _stream_negado()
     p = _ensure_external_stream_ready(u, sid)
     if not p: return jsonify({"error":"Stream removido"}), 410
     session = (request.headers.get('X-Sessao') or 'http')[:64]
@@ -1340,6 +1416,9 @@ if sock:
             out.json({'type': 'erro', 'error': 'Sessão inválida'})
             return
         sid = request.args.get('stream_id') or f"{u['id']}_0"
+        if not _stream_permitido(u, sid):
+            out.json({'type': 'erro', 'error': 'Esta câmera pertence a outra conta.'})
+            return
         session = (request.args.get('sessao') or uuid.uuid4().hex)[:64]
         p = _ensure_external_stream_ready(u, sid)
         if not p:
@@ -1488,6 +1567,7 @@ def stream_config(sid):
     """Modo de análise, fps e resolução de um stream. Só o painel (usuário) altera."""
     u, err = _auth()
     if err: return err
+    if not _stream_permitido(u, sid): return _stream_negado()
     owner = _owner_uid(u)
     cfg = _stream_config(owner, sid)
     if request.method == 'POST':
@@ -1532,6 +1612,8 @@ def notify_stream():
     d = request.get_json(force=True)
     sid = d.get('stream_id')
     if not sid: return jsonify({"error":"stream_id obrigatório"}), 400
+    # antes qualquer conta "adotava" o stream de outra por aqui e depois assistia pelo /ws/view
+    if not _stream_permitido(u, sid): return _stream_negado()
     # Garante que está na lista do usuário dono da câmera
     uid = u.get('_cam_session', {}).get('uid') if '_cam_session' in u else u['id']
     with user_streams_lock:
@@ -1554,6 +1636,9 @@ def add_stream():
     sid = d.get('stream_id')
     if not sid:
         sid = f"{u['id']}_{d.get('index', 0)}"
+    if not _stream_permitido(u, sid): return _stream_negado()
+    if not seguranca.fonte_camera_valida(camera):
+        return jsonify({"error":"Endereço de câmera inválido. Use rtsp://..., http://... ou a câmera do aparelho."}), 400
     # FIX: limpar da lista de removidos se estiver sendo re-adicionado intencionalmente
     with removed_streams_lock:
         removed_streams.discard(sid)
@@ -1583,6 +1668,7 @@ def remove_stream():
     if err: return err
     d = request.get_json(force=True)
     sid = d.get('stream_id', f"{u['id']}_0")
+    if not _stream_permitido(u, sid): return _stream_negado()
     # FIX remover câmera: marcar como removido ANTES de parar o processor
     with removed_streams_lock:
         removed_streams.add(sid)
@@ -1605,6 +1691,7 @@ def stop_external_stream():
     d = request.get_json(force=True)
     sid = d.get('stream_id')
     if not sid: return jsonify({"error":"stream_id obrigatório"}), 400
+    if not _stream_permitido(u, sid): return _stream_negado()
     with streams_lock:
         p = streams.get(sid)
     if p:
@@ -1625,6 +1712,9 @@ def update_engine():
     sid = d.get('stream_id')
     if not sid:
         sid = f"{u['id']}_{d.get('index', 0)}"
+    if not _stream_permitido(u, sid): return _stream_negado()
+    if not seguranca.fonte_camera_valida(camera):
+        return jsonify({"error":"Endereço de câmera inválido. Use rtsp://..., http://... ou a câmera do aparelho."}), 400
     # FIX: não atualizar streams removidos
     with removed_streams_lock:
         if sid in removed_streams:
@@ -1661,12 +1751,17 @@ def upload_video():
     sid = request.form.get('stream_id')
     if not sid:
         sid = f"{u['id']}_{request.form.get('index', 0)}"
-    upload_dir = os.path.join(BASE_DIR,'uploads')
-    os.makedirs(upload_dir, exist_ok=True)
-    vpath = os.path.join(upload_dir, vf.filename)
-    vf.save(vpath)
+    if not _stream_permitido(u, sid): return _stream_negado()
+    # confere o modelo antes de gravar: senao o video ficava perdido no disco
     mp = _resolve_model_path_for_user(u.get('id') if isinstance(u, dict) else None, model_name)
     if not os.path.exists(mp): return jsonify({"error":"Modelo não encontrado"}), 404
+    # O nome que o navegador manda NAO vira caminho: "../../backend/app.py" gravava
+    # por cima do codigo do servidor. Cada conta tem a sua pasta e o nome e sorteado.
+    upload_dir = os.path.join(BASE_DIR, 'uploads', _owner_uid(u))
+    os.makedirs(upload_dir, exist_ok=True)
+    ext = seguranca.extensao_permitida(vf.filename, seguranca.EXTENSOES_VIDEO, '.mp4')
+    vpath = os.path.join(upload_dir, uuid.uuid4().hex[:12] + ext)
+    vf.save(vpath)
     p = _stream(sid, u['id'])
     if p:
         p.update_settings(mp, device, camera_source=vpath, required_items=request.form.getlist('required_items') or None,
@@ -1679,6 +1774,7 @@ def video_feed():
     u, err = _auth()
     if err: return err
     sid = request.args.get('stream', f"{u['id']}_0")
+    if not _stream_permitido(u, sid): return _stream_negado()
     p = _stream(sid, u['id'])
     if not p: return jsonify({"error":"Stream não encontrado"}), 404
     return Response(stream_with_context(p.generate_frames()), mimetype='multipart/x-mixed-replace; boundary=frame')
@@ -1844,15 +1940,24 @@ def update_epi(epi_id):
             return jsonify({"epi": epi})
     return jsonify({"error":"EPI não encontrado"}), 404
 
+def _pasta_de_item(base_dir, item_id):
+    """Pasta de um EPI ou funcionario. None se o id vier com '..', '/' e afins:
+    DELETE /funcionarios/.. apagava a pasta de dados inteira da conta."""
+    if not seguranca.id_valido(item_id):
+        return None
+    return os.path.join(base_dir, item_id)
+
+
 @app.route('/epis/<epi_id>', methods=['DELETE'])
 def delete_epi(epi_id):
     u, err = _auth()
     if err: return err
+    epi_dir = _pasta_de_item(_user_epi_dir(u['id']), epi_id)
+    if not epi_dir: return jsonify({"error":"EPI não encontrado"}), 404
     epis = _load_json(_epi_meta_path(u['id']))
     epis = [e for e in epis if e['id'] != epi_id]
     _save_json(_epi_meta_path(u['id']), epis)
     # Remover pasta de fotos
-    epi_dir = os.path.join(_user_epi_dir(u['id']), epi_id)
     if os.path.exists(epi_dir):
         shutil.rmtree(epi_dir)
     return jsonify({"message":"EPI removido"})
@@ -1862,19 +1967,22 @@ def upload_epi_foto(epi_id):
     """Upload de uma foto do EPI (multipart/form-data, campo 'foto')"""
     u, err = _auth()
     if err: return err
-    if 'foto' not in request.files: return jsonify({"error":"Campo 'foto' obrigatório"}), 400
+    if 'foto' not in request.files: return jsonify({"error":"Escolha uma foto para enviar."}), 400
+    epi_dir = _pasta_de_item(_user_epi_dir(u['id']), epi_id)
+    epis = _load_json(_epi_meta_path(u['id']))
+    if not epi_dir or not any(e['id'] == epi_id for e in epis):
+        return jsonify({"error":"EPI não encontrado"}), 404
 
     foto_file = request.files['foto']
-    epi_dir = os.path.join(_user_epi_dir(u['id']), epi_id)
     os.makedirs(epi_dir, exist_ok=True)
 
     import uuid as _uuid
     foto_id = str(_uuid.uuid4())[:8]
-    ext = os.path.splitext(foto_file.filename)[1] or '.jpg'
+    # so extensao de imagem: um .html enviado como "foto" seria servido como pagina
+    ext = seguranca.extensao_permitida(foto_file.filename, seguranca.EXTENSOES_FOTO, '.jpg')
     foto_path = os.path.join(epi_dir, f"{foto_id}{ext}")
     foto_file.save(foto_path)
 
-    epis = _load_json(_epi_meta_path(u['id']))
     for epi in epis:
         if epi['id'] == epi_id:
             epi.setdefault('fotos', [])
@@ -1981,7 +2089,6 @@ def train_epi_model(epi_id):
             # Treinar usando yolo26n como base (mais rápido)
             base_model = _get_model_path('yolo26n.pt')
             model = _YOLO(base_model)
-            run_dir = os.path.join(models_dir, f"epi_{epi_id}_{run_id}")
             model.train(
                 data=yaml_path,
                 epochs=30,
@@ -2068,9 +2175,12 @@ def importar_dataset_epi(epi_id):
     if err: return err
     if 'dataset' not in request.files:
         return jsonify({"error": "Envie um arquivo .zip com images/ e labels/"}), 400
+    epi_dir = _pasta_de_item(_user_epi_dir(u['id']), epi_id)
+    # confere o EPI antes de mexer em arquivo: a limpeza abaixo apaga as fotos antigas
+    if not epi_dir or not any(e['id'] == epi_id for e in _load_json(_epi_meta_path(u['id']))):
+        return jsonify({"error": "EPI não encontrado"}), 404
 
     zip_file = request.files['dataset']
-    epi_dir  = os.path.join(_user_epi_dir(u['id']), epi_id)
     os.makedirs(epi_dir, exist_ok=True)
 
     import zipfile as _zf, uuid as _uuid
@@ -2082,9 +2192,12 @@ def importar_dataset_epi(epi_id):
         with _zf.ZipFile(tmp_zip) as z:
             names = z.namelist()
             # Procura arquivos de imagem e label correspondentes
+            # limites contra "zip bomba": 5000 imagens de ate 25 MB cada
+            tamanhos = {i.filename: i.file_size for i in z.infolist()}
             imgs   = [n for n in names if n.lower().endswith(('.jpg','.jpeg','.png'))
-                      and ('image' in n.lower() or 'train' in n.lower() or '/' not in n or True)]
-            labels = [n for n in names if n.endswith('.txt') and 'label' in n.lower()]
+                      and tamanhos.get(n, 0) <= 25 * 1024 * 1024][:5000]
+            labels = [n for n in names if n.endswith('.txt') and 'label' in n.lower()
+                      and tamanhos.get(n, 0) <= 1024 * 1024]
 
             if not imgs:
                 return jsonify({"error": "Nenhuma imagem encontrada no zip"}), 400
@@ -2203,12 +2316,16 @@ def update_funcionario(func_id):
 def delete_funcionario(func_id):
     u, err = _auth()
     if err: return err
+    func_dir = _pasta_de_item(_user_func_dir(u['id']), func_id)
+    if not func_dir: return jsonify({"error":"Funcionário não encontrado"}), 404
     funcs = _load_json(_func_meta_path(u['id']))
     funcs = [f for f in funcs if f['id'] != func_id]
     _save_json(_func_meta_path(u['id']), funcs)
-    func_dir = os.path.join(_user_func_dir(u['id']), func_id)
     if os.path.exists(func_dir):
         shutil.rmtree(func_dir)
+    # a galeria em memoria dos streams ainda tinha o rosto de quem saiu
+    _atualizar_funcionarios_em_streams(u['id'])
+    _atualizar_galeria(u['id'])
     return jsonify({"message":"Funcionário removido"})
 
 @app.route('/funcionarios/<func_id>/fotos', methods=['POST'])
@@ -2216,23 +2333,21 @@ def upload_funcionario_foto(func_id):
     """Upload de foto de rosto do funcionário"""
     u, err = _auth()
     if err: return err
-    if 'foto' not in request.files: return jsonify({"error":"Campo 'foto' obrigatório"}), 400
+    if 'foto' not in request.files: return jsonify({"error":"Escolha uma foto para enviar."}), 400
+    func_dir = _pasta_de_item(_user_func_dir(u['id']), func_id)
+    dono = db.consultar_um('SELECT id FROM funcionarios WHERE id=%s AND uid=%s', (func_id, u['id'])) \
+        if func_dir else None
+    if not dono:
+        return jsonify({"error":"Funcionário não encontrado"}), 404
 
     foto_file = request.files['foto']
-    func_dir = os.path.join(_user_func_dir(u['id']), func_id)
     os.makedirs(func_dir, exist_ok=True)
 
     import uuid as _uuid
     foto_id = str(_uuid.uuid4())[:8]
-    ext = os.path.splitext(foto_file.filename)[1] or '.jpg'
+    ext = seguranca.extensao_permitida(foto_file.filename, seguranca.EXTENSOES_FOTO, '.jpg')
     foto_path = os.path.join(func_dir, f"{foto_id}{ext}")
     foto_file.save(foto_path)
-
-    dono = db.consultar_um('SELECT id FROM funcionarios WHERE id=%s AND uid=%s', (func_id, u['id']))
-    if not dono:
-        try: os.remove(foto_path)
-        except OSError: pass
-        return jsonify({"error":"Funcionário não encontrado"}), 404
 
     # O rosto vira um vetor de 512 dimensoes agora, no cadastro. Nao existe mais
     # etapa de treino: reconhecer passa a ser comparar vetores.
@@ -2280,8 +2395,9 @@ def recalcular_rostos():
     if err: return err
 
     if not face_id.disponivel():
-        return jsonify({'error': 'Reconhecimento facial indisponível: o pacote insightface '
-                                 'não está instalado neste servidor.'}), 503
+        # a mensagem antiga falava do pacote insightface, que o sistema nem usa mais
+        return jsonify({'error': 'Reconhecimento facial indisponível neste servidor: '
+                                 + (face_id.erro() or 'modelos de rosto não encontrados') + '.'}), 503
 
     fotos = db.consultar(
         'SELECT ff.id, ff.caminho, ff.embedding FROM func_fotos ff'

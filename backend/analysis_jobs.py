@@ -38,6 +38,8 @@ MODES = {
 VIDEO_EXTS = ('.webm', '.mp4', '.mov', '.mkv', '.avi', '.m4v', '.3gp')
 ACTIVE = ('processando', 'revisando', 'gerando_video')
 MAX_OUTPUT_SIDE = 1280
+# a gravacao chega em partes de ~1 s; 100 mil partes passam de 24 h de video
+MAX_PARTES = 100000
 _ID_RE = re.compile(r'^[a-f0-9]{12}$')
 
 
@@ -376,6 +378,8 @@ class JobManager:
             return self._public(job)
 
     def add_chunk(self, uid, jid, seq, data):
+        if int(seq) >= MAX_PARTES:
+            raise ValueError('Vídeo longo demais para uma análise só')
         with self._lock:
             job = self._get(uid, jid)
             if job['status'] != 'recebendo':
@@ -394,6 +398,9 @@ class JobManager:
             job = self._get(uid, jid)
             if job['status'] != 'recebendo':
                 raise ValueError('Esta análise não está recebendo vídeo')
+        # o total vem do cliente: sem teto, um numero enorme travava o servidor neste laco
+        if not 0 < int(total_parts) <= MAX_PARTES:
+            raise ValueError('Número de partes do vídeo inválido')
         folder = self.folder(uid, jid)
         parts = os.path.join(folder, 'partes')
         missing = [i for i in range(int(total_parts)) if not os.path.exists(os.path.join(parts, f'{i:06d}.part'))]
