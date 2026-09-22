@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no,viewport-fit=cover">
-<title>Dispositivo remoto | Argos EPI</title>
+<title>Celular como câmera | Argos EPI</title>
 <meta name="theme-color" content="#05075a">
 <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
 <link rel="icon" type="image/png" href="icone-192.png" sizes="192x192">
@@ -14,106 +14,122 @@
 <script src="config.js"></script>
 <script src="argos-stream.js"></script>
 <style>
+/* Mesma linguagem do painel: icone no lugar do texto, e so o essencial escrito. */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+[hidden]{display:none !important;}
 :root{--navy:#05075a;--brand:#3740b4;--brand-2:#2c34a0;--gold:#fbc343;--gold-ink:#5c3d00;--dn:#c81e1e;--ok:#4ade80;--display:'Anton',Impact,'Arial Narrow',sans-serif;}
 html,body{background:var(--navy);color:#fff;font-family:'Outfit',system-ui,sans-serif;height:100vh;height:100dvh;overflow:hidden;display:flex;flex-direction:column;}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
+.ic{width:22px;height:22px;display:block;flex-shrink:0;}
 .top-bar{position:absolute;top:0;left:0;right:0;padding:12px 16px;padding-top:max(12px,env(safe-area-inset-top));background:linear-gradient(to bottom,rgba(5,7,90,.94),rgba(5,7,90,0));z-index:10;display:flex;justify-content:space-between;align-items:center;}
 .logo{font-family:var(--display);font-size:1.6rem;letter-spacing:.03em;line-height:1;display:flex;align-items:center;gap:8px;}
 .logo img{height:30px;width:auto;display:block;flex-shrink:0;}
-.modal-marca{display:flex;flex-direction:column;align-items:center;gap:10px;margin-bottom:14px;}
-.modal-marca img{height:104px;width:auto;display:block;filter:drop-shadow(0 8px 22px rgba(3,5,60,.3));}
-@media (max-width:380px){.logo img{height:24px;}.logo{font-size:1.35rem;}}
 .logo span{font-size:.72rem;letter-spacing:.1em;color:var(--navy);background:var(--gold);padding:4px 6px 3px;border-radius:4px;}
+@media (max-width:380px){.logo img{height:24px;}.logo{font-size:1.35rem;}}
 .status{display:flex;align-items:center;gap:8px;font-size:.85rem;font-weight:600;}
 .net-tag{font-size:.62rem;letter-spacing:.08em;padding:3px 6px;border-radius:4px;background:rgba(255,255,255,.16);}
-.dot{width:10px;height:10px;border-radius:50%;background:var(--dn);transition:background .3s;}
+.dot{width:12px;height:12px;border-radius:50%;background:var(--dn);transition:background .3s;}
 .dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(74,222,128,.3);}
 .video-container{flex:1;position:relative;background:#00012a;overflow:hidden;}
+.palco{position:absolute;inset:0;margin:0;}
 #raw-video,#player{position:absolute;inset:0;width:100%;height:100%;}
 #raw-video{object-fit:contain;}
 #player{pointer-events:none;z-index:1;}
-.stopped-msg{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:rgba(255,255,255,.72);padding-bottom:180px;}
-.missing-badge{position:absolute;top:calc(64px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);background:var(--dn);border:2px solid #fff;padding:8px 18px;border-radius:18px;font-weight:700;font-size:.82rem;pointer-events:none;width:max-content;max-width:92%;text-align:center;line-height:1.3;box-shadow:0 6px 18px rgba(200,30,30,.45);z-index:6;}
-.rec{position:absolute;top:calc(64px + env(safe-area-inset-top));left:14px;display:flex;align-items:center;gap:8px;background:rgba(200,30,30,.92);padding:6px 12px;border-radius:999px;font-weight:700;font-size:.85rem;z-index:6;}
-.rec i{width:10px;height:10px;border-radius:50%;background:#fff;animation:pisca 1s infinite;}
-@keyframes pisca{50%{opacity:.25}}
-.panel{position:absolute;left:0;right:0;bottom:0;padding:28px 16px max(18px,env(safe-area-inset-bottom));background:linear-gradient(to top,rgba(5,7,90,.97) 60%,rgba(5,7,90,0));display:flex;flex-direction:column;gap:10px;align-items:center;z-index:5;}
-.mode-info{display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:9px 14px;width:100%;max-width:440px;font-size:.84rem;line-height:1.35;}
+.stopped-msg{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:rgba(255,255,255,.7);padding-bottom:180px;font-weight:600;}
+.stopped-msg .ic{width:64px;height:64px;opacity:.6;}
+/* o que falta aparece em icone: o mesmo desenho que fica sobre a pessoa no video */
+.missing-badge{position:absolute;top:calc(64px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;background:var(--dn);border:2px solid #fff;padding:7px 14px 7px 10px;border-radius:18px;font-family:var(--display);font-size:1.1rem;letter-spacing:.04em;pointer-events:none;width:max-content;max-width:92%;box-shadow:0 6px 18px rgba(200,30,30,.45);z-index:6;}
+.missing-badge .epi{display:block;}
+.dbg{position:absolute;top:calc(100px + env(safe-area-inset-top));right:10px;left:10px;font-size:.72rem;font-family:ui-monospace,monospace;color:rgba(255,255,255,.75);text-align:right;pointer-events:none;z-index:6;}
+.panel{position:absolute;left:0;right:0;bottom:0;padding:28px 16px max(18px,env(safe-area-inset-bottom));background:linear-gradient(to top,rgba(5,7,90,.97) 60%,rgba(5,7,90,0));display:flex;flex-direction:column;gap:14px;align-items:center;z-index:5;}
+.mode-info{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:7px 14px;font-size:.88rem;}
 .mode-info b{color:var(--gold);}
-.mode-info small{display:block;opacity:.7;font-size:.72rem;}
-.seg{display:flex;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:3px;gap:3px;width:100%;max-width:440px;}
-.seg button{flex:1;padding:10px 4px;border:0;border-radius:9px;background:transparent;color:#fff;font:600 .82rem 'Outfit',system-ui,sans-serif;cursor:pointer;}
-.seg button.on{background:var(--gold);color:var(--navy);}
-.seg.locked{opacity:.45;pointer-events:none;}
-.opts{display:flex;gap:8px;width:100%;max-width:440px;}
-.opts label{flex:1;display:flex;flex-direction:column;gap:4px;font-size:.7rem;color:rgba(255,255,255,.72);}
-.opts select{padding:9px;border-radius:9px;border:1px solid rgba(255,255,255,.25);background:#10136b;color:#fff;font:600 .88rem 'Outfit',system-ui,sans-serif;}
-.hint-mode{font-size:.76rem;color:rgba(255,255,255,.78);text-align:center;max-width:440px;line-height:1.4;}
-.job{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:12px;padding:10px 14px;width:100%;max-width:440px;font-size:.85rem;line-height:1.4;}
-.bar{height:6px;border-radius:3px;background:rgba(255,255,255,.2);overflow:hidden;margin-top:6px;}
-.bar b{display:block;height:100%;background:var(--gold);transition:width .3s;}
-.btn{color:#fff;border:2px solid transparent;padding:13px 32px;border-radius:14px;font-family:var(--display);font-weight:400;font-size:1.15rem;letter-spacing:.06em;cursor:pointer;transition:transform .15s,opacity .15s;}
-.btn:active{transform:scale(.95);}
-.btn:disabled{opacity:.6;}
-.btn-start{background:var(--brand);border-color:var(--gold);box-shadow:0 6px 18px rgba(55,64,180,.5);}
-.btn-stop{background:var(--dn);border-color:#ff9b9b;box-shadow:0 6px 18px rgba(200,30,30,.45);}
-.modal{position:absolute;inset:0;padding:20px;display:flex;align-items:center;justify-content:center;z-index:50;background:radial-gradient(130% 95% at 15% 0%,#0a7bff 0%,#1657da 30%,#1b31a8 58%,#150f63 100%);}
-.modal-box{background:var(--gold);color:var(--gold-ink);padding:30px 26px;border-radius:14px;width:100%;max-width:360px;text-align:center;box-shadow:0 0 0 6px rgba(176,120,40,.28),0 30px 80px rgba(3,5,40,.5);}
-.modal-brand{font-family:var(--display);font-size:2.6rem;letter-spacing:.03em;line-height:1;color:var(--brand-2);margin-bottom:14px;}
-.modal-box h2{font-family:var(--display);font-weight:400;font-size:1.4rem;letter-spacing:.03em;color:var(--brand-2);margin-bottom:8px;}
-.modal-box p{color:var(--gold-ink);font-size:.9rem;margin-bottom:4px;}
-.modal-box input{width:100%;padding:13px;border-radius:12px;border:2px solid transparent;background:#fff8f3;color:#141852;margin:14px 0;font-size:.95rem;outline:none;font-family:'Outfit',system-ui,sans-serif;}
-.modal-box input:focus{border-color:var(--brand);}
-.modal-box .btn{border-color:var(--brand-2);}
-.dbg{position:absolute;top:calc(100px + env(safe-area-inset-top));right:10px;left:10px;font-size:.68rem;font-family:ui-monospace,monospace;color:rgba(255,255,255,.62);text-align:right;pointer-events:none;z-index:6;}
+.mode-info .ic{width:18px;height:18px;color:var(--gold);}
+/* botao redondo grande: o gesto e so tocar */
+.btn-redondo{display:flex;flex-direction:column;align-items:center;gap:6px;background:none;border:0;color:#fff;font:600 .9rem 'Outfit',system-ui,sans-serif;cursor:pointer;}
+.btn-redondo .circulo{width:84px;height:84px;border-radius:50%;display:grid;place-items:center;border:4px solid var(--gold);transition:transform .15s;}
+.btn-redondo:active .circulo{transform:scale(.94);}
+.btn-redondo:disabled{opacity:.6;}
+.btn-redondo .ic{width:38px;height:38px;}
+.iniciar .circulo{background:var(--brand);box-shadow:0 8px 24px rgba(55,64,180,.55);}
+.iniciar .ic{margin-left:5px;}
+.parar .circulo{background:var(--dn);border-color:#ff9b9b;box-shadow:0 8px 24px rgba(200,30,30,.5);}
+:focus-visible{outline:3px solid var(--gold);outline-offset:3px;}
+/* janela do codigo de acesso: <dialog> ocupando a tela */
+dialog.modal{width:100vw;height:100vh;height:100dvh;max-width:none;max-height:none;margin:0;border:0;padding:20px;color:inherit;
+  background:radial-gradient(130% 95% at 15% 0%,#0a7bff 0%,#1657da 30%,#1b31a8 58%,#150f63 100%);}
+dialog.modal[open]{display:flex;align-items:center;justify-content:center;}
+.modal-box{background:var(--gold);color:var(--gold-ink);padding:28px 24px;border-radius:14px;width:100%;max-width:360px;text-align:center;box-shadow:0 0 0 6px rgba(176,120,40,.28),0 30px 80px rgba(3,5,40,.5);display:flex;flex-direction:column;gap:14px;}
+.modal-marca{display:flex;flex-direction:column;align-items:center;gap:10px;}
+.modal-marca img{height:96px;width:auto;display:block;filter:drop-shadow(0 8px 22px rgba(3,5,60,.3));}
+.modal-brand{font-family:var(--display);font-weight:400;font-size:2.6rem;letter-spacing:.03em;line-height:1;color:var(--brand-2);}
+.campo{position:relative;display:block;}
+.campo .ic{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--gold-ink);opacity:.75;}
+.campo input{width:100%;padding:14px 14px 14px 46px;border-radius:12px;border:2px solid transparent;background:#fff8f3;color:#141852;font-size:1rem;outline:none;font-family:'Outfit',system-ui,sans-serif;}
+.campo input:focus{border-color:var(--brand);}
+.btn-entrar{display:flex;align-items:center;justify-content:center;gap:8px;padding:13px;border-radius:14px;border:2px solid var(--brand-2);background:var(--brand);color:#fff;font-family:var(--display);font-size:1.15rem;letter-spacing:.06em;cursor:pointer;}
 </style>
 </head>
 <body>
 
-<div class="top-bar">
-  <div class="logo"><img src="logo.png" alt="" onerror="this.remove()">ARGOS<span>EPI</span></div>
-  <div class="status">
-    <span class="net-tag" id="net-tag" style="display:none"></span>
+<header class="top-bar">
+  <p class="logo"><img src="logo.png" alt="" onerror="this.remove()">ARGOS<span>EPI</span></p>
+  <p class="status" role="status">
+    <span class="net-tag" id="net-tag" hidden></span>
     <span id="fps-lbl"></span>
-    <div class="dot" id="dot"></div>
-  </div>
-</div>
+    <span class="dot" id="dot"></span><span class="sr" id="dot-txt">Câmera desligada</span>
+  </p>
+</header>
 
-<div class="video-container">
-  <video id="raw-video" autoplay playsinline muted></video>
-  <canvas id="player"></canvas>
-  <div id="stopped-msg" class="stopped-msg">
-    <span style="font-size:3rem">📷</span>
-    <span style="font-weight:600">Câmera desligada</span>
-    <span style="font-size:.82rem;opacity:.6">Toque em iniciar. O modo de análise é escolhido no painel.</span>
-  </div>
-  <div id="missing-badge" class="missing-badge" style="display:none"></div>
-  <div id="dbg" class="dbg"></div>
-</div>
+<main class="video-container">
+  <h1 class="sr">Celular como câmera do Argos EPI</h1>
+  <figure class="palco" aria-label="Imagem da câmera">
+    <video id="raw-video" autoplay playsinline muted></video>
+    <canvas id="player" aria-hidden="true"></canvas>
+  </figure>
+  <p id="stopped-msg" class="stopped-msg">
+    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.5 6h3.5a1.5 1.5 0 0 1 1.5 1.5v3l5.3-3a.5.5 0 0 1 .7.4v8.2a.5.5 0 0 1-.4.5"/><path d="M15.5 15.5v1a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 16.5v-9A1.5 1.5 0 0 1 4 6h1"/><path d="m3 3 18 18"/></svg>
+    <span>Câmera desligada</span>
+  </p>
+  <p id="missing-badge" class="missing-badge" role="alert" hidden></p>
+  <p id="dbg" class="dbg" aria-live="polite"></p>
+</main>
 
-<div class="panel">
-  <div class="mode-info" id="mode-info" role="status">
-    <span id="mode-icon" style="font-size:1.3rem">⚡</span>
-    <div><b id="mode-name">Tempo real</b> · <span id="mode-opts">—</span><small id="mode-desc">Definido no painel de controle</small></div>
-  </div>
-  <button class="btn btn-start" id="btn-start" style="display:none">INICIAR</button>
-  <button class="btn btn-stop" id="btn-stop" style="display:none">⏹ PARAR</button>
-</div>
+<footer class="panel">
+  <p class="mode-info" id="mode-info" role="status" title="Escolhido no painel de controle">
+    <span id="mode-icon"></span><b id="mode-name">Tempo real</b><span id="mode-opts">—</span>
+  </p>
+  <button type="button" class="btn-redondo iniciar" id="btn-start" hidden>
+    <span class="circulo"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.8v14.4a.8.8 0 0 0 1.2.7l11.3-7.2a.8.8 0 0 0 0-1.4L8.2 4.1A.8.8 0 0 0 7 4.8z" fill="currentColor"/></svg></span>
+    <span>Iniciar</span>
+  </button>
+  <button type="button" class="btn-redondo parar" id="btn-stop" hidden>
+    <span class="circulo"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="5.5" y="5.5" width="13" height="13" rx="2" fill="currentColor"/></svg></span>
+    <span>Parar</span>
+  </button>
+</footer>
 
-<div class="modal" id="modal">
-  <div class="modal-box">
+<dialog class="modal" id="modal" aria-labelledby="modal-titulo">
+  <form class="modal-box" id="form-token">
     <div class="modal-marca"><img src="logo.png" alt="" onerror="this.remove()">
-      <div class="modal-brand" style="margin:0">ARGOS</div></div>
-    <h2>Acesso restrito</h2>
-    <p>Cole o token do dispositivo para iniciar a câmera remota.</p>
-    <input type="text" id="token-input" placeholder="cam_..." autocomplete="off"/>
-    <button class="btn btn-start" style="width:100%" id="btn-save">Entrar</button>
-  </div>
-</div>
+      <h2 class="modal-brand" id="modal-titulo">ARGOS</h2></div>
+    <label class="campo" for="token-input">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="4.5"/><path d="m11.2 11.8 8.8-8.8M16.5 6.5 19 9M14 9l2 2"/></svg>
+      <span class="sr">Código do celular (começa com cam_)</span>
+      <input type="text" id="token-input" placeholder="Código: cam_..." autocomplete="off" required>
+    </label>
+    <button type="submit" class="btn-entrar">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/><path d="m10 8 4 4-4 4M14 12H4"/></svg>
+      Entrar
+    </button>
+  </form>
+</dialog>
 
 <script>
 const params = new URLSearchParams(location.search);
 let token = params.get('token') || localStorage.getItem('cam_token');
+// numeros tecnicos (resolucao, taxa de envio, atraso) so aparecem com ?debug=1
+const DEBUG = params.has('debug');
 const CAM_CONSOLE_BANNER = `
     _                          _____ ____ ___
    / \\   _ __ __ _  ___  ___  | ____|  _ \\_ _|
@@ -206,10 +222,10 @@ async function resolverBackend(tok){
   throw new Error('Nenhum servidor Argos EPI disponível no momento. Verifique se o servidor está ligado.');
 }
 
-const modal = $('modal'), btnSave = $('btn-save'), tkInput = $('token-input');
+const modal = $('modal'), formToken = $('form-token'), tkInput = $('token-input');
 const btnStart = $('btn-start'), btnStop = $('btn-stop');
 const video = $('raw-video'), playerCanvas = $('player');
-const dot = $('dot'), fpsLbl = $('fps-lbl'), netTag = $('net-tag');
+const dot = $('dot'), dotTxt = $('dot-txt'), fpsLbl = $('fps-lbl'), netTag = $('net-tag');
 const badge = $('missing-badge'), stopped = $('stopped-msg'), dbgEl = $('dbg');
 
 let streamId = buildStreamId(token);
@@ -223,14 +239,22 @@ function authHeaders(json = true){
     : { 'Authorization': 'Bearer ' + token };
 }
 
+// icone do modo de analise: o mesmo do painel (raio, alvo, lupa)
+const ICONE_MODO = {
+  tempo_real: '<path d="M13 2.5 4.5 13.5H12l-1 8 8.5-11H12z"/>',
+  detalhado: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1" fill="currentColor"/>',
+  super: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5M10.5 7.5v6M7.5 10.5h6"/>',
+};
 function showConfig(cfg){
   config = { ...config, ...(cfg || {}) };
   const m = ArgosStream.MODES[config.modo] || ArgosStream.MODES.tempo_real;
-  $('mode-icon').textContent = m.icone;
+  $('mode-icon').innerHTML = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + (ICONE_MODO[config.modo] || ICONE_MODO.tempo_real) + '</svg>';
   $('mode-name').textContent = m.nome;
-  $('mode-opts').textContent = `${config.fps} fps · ${config.resolucao}p`;
-  $('mode-desc').textContent = m.descricao + ' Definido no painel de controle.';
+  $('mode-opts').textContent = `· ${config.fps} fps · ${config.resolucao}p`;
+  $('mode-info').title = m.descricao + ' Escolhido no painel de controle.';
 }
+showConfig();
 
 async function loadConfig(){
   if (!token) return;
@@ -241,26 +265,30 @@ async function loadConfig(){
   } catch (e) { dbgEl.textContent = e.message || 'Servidor não encontrado'; }
 }
 
-btnSave.onclick = () => {
+formToken.addEventListener('submit', (e) => {
+  e.preventDefault();
   const v = tkInput.value.trim();
-  if (!v.startsWith('cam_')) { alert('Token inválido — deve começar com cam_'); return; }
+  if (!v.startsWith('cam_')) { alert('Código inválido: ele começa com cam_'); return; }
   token = v;
   streamId = buildStreamId(token);
   localStorage.setItem('cam_token', token);
-  modal.style.display = 'none';
-  btnStart.style.display = 'inline-block';
+  modal.close();
+  btnStart.hidden = false;
   history.replaceState({}, '', '?token=' + encodeURIComponent(token) + (NODE_ALVO ? '&node=' + encodeURIComponent(NODE_ALVO) : ''));
   loadConfig();
-};
-tkInput.addEventListener('keydown', (e) => e.key === 'Enter' && btnSave.click());
-if (token) { modal.style.display = 'none'; btnStart.style.display = 'inline-block'; }
+});
+// sem codigo, a janela de acesso nao pode ser fechada no Esc
+modal.addEventListener('cancel', (e) => e.preventDefault());
+if (token) { btnStart.hidden = false; }
+else { try { modal.showModal(); } catch { modal.setAttribute('open', ''); } }
 
 function setBusy(on){
   active = on;
   dot.classList.toggle('on', on);
-  btnStart.style.display = on ? 'none' : 'inline-block';
-  btnStop.style.display = on ? 'inline-block' : 'none';
-  stopped.style.display = on ? 'none' : 'flex';
+  dotTxt.textContent = on ? 'Transmitindo' : 'Câmera desligada';
+  btnStart.hidden = on;
+  btnStop.hidden = !on;
+  stopped.hidden = on;
 }
 
 function waitVideo(){
@@ -300,7 +328,7 @@ btnStart.onclick = async () => {
     await openCam();
     const r = await fetch(api('/streams/add'), { method: 'POST', headers: authHeaders(),
       body: JSON.stringify({ device: 'auto', camera: 'webcam', stream_id: streamId }) });
-    if (r.status === 401) { alert('Sessão inválida ou token revogado.'); localStorage.removeItem('cam_token'); location.reload(); return; }
+    if (r.status === 401) { alert('Sessão inválida ou código revogado.'); localStorage.removeItem('cam_token'); location.reload(); return; }
     if (!r.ok) throw new Error('Falha ao registrar a câmera no servidor');
     const d = await r.json().catch(() => ({}));
     if (d.config) showConfig(d.config);
@@ -324,10 +352,11 @@ function startSending(){
     onInfo: (d) => d.config && showConfig(d.config),
     onResult: (d) => { if (player) player.pushResult(d); showMissing(d); },
     onStats: (s) => {
-      const info = ArgosStream.trackInfo(camStream);
       fpsLbl.textContent = playerStats ? `${Math.round(playerStats.fps)} fps` : '';
-      netTag.style.display = 'inline';
+      netTag.hidden = false;
       netTag.textContent = s.transport === 'ws' ? 'WS' : s.transport === 'http' ? 'HTTP' : 'SEM REDE';
+      if (!DEBUG) return;
+      const info = ArgosStream.trackInfo(camStream);
       dbgEl.textContent = `câmera ${info.width}x${info.height}@${Math.round(info.fps || 0)} · envio ${s.sentFps.toFixed(0)} q/s` +
         ` (${Math.round(s.quality * 100)}% qual., ${Math.round(s.scale * 100)}% tam.) · ${(s.kbps / 1000).toFixed(1)} Mb/s` +
         (s.pending ? ` · ${s.pending} na fila` : '') +
@@ -348,15 +377,46 @@ function startSending(){
   sender.start();
 }
 
+/* Ícone de um EPI que falta: o mesmo desenho do vídeo (ArgosStream.EPI_ICONS),
+   em branco, com um risco por cima. */
+function epiRiscado(item){
+  const tam = 26, dpr = window.devicePixelRatio || 1;
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.round(tam * dpr);
+  c.style.width = c.style.height = tam + 'px';
+  c.className = 'epi';
+  c.setAttribute('aria-hidden', 'true');
+  const x = c.getContext('2d');
+  x.scale(tam * dpr, tam * dpr);
+  x.fillStyle = x.strokeStyle = '#fff';
+  const desenho = ArgosStream.EPI_ICONS[item];
+  if (desenho) desenho(x);
+  x.globalAlpha = 1; x.strokeStyle = '#fff'; x.lineWidth = 0.1; x.lineCap = 'round';
+  x.beginPath(); x.moveTo(0.1, 0.9); x.lineTo(0.9, 0.1); x.stroke();
+  return c;
+}
+
+// o resultado chega a cada quadro: o selo só é redesenhado quando o que falta muda
+let ultimoAviso = '';
 function showMissing(d){
+  const itens = d.missing_items || [];
   const missing = d.missing || [];
   const fall = (d.alerts || []).some((a) => a.includes('queda'));
-  if (d.status === 'perigo' && (missing.length || fall)) {
-    badge.textContent = fall ? '⚠ POSSÍVEL QUEDA' : 'FALTA: ' + missing.join(', ');
-    badge.style.display = 'block';
-  } else {
-    badge.style.display = 'none';
+  const mostra = d.status === 'perigo' && (missing.length || itens.length || fall);
+  const chave = mostra ? (fall ? 'queda' : itens.join(',') || missing.join(',')) : '';
+  if (chave === ultimoAviso) return;
+  ultimoAviso = chave;
+  if (!mostra) { badge.hidden = true; return; }
+  badge.replaceChildren();
+  const txt = document.createElement('span');
+  txt.textContent = fall ? 'Possível queda' : 'Falta EPI';
+  badge.append(txt);
+  if (!fall) {
+    if (itens.length) itens.forEach((k) => badge.append(epiRiscado(k)));
+    else { const t = document.createElement('span'); t.textContent = missing.join(', '); badge.append(t); }
   }
+  badge.setAttribute('aria-label', fall ? 'Possível queda' : 'Falta: ' + (missing.join(', ') || itens.map(ArgosStream.itemLabel).join(', ')));
+  badge.hidden = false;
 }
 
 async function stopAll(){
@@ -366,14 +426,15 @@ async function stopAll(){
     fetch(api('/streams/stop_external'), { method: 'POST', headers: authHeaders(), body: JSON.stringify({ stream_id: streamId }) }).catch(() => {});
   }
   if (player) { player.close(); player = null; }
-  badge.style.display = 'none';
+  badge.hidden = true;
+  ultimoAviso = '';
   if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null; }
   video.srcObject = null;
   try { await wakeLock?.release(); } catch {}
   wakeLock = null;
   setBusy(false);
   fpsLbl.textContent = '';
-  netTag.style.display = 'none';
+  netTag.hidden = true;
   dbgEl.textContent = '';
 }
 
@@ -387,7 +448,7 @@ document.addEventListener('visibilitychange', async () => {
 function autoStartIfRequested(){
   const auto = params.get('auto');
   if ((auto === '1' || auto === 'true') && token) {
-    setTimeout(() => { if (btnStart.style.display !== 'none') btnStart.click(); }, 250);
+    setTimeout(() => { if (!btnStart.hidden) btnStart.click(); }, 250);
   }
 }
 // descobre o backend primeiro; so depois carrega a config e inicia sozinho
