@@ -108,8 +108,9 @@ services:
     volumes:
       - ${ARGOS_TREINO_HOST:-D:/ArgosEPI}:/treino:ro
       - ${ARGOS_DATASET_HOST:-C:/ArgosEPI/datasets}:/dataset:ro
-      - ../coisas/logo.png:/coisas/logo.png:ro
-      - ../coisas/favicon.ico:/coisas/favicon.ico:ro
+      # a pasta coisas/ fica na raiz do repositorio (antes apontava um nivel acima, fora dele)
+      - ./coisas/logo.png:/coisas/logo.png:ro
+      - ./coisas/favicon.ico:/coisas/favicon.ico:ro
     gpus: all          # so para o nvidia-smi mostrar a GPU no painel
     restart: "no"      # liga apenas quando voce mandar
 
