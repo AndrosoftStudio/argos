@@ -97,11 +97,8 @@ abbr[title]{text-decoration:none;}
 .auth-hero{display:flex;flex-direction:column;gap:clamp(18px,2.6vw,30px);}
 .auth-hero-marca{display:flex;align-items:center;gap:clamp(14px,2.4vw,34px);flex-wrap:wrap;}
 .auth-hero-marca img{height:clamp(110px,17vw,300px);width:auto;display:block;filter:drop-shadow(0 14px 42px rgba(3,5,60,.6));}
-/* a frase da entrada: branca, em negrito e maior, para ler bem sobre o fundo azul */
-.auth-frase{font-size:clamp(1.2rem,2vw,1.75rem);font-weight:700;color:#fff;max-width:32ch;line-height:1.35;text-shadow:0 2px 14px rgba(3,5,60,.55);}
-.auth-selos{display:flex;gap:clamp(8px,1.2vw,14px);flex-wrap:wrap;}
-.auth-selos .epi-b{width:clamp(48px,5vw,64px);height:clamp(48px,5vw,64px);border-radius:16px;
-  background:rgba(255,255,255,.12);border:2px solid rgba(255,255,255,.3);color:var(--gold);}
+/* a frase da entrada, no tamanho e peso originais, em branco */
+.auth-frase{font-size:clamp(1.05rem,1.75vw,1.5rem);color:#fff;max-width:30ch;line-height:1.45;}
 .auth-box{justify-self:end;width:100%;max-width:min(560px,100%);background:var(--gold);color:var(--gold-ink);
   border-radius:18px;padding:clamp(28px,3.2vw,44px) clamp(22px,3.2vw,48px);
   box-shadow:0 0 0 8px rgba(176,120,40,.3),0 34px 90px rgba(3,5,40,.55);}
@@ -594,7 +591,6 @@ label.pref{cursor:pointer;}
 @media (max-width:860px){
   .auth-wrap{grid-template-columns:minmax(0,1fr);align-content:start;gap:26px;padding:32px 16px;}
   .auth-hero{align-items:center;text-align:center;}
-  .auth-selos{justify-content:center;}
   .auth-box{justify-self:center;}
 }
 @media (max-width:760px){
