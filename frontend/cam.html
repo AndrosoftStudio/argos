@@ -13,62 +13,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
 <script src="config.js"></script>
 <script src="argos-stream.js"></script>
-<style>
-/* Mesma linguagem do painel: icone no lugar do texto, e so o essencial escrito. */
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-[hidden]{display:none !important;}
-:root{--navy:#05075a;--brand:#3740b4;--brand-2:#2c34a0;--gold:#fbc343;--gold-ink:#5c3d00;--dn:#c81e1e;--ok:#4ade80;--display:'Anton',Impact,'Arial Narrow',sans-serif;}
-html,body{background:var(--navy);color:#fff;font-family:'Outfit',system-ui,sans-serif;height:100vh;height:100dvh;overflow:hidden;display:flex;flex-direction:column;}
-.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
-.ic{width:22px;height:22px;display:block;flex-shrink:0;}
-.top-bar{position:absolute;top:0;left:0;right:0;padding:12px 16px;padding-top:max(12px,env(safe-area-inset-top));background:linear-gradient(to bottom,rgba(5,7,90,.94),rgba(5,7,90,0));z-index:10;display:flex;justify-content:space-between;align-items:center;}
-.logo{font-family:var(--display);font-size:1.6rem;letter-spacing:.03em;line-height:1;display:flex;align-items:center;gap:8px;}
-.logo img{height:30px;width:auto;display:block;flex-shrink:0;}
-.logo span{font-size:.72rem;letter-spacing:.1em;color:var(--navy);background:var(--gold);padding:4px 6px 3px;border-radius:4px;}
-@media (max-width:380px){.logo img{height:24px;}.logo{font-size:1.35rem;}}
-.status{display:flex;align-items:center;gap:8px;font-size:.85rem;font-weight:600;}
-.net-tag{font-size:.62rem;letter-spacing:.08em;padding:3px 6px;border-radius:4px;background:rgba(255,255,255,.16);}
-.dot{width:12px;height:12px;border-radius:50%;background:var(--dn);transition:background .3s;}
-.dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(74,222,128,.3);}
-.video-container{flex:1;position:relative;background:#00012a;overflow:hidden;}
-.palco{position:absolute;inset:0;margin:0;}
-#raw-video,#player{position:absolute;inset:0;width:100%;height:100%;}
-#raw-video{object-fit:contain;}
-#player{pointer-events:none;z-index:1;}
-.stopped-msg{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:rgba(255,255,255,.7);padding-bottom:180px;font-weight:600;}
-.stopped-msg .ic{width:64px;height:64px;opacity:.6;}
-/* o que falta aparece em icone: o mesmo desenho que fica sobre a pessoa no video */
-.missing-badge{position:absolute;top:calc(64px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;background:var(--dn);border:2px solid #fff;padding:7px 14px 7px 10px;border-radius:18px;font-family:var(--display);font-size:1.1rem;letter-spacing:.04em;pointer-events:none;width:max-content;max-width:92%;box-shadow:0 6px 18px rgba(200,30,30,.45);z-index:6;}
-.missing-badge .epi{display:block;}
-.dbg{position:absolute;top:calc(100px + env(safe-area-inset-top));right:10px;left:10px;font-size:.72rem;font-family:ui-monospace,monospace;color:rgba(255,255,255,.75);text-align:right;pointer-events:none;z-index:6;}
-.panel{position:absolute;left:0;right:0;bottom:0;padding:28px 16px max(18px,env(safe-area-inset-bottom));background:linear-gradient(to top,rgba(5,7,90,.97) 60%,rgba(5,7,90,0));display:flex;flex-direction:column;gap:14px;align-items:center;z-index:5;}
-.mode-info{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:7px 14px;font-size:.88rem;}
-.mode-info b{color:var(--gold);}
-.mode-info .ic{width:18px;height:18px;color:var(--gold);}
-/* botao redondo grande: o gesto e so tocar */
-.btn-redondo{display:flex;flex-direction:column;align-items:center;gap:6px;background:none;border:0;color:#fff;font:600 .9rem 'Outfit',system-ui,sans-serif;cursor:pointer;}
-.btn-redondo .circulo{width:84px;height:84px;border-radius:50%;display:grid;place-items:center;border:4px solid var(--gold);transition:transform .15s;}
-.btn-redondo:active .circulo{transform:scale(.94);}
-.btn-redondo:disabled{opacity:.6;}
-.btn-redondo .ic{width:38px;height:38px;}
-.iniciar .circulo{background:var(--brand);box-shadow:0 8px 24px rgba(55,64,180,.55);}
-.iniciar .ic{margin-left:5px;}
-.parar .circulo{background:var(--dn);border-color:#ff9b9b;box-shadow:0 8px 24px rgba(200,30,30,.5);}
-:focus-visible{outline:3px solid var(--gold);outline-offset:3px;}
-/* janela do codigo de acesso: <dialog> ocupando a tela */
-dialog.modal{width:100vw;height:100vh;height:100dvh;max-width:none;max-height:none;margin:0;border:0;padding:20px;color:inherit;
-  background:radial-gradient(130% 95% at 15% 0%,#0a7bff 0%,#1657da 30%,#1b31a8 58%,#150f63 100%);}
-dialog.modal[open]{display:flex;align-items:center;justify-content:center;}
-.modal-box{background:var(--gold);color:var(--gold-ink);padding:28px 24px;border-radius:14px;width:100%;max-width:360px;text-align:center;box-shadow:0 0 0 6px rgba(176,120,40,.28),0 30px 80px rgba(3,5,40,.5);display:flex;flex-direction:column;gap:14px;}
-.modal-marca{display:flex;flex-direction:column;align-items:center;gap:10px;}
-.modal-marca img{height:96px;width:auto;display:block;filter:drop-shadow(0 8px 22px rgba(3,5,60,.3));}
-.modal-brand{font-family:var(--display);font-weight:400;font-size:2.6rem;letter-spacing:.03em;line-height:1;color:var(--brand-2);}
-.campo{position:relative;display:block;}
-.campo .ic{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--gold-ink);opacity:.75;}
-.campo input{width:100%;padding:14px 14px 14px 46px;border-radius:12px;border:2px solid transparent;background:#fff8f3;color:#141852;font-size:1rem;outline:none;font-family:'Outfit',system-ui,sans-serif;}
-.campo input:focus{border-color:var(--brand);}
-.btn-entrar{display:flex;align-items:center;justify-content:center;gap:8px;padding:13px;border-radius:14px;border:2px solid var(--brand-2);background:var(--brand);color:#fff;font-family:var(--display);font-size:1.15rem;letter-spacing:.06em;cursor:pointer;}
-</style>
+<link rel="stylesheet" href="cam.css?v=20260922">
 </head>
 <body>
 
