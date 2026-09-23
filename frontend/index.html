@@ -656,7 +656,7 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
   const onInfo=useCallback(d=>{
     setInfo(d);
     if(d.config) setConfig(d.config);
-    setStatus(prev=>({...(prev||{}),model:d.model,required_labels:d.required_labels,required_items:d.required_items,
+    setStatus(prev=>({...(prev||{}),model:d.model,arquitetura:d.arquitetura,required_labels:d.required_labels,required_items:d.required_items,
       classes:d.classes,pose:d.pose,camera:d.camera}));
   },[]);
 
@@ -948,6 +948,7 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
             {pipe.sem_sinal&&<li className="chip alerta"><Icon n="video-off"/>sem sinal</li>}
             {usingCam&&net&&<li className="chip" title="Envio desta câmera"><Icon n="upload"/>{net.sentFps.toFixed(0)} q/s · {(net.kbps/1000).toFixed(1)} Mb/s</li>}
             {status&&status.classes&&status.classes.length>0&&<li className="chip" title={status.classes.join(', ')}><Icon n="helmet"/>{status.classes.length} classes</li>}
+            {status&&status.arquitetura==='detr'&&<li className="chip" title="Detection Transformer (RT-DETR)"><Icon n="chip"/>DETR</li>}
             {status&&status.pose===false&&<li className="chip">só detector</li>}
           </ul>
         </section>
@@ -1277,6 +1278,7 @@ function ModelCard({model,token,backendUrl,onRefresh,onToast,onSetDefault,defaul
       </header>
       <ul className="diag" aria-label="Situação">
         <li className="chip">{model.editable?'meu':'base'}</li>
+        {model.arquitetura&&<li className="chip" title={model.arquitetura==='detr'?'Detection Transformer (RT-DETR): atenção global, sem NMS':'YOLO: rede convolucional'}>{model.arquitetura==='detr'?'DETR (transformer)':'YOLO'}</li>}
         {model.user_override&&<li className="chip">minha regra</li>}
         <li className="chip" style={{color:trtStatusColor}}><Icon n="zap"/>TensorRT: {trtStatusText}</li>
       </ul>

@@ -23,14 +23,43 @@ registra o episódio com foto e atribui ao funcionário reconhecido.
 ## Como funciona, em uma passada
 
 1. Uma câmera entra no sistema — celular pelo link, navegador, RTSP ou a tela.
-2. Cada câmera roda em uma linha de processamento própria: um modelo YOLO de
-   EPIs + um modelo de pose que separa as pessoas e rastreia cada uma.
+2. Cada câmera roda em uma linha de processamento própria: um detector de
+   EPIs (YOLO ou DETR) + um modelo de pose que separa as pessoas e rastreia cada uma.
 3. O rosto de quem aparece é comparado com a galeria de funcionários
    (SCRFD + ArcFace, por embedding — **não existe etapa de treino**).
 4. Cada pessoa é cobrada pelos EPIs da **área** onde está pisando, não por uma
    lista única da câmera.
 5. Falta confirmada vira um **episódio** na auditoria, com até 3 fotos de
    evidência, e entra na ficha de desempenho do funcionário.
+
+### Regiões de interesse (ROI)
+
+O sistema usa ROI em três níveis:
+
+| Nível | Onde | O que faz |
+| --- | --- | --- |
+| Área da câmera | `areas.py`, tela *Mapear áreas* | Polígono desenhado sobre a imagem. A pessoa entra na área pelo ponto de apoio (entre os pés) e é cobrada pelos EPIs daquela área; uma área sem EPIs é *área livre*. |
+| Pessoa | `EpiDetector.detect_crops` (modo *Super detalhado*) | O detector roda de novo em um recorte ampliado de cada pessoa, para achar EPIs pequenos. |
+| Parte do corpo | `ppe_analyzer.body_regions` | Os pontos da pose dividem o corpo em cabeça, tronco, mãos e pés; cada EPI só conta na sua região (capacete na cabeça, bota nos pés). |
+
+### YOLO e DETR
+
+O detector de EPIs aceita as duas famílias da Ultralytics pelo mesmo caminho:
+**YOLO** (rede convolucional com NMS, `argos_epi_v1`) e **RT-DETR**, o *Detection
+Transformer* em tempo real (atenção global sobre a imagem e saída sem NMS). O
+servidor descobre a arquitetura pelo próprio arquivo `.pt`
+(`epi_detector.arquitetura_de`) e a tela mostra *YOLO* ou *DETR (transformer)* no
+cartão do modelo e nos detalhes da câmera. Para treinar um DETR de EPIs com o
+mesmo dataset:
+
+```bash
+python treinamento/treinar.py --dados D:/ArgosEPI/datasets/argos_epi_v1/data.yaml \
+  --nome argos_epi_detr_v1 --arquitetura detr --exportar-para models/
+```
+
+O RT-DETR precisa de GPU para treinar (lote 8 a 640 px em 8 GB) e de mais épocas
+que o YOLO. Sem GPU ele também roda, porém mais devagar: cerca de 0,55 s por imagem
+num notebook, contra 0,07 s do `argos_epi_v1`.
 
 ## Rodando
 

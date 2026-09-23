@@ -19,8 +19,8 @@ import areas as areas_mod
 import auditoria
 import face_id
 import ppe_taxonomy as tax
-from epi_detector import (EpiDetector, is_cuda, merge_detections, pose_model_path, resolve_device,
-                          run_employee_model)
+from epi_detector import (EpiDetector, info_do_modelo, is_cuda, merge_detections, pose_model_path,
+                          resolve_device, run_employee_model)
 from live_pipeline import CONFIG_PADRAO, MODOS, LivePipeline, config_publica, normalizar_config
 from ppe_analyzer import PPEAnalyzer, draw_analysis
 from yolo_runtime import precision_kwargs
@@ -148,10 +148,8 @@ class VideoProcessor:
 
     @classmethod
     def read_model_info(cls, model_path: str) -> dict:
-        from ultralytics import YOLO
-        names = YOLO(model_path).names
-        names = names if isinstance(names, dict) else dict(enumerate(names))
-        return {'classes': [str(names[i]) for i in sorted(names)]}
+        """{'classes': [...], 'arquitetura': 'yolo' | 'detr'}"""
+        return info_do_modelo(model_path)
 
     # ── Configuracao ────────────────────────────────────────────────
     @property
@@ -228,7 +226,8 @@ class VideoProcessor:
             if not self.use_external:
                 self.thread = threading.Thread(target=self._run_capture, daemon=True, name=f"cap-{self.client_id}")
                 self.thread.start()
-            self._log(f"Iniciado: {self.camera_source} | modelo={self.model_name} | runtime={self.runtime_backend} | "
+            self._log(f"Iniciado: {self.camera_source} | modelo={self.model_name} ({self.detector.arquitetura}) | "
+                      f"runtime={self.runtime_backend} | "
                       f"modo={self.mode} | pose={'sim' if self.pose_ok else 'nao'} | EPIs={self.required_items}")
         except Exception as e:
             self._log(f"ERRO: {e}")
@@ -459,6 +458,7 @@ class VideoProcessor:
             'camera': str(self.camera_source),
             'client_id': self.client_id,
             'model': self.model_name,
+            'arquitetura': self.detector.arquitetura if self.detector else None,
             'runtime_backend': self.runtime_backend,
             'inference_model_path': self.inference_model_path,
             'classes': list(self.model_classes),
