@@ -98,7 +98,11 @@ def melhor_modelo_argos(pasta):
         nomes = [f for f in os.listdir(pasta) if f.startswith('argos_epi') and f.endswith('.pt')]
     except OSError:
         return None
+    return melhor_modelo_argos_entre(pasta, nomes)
 
+
+def melhor_modelo_argos_entre(pasta, nomes):
+    """O de maior mAP50 no teste entre 'nomes' (arquivos de 'pasta'); sem nota, o mais recente."""
     def nota(nome):
         try:
             with open(os.path.join(pasta, nome[:-3] + '.json'), encoding='utf-8') as f:
@@ -108,6 +112,20 @@ def melhor_modelo_argos(pasta):
         return (float(m) if isinstance(m, (int, float)) else -1.0, os.path.getmtime(os.path.join(pasta, nome)))
 
     return max(nomes, key=nota) if nomes else None
+
+
+def modelo_de_reforco(pasta, arquitetura_principal):
+    """Caminho do melhor modelo Argos da OUTRA arquitetura (DETR se o principal e YOLO, e vice-versa),
+    usado como segunda opiniao em pessoas encobertas. None quando a equipe ainda nao treinou um."""
+    try:
+        nomes = [f for f in os.listdir(pasta) if f.startswith('argos_epi') and f.endswith('.pt')]
+    except OSError:
+        return None
+    outros = [f for f in nomes if arquitetura_do_arquivo(os.path.join(pasta, f)) != arquitetura_principal]
+    if not outros:
+        return None
+    escolhido = melhor_modelo_argos_entre(pasta, outros)
+    return os.path.join(pasta, escolhido) if escolhido else None
 
 
 def arquitetura_do_arquivo(caminho):

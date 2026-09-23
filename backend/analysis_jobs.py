@@ -27,9 +27,10 @@ from collections import Counter, defaultdict, deque
 import cv2
 
 import ppe_taxonomy as tax
-from epi_detector import (EpiDetector, is_cuda, merge_detections, pose_model_path, resolve_device,
-                          run_employee_model)
+from epi_detector import (MODELS_DIR, EpiDetector, is_cuda, merge_detections, modelo_de_reforco, pose_model_path,
+                          resolve_device, run_employee_model)
 from ppe_analyzer import WEIGHTS, PPEAnalyzer, centered_states, draw_analysis, summarize
+from reforco import Reforco
 
 MODES = {
     'detalhado': {'nome': 'Detalhado', 'pose': 'detalhado', 'imgsz': 960, 'conf': 0.3, 'revisao': False},
@@ -540,6 +541,14 @@ class JobManager:
         required = detector.clean_required(
             tax.normalize_required(required) if required else tax.default_required(detector.names))
         analyzer = PPEAnalyzer(pose_model_path(mode['pose']), device=device, half=is_cuda(device), imgsz=mode['imgsz'])
+        extra_path = modelo_de_reforco(MODELS_DIR, detector.arquitetura)
+        extra = None
+        if extra_path and os.path.abspath(extra_path) != os.path.abspath(model_path):
+            try:
+                extra = EpiDetector(extra_path, device, use_tensorrt=False, log=self.log)
+            except Exception as e:
+                self.log(f'Segunda opiniao indisponivel ({os.path.basename(extra_path)}): {e}')
+        reforco = Reforco(detector, extra, analyzer.cfg['kp_conf'])
         employees_model = None
         employees_path = os.path.join(self.dados_dir, uid, 'models', 'funcionarios.pt')
         if os.path.exists(employees_path):
@@ -567,6 +576,9 @@ class JobManager:
                 if mode['revisao'] and people and run_detector:
                     crops = detector.detect_crops(frame, [p['box'] for p in people], imgsz=640, conf=mode['conf'])
                     dets = merge_detections(dets, crops)
+                if people and run_detector:  # segunda olhada so em quem esta encoberto ou sem evidencia
+                    dets = reforco.aplicar(frame, people, dets, required, t, ja_recortou=mode['revisao'],
+                                           conf=mode['conf'])
                 employees = run_employee_model(employees_model, frame, device, is_cuda(device)) if employees_model else []
                 analysis = analyzer.analyze(frame, dets, required, detector.supported, t=t, employees=employees, people=people)
                 if out is not None:

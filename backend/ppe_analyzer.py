@@ -42,6 +42,7 @@ DEFAULT_CONFIG = {
     'alert_sec': 2.0,      # violacao vira alerta depois deste tempo
     'fall_sec': 1.5,       # tempo caido para alertar possivel queda
     'forget_sec': 5.0,     # descarta IDs que sumiram
+    'memoria_encoberto_sec': 12.0,  # parte do corpo escondida mantem o ultimo estado conhecido
 }
 # altura minima da pessoa (px) para concluir que um EPI nao esta la sem uma deteccao negativa.
 # maos e pes pedem mais pixels que cabeca e tronco porque luva e calcado sao objetos pequenos;
@@ -163,6 +164,97 @@ def body_regions(box, k, frame_w, frame_h, thr=DEFAULT_CONFIG['kp_conf']):
         feet.append(_box(float(k[ank, 0]), float(k[ank, 1] + 0.2 * side), side, side))
     regions['feet'] = (feet or [(x1, y1 + bh * 0.8, x2, y2)], bool(feet))
     return regions
+
+
+# ── Oclusao ─────────────────────────────────────────────────────────
+# Pontos que provam que a regiao esta a vista. Com um objeto na frente, o modelo de pose
+# "completa" o corpo com pontos inventados (quadril e pernas atras de uma caixa com confianca
+# alta) e ainda cria uma segunda copia da pessoa so com a parte de cima. A copia partida
+# denuncia quais pontos foram inventados.
+PONTOS_DA_REGIAO = {'head': (NOSE, L_EYE, R_EYE, L_EAR, R_EAR), 'torso': (L_HIP, R_HIP),
+                    'hands': (L_WRI, R_WRI), 'feet': (L_KNE, R_KNE, L_ANK, R_ANK)}
+
+
+def _mesma_pessoa(a, b, thr):
+    """b (a menor) e uma copia de a: quase toda dentro dela e com os mesmos ombros (ou cabeca)."""
+    if _ioa(b['box'], a['box']) < 0.7:
+        return False
+    ka, kb = a['kpts'], b['kpts']
+    sw = max(_dist(ka, L_SHO, R_SHO) if ka[L_SHO, 2] >= thr and ka[R_SHO, 2] >= thr else 0.0,
+             (a['box'][2] - a['box'][0]) * 0.35, 1.0)
+    for pontos in ((L_SHO, R_SHO), (NOSE, L_EAR, R_EAR)):
+        comuns = [i for i in pontos if ka[i, 2] >= thr and kb[i, 2] >= thr]
+        if comuns:
+            return all(_dist(np.vstack([ka[i], kb[i]]), 0, 1) <= 0.35 * sw for i in comuns)
+    return False
+
+
+def consolidar_pessoas(people, thr=DEFAULT_CONFIG['kp_conf'], conhecidos=()):
+    """Une as copias da mesma pessoa que o modelo de pose cria quando algo fica na frente.
+
+    Sem isso o EPI fica com uma copia e a outra aparece sem EPI (alarme falso). Fica a caixa
+    maior (o ponto de apoio segue valendo para as areas), os pontos inventados perdem a
+    confianca e as regioes escondidas vao para p['encoberto']. O ID que ja era rastreado ha
+    mais tempo (menor) e mantido, para o historico nao se partir."""
+    ordem = sorted(range(len(people)), key=lambda i: -_area(people[i]['box']))
+    fora = set()
+    for ai in ordem:
+        if ai in fora:
+            continue
+        a = people[ai]
+        for bi in ordem:
+            if bi == ai or bi in fora or _area(people[bi]['box']) > _area(a['box']):
+                continue
+            b = people[bi]
+            if not _mesma_pessoa(a, b, thr):
+                continue
+            fora.add(bi)
+            k = np.array(a['kpts'], dtype=float, copy=True)
+            escondidas = set()
+            for regiao, pontos in PONTOS_DA_REGIAO.items():
+                if any(k[i, 2] >= thr for i in pontos) and not any(b['kpts'][i, 2] >= thr for i in pontos):
+                    escondidas.add(regiao)
+                    for i in pontos:
+                        k[i, 2] = min(k[i, 2], float(b['kpts'][i, 2]))
+            a['kpts'] = k
+            a['encoberto'] = set(a.get('encoberto') or ()) | escondidas
+            ids = [x for x in (a.get('track_id'), b.get('track_id')) if x is not None and x in conhecidos]
+            if ids:
+                a['track_id'] = min(ids)
+    return [p for i, p in enumerate(people) if i not in fora]
+
+
+def encobertas_por_outra(p, people, frame_h):
+    """Regioes de p cobertas por outra pessoa que esta na frente (pes mais perto da camera)."""
+    ocultas = set()
+    for q in people:
+        if q is p or q['box'][3] <= p['box'][3] + 0.02 * frame_h:
+            continue
+        for regiao, (caixas, _) in p['regions'].items():
+            if regiao != 'body' and max((_ioa(c, q['box']) for c in caixas), default=0.0) >= 0.5:
+                ocultas.add(regiao)
+    return ocultas
+
+
+def encobertas_fora_da_silhueta(p, frame_w, frame_h):
+    """Regioes que a pose estimou fora da pessoa que o modelo de fato viu, dentro da imagem.
+
+    Com a cabeca atras de um objeto, a caixa da pessoa comeca abaixo dele e a cabeca estimada
+    fica para cima dela: o corpo continua ali, so nao aparece. Na borda da imagem nao vale
+    (isso e corte do quadro, tratado em body_regions)."""
+    ocultas = set()
+    quadro = (0, 0, frame_w, frame_h)
+    for regiao in ('head', 'torso', 'feet'):
+        caixas, visivel = p['regions'][regiao]
+        if visivel and all(_ioa(c, p['box']) < 0.4 and _ioa(c, quadro) >= 0.6 for c in caixas):
+            ocultas.add(regiao)
+    return ocultas
+
+
+def regioes_encobertas(p, people, frame_w, frame_h):
+    """Tudo o que esta escondido em p: copia partida pela pose, outra pessoa na frente ou objeto."""
+    return (set(p.get('encoberto') or ()) | encobertas_por_outra(p, people, frame_h)
+            | encobertas_fora_da_silhueta(p, frame_w, frame_h))
 
 
 def _postura_das_pernas(k, vis, sy, hy, torso):
@@ -310,8 +402,11 @@ def supported_items(resolved_classes):
     return out
 
 
-def frame_evidence(person, detections, required, supported):
-    """{item: (fonte, confianca)} para os EPIs exigidos, usando as deteccoes desta pessoa."""
+def frame_evidence(person, detections, required, supported, encoberto=()):
+    """{item: (fonte, confianca)} para os EPIs exigidos, usando as deteccoes desta pessoa.
+
+    encoberto: regioes escondidas atras de um objeto ou de outra pessoa. Nelas, nao achar o EPI
+    nao prova que ele falta: vira 'nao_visivel' em vez de 'inferido'."""
     height = person['box'][3] - person['box'][1]
     evidence = {}
     for item in required:
@@ -323,6 +418,8 @@ def frame_evidence(person, detections, required, supported):
             evidence[item] = ('detectado', max(pos))
         elif neg:
             evidence[item] = ('ausencia_detectada', max(neg))
+        elif region in encoberto:
+            evidence[item] = ('nao_visivel', 0.0)
         elif visible and supported.get(item, {}).get('pos') and height >= MIN_PERSON_PX.get(region, 90):
             evidence[item] = ('inferido', 0.0)
         else:
@@ -346,27 +443,39 @@ def decide_state(previous, weights, cfg):
 
 
 class _ItemState:
-    __slots__ = ('obs', 'state', 'missing_since', 'last_obs', 'conf', 'source')
+    __slots__ = ('obs', 'state', 'missing_since', 'last_obs', 'last_neg', 'conf', 'source')
 
     def __init__(self):
         self.obs = deque()
         self.state = 'nao_visivel'
         self.missing_since = None
         self.last_obs = None
+        self.last_neg = None   # ultima vez que a ausencia foi vista de fato (classe sem_*)
         self.conf = 0.0
         self.source = 'nao_visivel'
 
-    def update(self, t, source, conf, cfg):
+    def update(self, t, source, conf, cfg, encoberto=False):
         weight = WEIGHTS[source]
         if weight:
             self.obs.append((t, weight))
             self.last_obs, self.conf, self.source = t, conf, source
+            if source == 'ausencia_detectada':
+                self.last_neg = t
         while self.obs and t - self.obs[0][0] > cfg['window_sec']:
             self.obs.popleft()
         previous = self.state
+        # atras de um objeto o EPI nao some: vale o ultimo estado visto por mais tempo
+        memoria = cfg['memoria_encoberto_sec'] if encoberto else 3 * cfg['window_sec']
+        if encoberto and any(w == WEIGHTS['inferido'] for _, w in self.obs):
+            # "nao achei" deduzido antes de perceber o que estava na frente nao prova a falta;
+            # ausencia vista de fato (sem_capacete, sem_colete...) continua valendo
+            self.obs = deque(o for o in self.obs if o[1] != WEIGHTS['inferido'])
+            sem_negativo = not any(w < 0 for _, w in self.obs)
+            if previous == 'faltando' and sem_negativo and (self.last_neg is None or t - self.last_neg > memoria):
+                previous = self.state = 'verificando'
         if self.obs:
             self.state = decide_state(previous, [w for _, w in self.obs], cfg)
-        elif self.last_obs is None or t - self.last_obs > 3 * cfg['window_sec']:
+        elif self.last_obs is None or t - self.last_obs > memoria:
             self.state = 'nao_visivel'
         if self.state != 'faltando':
             self.missing_since = None
@@ -460,8 +569,9 @@ class PPEAnalyzer:
         confs = res.boxes.conf.cpu().numpy()
         ids = res.boxes.id.int().cpu().tolist() if res.boxes.id is not None else [None] * len(boxes)
         kpts = res.keypoints.data.cpu().numpy()
-        return [{'box': tuple(float(v) for v in b), 'conf': float(c), 'track_id': tid, 'kpts': k}
-                for b, c, tid, k in zip(boxes, confs, ids, kpts)]
+        people = [{'box': tuple(float(v) for v in b), 'conf': float(c), 'track_id': tid, 'kpts': k}
+                  for b, c, tid, k in zip(boxes, confs, ids, kpts)]
+        return consolidar_pessoas(people, self.cfg['kp_conf'], self.tracks)
 
     def analyze(self, frame, detections, required, supported, t=None, employees=None, people=None,
                 resolvedor=None):
@@ -477,6 +587,9 @@ class PPEAnalyzer:
             people = self.detect_people(frame)
         for p in people:
             p['regions'] = body_regions(p['box'], p['kpts'], w, h, self.cfg['kp_conf'])
+        encobertos = [regioes_encobertas(p, people, w, h) for p in people]
+        for p, enc in zip(people, encobertos):
+            p['encoberto'] = enc
         assign_detections(people, detections)
         assign_employees(people, employees)
 
@@ -499,11 +612,13 @@ class PPEAnalyzer:
             # EPIs cobrados desta pessoa: os da zona onde ela pisa, ou o padrao do stream
             req_p, area_p = (resolvedor.para_box(p['box']) if resolvedor is not None
                              else (required, None))
-            evidence = frame_evidence(p, [d for d in detections if d.get('person') == pi], req_p, supported)
+            encoberto = p['encoberto']
+            evidence = frame_evidence(p, [d for d in detections if d.get('person') == pi], req_p, supported,
+                                      encoberto)
             epis = {}
             for item, (source, conf) in evidence.items():
                 st = track.item(item)
-                st.update(t, source, conf, self.cfg)
+                st.update(t, source, conf, self.cfg, encoberto=tax.item_region(item) in encoberto)
                 epis[item] = st.snapshot(t, self.cfg)
 
             posture, arms_up, head, angle = posture_of(p['box'], p['kpts'], self.cfg['kp_conf'])
@@ -528,6 +643,9 @@ class PPEAnalyzer:
                 'inclinacao_tronco': round(angle, 1) if angle is not None else None,
                 'movimento': movement_label(track.speed),
                 'velocidade': round(track.speed, 2),
+                # regioes escondidas neste quadro que importam para os EPIs cobrados desta pessoa
+                'encoberto': sorted(encoberto & {tax.item_region(i) for i in req_p}),
+                'reforco': list(p.get('reforco') or ()),  # segunda olhada usada (recorte, detr)
                 'alertas': alerts,
                 'func_id': p.get('func_id') or track.func_id,
                 'exigidos': list(req_p),
@@ -663,7 +781,10 @@ def draw_analysis(img, analysis, detections=(), show_ppe=True, zonas=None, areas
         title = f"ID {p['track_id']}" if p['track_id'] is not None else 'Pessoa'
         if p.get('nome'):
             title += f" {p['nome']}"
-        lines = [(f"{title} | {POSTURE_LABELS.get(p['postura'], p['postura'])}, {p['movimento']}", color)]
+        estado = f"{POSTURE_LABELS.get(p['postura'], p['postura'])}, {p['movimento']}"
+        if p.get('encoberto'):
+            estado += ', encoberto'
+        lines = [(f"{title} | {estado}", color)]
         if p['faltando']:
             lines.append(('Falta: ' + ', '.join(tax.item_label(i) for i in p['faltando']), STATE_COLORS['faltando']))
         if 'Possível queda' in p['alertas']:

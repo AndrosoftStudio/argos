@@ -42,6 +42,30 @@ O sistema usa ROI em três níveis:
 | Pessoa | `EpiDetector.detect_crops` (modo *Super detalhado*) | O detector roda de novo em um recorte ampliado de cada pessoa, para achar EPIs pequenos. |
 | Parte do corpo | `ppe_analyzer.body_regions` | Os pontos da pose dividem o corpo em cabeça, tronco, mãos e pés; cada EPI só conta na sua região (capacete na cabeça, bota nos pés). |
 
+### Trabalhador encoberto: o sistema decide sozinho quando reforçar
+
+Quando algo fica na frente do trabalhador (uma caixa, uma máquina, outra pessoa), o
+modelo de pose "completa" o corpo com pontos inventados e ainda cria uma segunda cópia
+da pessoa só com a parte de cima. Sem tratar isso, o EPI ficava com uma cópia e a outra
+aparecia sem EPI (alarme falso). A análise agora:
+
+1. **percebe a oclusão** (`ppe_analyzer.regioes_encobertas`): junta as cópias da mesma
+   pessoa e apaga os pontos inventados; marca a parte do corpo coberta por outra pessoa
+   que está na frente; e a parte que a pose estimou fora da silhueta que o modelo viu;
+2. **não deduz falta onde não dá para ver**: numa parte encoberta, não achar o EPI vira
+   *não visível*, e vale o último estado visto por até 12 s. A falta vista de fato
+   (classe `sem_capacete`, por exemplo) continua valendo atrás do objeto;
+3. **dá uma segunda olhada só em quem precisa** (`reforco.py`): encobertos e pessoas sem
+   evidência de algum EPI ganham o detector no recorte ampliado delas (ROI), no máximo
+   uma vez por segundo quando estão à vista. Nos encobertos, se houver um modelo Argos
+   da outra arquitetura em `models/` (um DETR treinado, se o padrão é YOLO), ele dá a
+   segunda opinião no mesmo recorte.
+
+Na tela, a pessoa aparece como *encoberto* e o alarme espera. Numa cena de teste com
+uma caixa na frente do tronco de um trabalhador (vídeo real, caixa desenhada), os quadros
+com alarme falso caíram de 50 para 0; sem obstáculo, o custo subiu cerca de 14 ms por
+quadro num notebook sem GPU.
+
 ### YOLO e DETR
 
 O detector de EPIs aceita as duas famílias da Ultralytics pelo mesmo caminho:
