@@ -74,17 +74,14 @@ Transformer* em tempo real (atenção global sobre a imagem e saída sem NMS). O
 servidor descobre a arquitetura pelo próprio arquivo `.pt`
 (`epi_detector.arquitetura_de`). Quem usa o painel não escolhe modelo: o padrão é
 o modelo Argos de `models/` com o maior mAP50 no teste (`melhor_modelo_argos`, lido
-do `.json` do treino), seja YOLO ou DETR. Para treinar um DETR de EPIs com o mesmo
-dataset:
+do `.json` do treino), seja YOLO ou DETR. Um modelo da outra arquitetura com pelo
+menos 80% da nota do padrão entra como segunda opinião em trabalhador encoberto.
 
-```bash
-python treinamento/treinar.py --dados D:/ArgosEPI/datasets/argos_epi_v1/data.yaml \
-  --nome argos_epi_detr_v1 --arquitetura detr --exportar-para models/
-```
-
-O RT-DETR precisa de GPU para treinar (lote 8 a 640 px em 8 GB) e de mais épocas
-que o YOLO. Sem GPU ele também roda, porém mais devagar: cerca de 0,55 s por imagem
-num notebook, contra 0,07 s do `argos_epi_v1`.
+Para treinar o DETR de EPIs, dê dois cliques em `treinamento/treinar_detr.bat` no PC
+com GPU, depois do `treinar_tudo.bat`. Ele usa o mesmo dataset do `argos_epi_v1`, então as
+notas são comparáveis (ver `treinamento/README.md`). O treino leva de 1 a 2 dias numa RTX
+4060 Ti. Sem GPU não compensa. Na inferência, o RT-DETR roda em cerca de 0,55 s por
+imagem num notebook sem GPU, contra 0,07 s do `argos_epi_v1`.
 
 ## Rodando
 

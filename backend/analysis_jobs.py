@@ -541,7 +541,7 @@ class JobManager:
         required = detector.clean_required(
             tax.normalize_required(required) if required else tax.default_required(detector.names))
         analyzer = PPEAnalyzer(pose_model_path(mode['pose']), device=device, half=is_cuda(device), imgsz=mode['imgsz'])
-        extra_path = modelo_de_reforco(MODELS_DIR, detector.arquitetura)
+        extra_path = modelo_de_reforco(MODELS_DIR, model_path, detector.arquitetura)
         extra = None
         if extra_path and os.path.abspath(extra_path) != os.path.abspath(model_path):
             try:

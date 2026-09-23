@@ -54,6 +54,25 @@ O servidor (`acompanhar_treinamento\servidor.py`) só lê os arquivos do treino,
 | `final` | Treina o modelo final (120 épocas) e copia para `models/` | ~17 h (para antes se não melhorar por 40 épocas) |
 | `avaliar` | Gera `avaliacao_<modelo>.md` com mAP comum e mAP justo por classe | ~5 min |
 
+### Treinar o DETR (Detection Transformer)
+
+Depois do `treinar_tudo.bat`, dois cliques em **`treinar_detr.bat`** treinam um RT-DETR com
+o **mesmo dataset** do `argos_epi_v1`, já com os pseudo-rótulos. Assim a nota de teste dos
+dois é comparável.
+
+- Não baixa nem monta nada. Acha o dataset pelo `estado_argos_epi_v1.json`, mesmo que ele esteja num SSD.
+- Começa do `rtdetr-l.pt` (COCO), com 72 épocas (o ciclo padrão do RT-DETR), AdamW 1e-4 e lote 8. Se faltar memória na GPU, recomeça sozinho com metade do lote.
+- Tempo estimado na RTX 4060 Ti: 1 a 2 dias, cerca de 3 vezes o YOLO por época. Para antes se não melhorar por 20 épocas.
+- Queda de energia: rode de novo e ele continua de onde parou.
+- No fim, copia `argos_epi_detr_v1.pt` e `.json` para `models/` e mostra as duas notas. O servidor decide sozinho:
+  - DETR com nota maior: vira o modelo padrão;
+  - com pelo menos 80% da nota do YOLO: entra como segunda opinião em trabalhador encoberto;
+  - abaixo disso: não é usado.
+- Reinicie o Argos para as câmeras carregarem o modelo novo (no Docker: `docker compose restart`).
+
+Sem GPU não compensa. Num notebook i7-1260P, o RT-DETR leva ~2,8 s por imagem no treino:
+uma única época das 27 mil imagens passaria de 20 horas.
+
 ## Classes
 
 A taxonomia fica em `backend/ppe_taxonomy.py` e é a mesma usada pelo servidor na inferência.
@@ -129,4 +148,5 @@ O modo **super detalhado** guarda quadros duvidosos com pré-rótulos YOLO em `d
 | `montar_dataset.py` | Conversão de classes, limpeza, duplicatas (dHash) e divisão sem vazamento |
 | `pseudo_rotular.py` | Completa rótulos faltantes com o modelo professor |
 | `treinar.py` | Treino YOLO26 ou RT-DETR (`--arquitetura detr`) com retomada e cópia para `models/` |
+| `treinar_detr.py` / `.bat` | Treina o RT-DETR com o dataset do `argos_epi_v1` e compara as notas |
 | `avaliar.py` | mAP comum e justo por classe |
