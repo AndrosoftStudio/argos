@@ -11,6 +11,7 @@ Two registries live here:
                usados pelo site https://github.com/AndrosoftStudio/treinamentoargosepi
                para achar o PC que esta treinando, sem ninguem digitar URL nenhuma.
 """
+import hmac
 import json
 import os
 import threading
@@ -41,15 +42,26 @@ def _now():
     return time.time()
 
 
+if not HUB_API_KEY:
+    # Sem chave, qualquer um registra um "backend" que responde 100% disponivel,
+    # e o site da Vercel passa a mandar login e senha das pessoas para ele.
+    print("[hub] AVISO: HUB_API_KEY vazia -- qualquer um pode registrar backend. "
+          "Defina a chave no Render e no .env dos backends.")
+
+
+def _chave_confere(recebida):
+    # compare_digest: a comparacao com == deixava medir, pelo tempo, quantos
+    # caracteres da chave estavam certos
+    return bool(recebida) and hmac.compare_digest(str(recebida).encode(), HUB_API_KEY.encode())
+
+
 def _authorized():
     if not HUB_API_KEY:
         return True
     auth = request.headers.get("Authorization", "")
-    if auth.startswith("Bearer ") and auth[7:] == HUB_API_KEY:
+    if auth.startswith("Bearer ") and _chave_confere(auth[7:]):
         return True
-    if request.headers.get("X-Hub-Key") == HUB_API_KEY:
-        return True
-    return False
+    return _chave_confere(request.headers.get("X-Hub-Key"))
 
 
 def _clean_url(url):

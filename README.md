@@ -62,6 +62,32 @@ cada reinício.
 > `docker-compose.yml` monta `./frontend` como volume, então mudança de frontend
 > vale na hora localmente — mas `backend/` é copiado para dentro da imagem.
 
+### Contas e segurança
+
+Cada câmera pertence a uma conta: o painel só vê, altera ou remove as câmeras
+que criou e as dos celulares com link da própria conta; o celular só fala com
+o próprio stream. As senhas são guardadas com PBKDF2 e sal (contas antigas são
+convertidas no primeiro login), e a sessão expira após dias sem uso.
+
+Ajustes no `.env` (todos têm padrão; veja `.env.example`):
+
+| Variável | Padrão | Para quê |
+|---|---|---|
+| `ARGOS_CADASTRO_ABERTO` | `1` | `0` fecha a tela "Criar conta" (use numa empresa, depois de criar as contas) |
+| `ARGOS_UPLOAD_MODELOS` | `todos` | `admin` ou `desligado`: o `.pt` enviado executa código ao ser carregado |
+| `ARGOS_SESSAO_DIAS` | `30` | dias sem uso até pedir login de novo |
+| `ARGOS_MAX_UPLOAD_MB` | `2048` | tamanho máximo de vídeo, modelo ou zip enviado |
+
+No Render, defina `HUB_API_KEY` no hub **e** no `.env` dos backends: sem ela,
+qualquer pessoa registra um “backend” no hub e o site passa a enviar para ele
+o login de quem entra.
+
+Testes das regras de segurança (não precisam de GPU nem de banco):
+
+```bash
+python -m pytest tests
+```
+
 ---
 
 ## O que NÃO está neste repositório, de propósito
