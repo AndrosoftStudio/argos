@@ -37,6 +37,22 @@ def test_formato_exportado_cai_em_yolo():
     assert epi_detector.arquitetura_de(Exportado()) == 'yolo'
 
 
+def test_padrao_e_o_modelo_que_detecta_melhor(tmp_path):
+    import json
+    import time
+    assert epi_detector.melhor_modelo_argos(str(tmp_path)) is None
+    for nome, nota in (('argos_epi_v1', 0.683), ('argos_epi_detr_v1', 0.61), ('outro_modelo', 0.99)):
+        (tmp_path / f'{nome}.pt').write_bytes(b'x')
+        (tmp_path / f'{nome}.json').write_text(json.dumps({'map50_teste': nota}))
+        time.sleep(0.02)
+    # o DETR e o mais recente, mas detecta pior: o YOLO continua padrao
+    assert epi_detector.melhor_modelo_argos(str(tmp_path)) == 'argos_epi_v1.pt'
+    (tmp_path / 'argos_epi_detr_v1.json').write_text(json.dumps({'map50_teste': 0.72}))
+    assert epi_detector.melhor_modelo_argos(str(tmp_path)) == 'argos_epi_detr_v1.pt'
+    (tmp_path / 'argos_epi_v2.pt').write_bytes(b'x')  # sem .json: fica atras dos que tem nota
+    assert epi_detector.melhor_modelo_argos(str(tmp_path)) == 'argos_epi_detr_v1.pt'
+
+
 def test_info_do_modelo_le_arquitetura_e_guarda(tmp_path, detr):
     caminho = str(tmp_path / 'argos_epi_detr_teste.pt')
     detr.save(caminho)

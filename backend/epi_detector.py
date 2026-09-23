@@ -3,6 +3,7 @@ epi_detector.py - Detector de EPIs e conversao das deteccoes para a taxonomia Ar
 
 Compartilhado pelo tempo real (processor.py) e pelas analises de video (analysis_jobs.py).
 """
+import json
 import os
 import threading
 
@@ -87,6 +88,26 @@ def info_do_modelo(caminho):
         with _INFO_TRAVA:
             _INFO_MODELOS[chave] = info
     return {'classes': list(info['classes']), 'arquitetura': info['arquitetura']}
+
+
+def melhor_modelo_argos(pasta):
+    """Nome do modelo Argos (argos_epi*.pt) com maior mAP50 no teste, lido do .json do treino.
+    Quem usa o painel nao escolhe modelo: um DETR treinado so vira padrao se detectar melhor
+    que o YOLO. Sem nota, vale o mais recente. None quando nao ha modelo Argos."""
+    try:
+        nomes = [f for f in os.listdir(pasta) if f.startswith('argos_epi') and f.endswith('.pt')]
+    except OSError:
+        return None
+
+    def nota(nome):
+        try:
+            with open(os.path.join(pasta, nome[:-3] + '.json'), encoding='utf-8') as f:
+                m = json.load(f).get('map50_teste')
+        except (OSError, ValueError, AttributeError):
+            m = None
+        return (float(m) if isinstance(m, (int, float)) else -1.0, os.path.getmtime(os.path.join(pasta, nome)))
+
+    return max(nomes, key=nota) if nomes else None
 
 
 def arquitetura_do_arquivo(caminho):

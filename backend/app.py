@@ -37,6 +37,7 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(__file__))
 from processor import VideoProcessor
+from epi_detector import melhor_modelo_argos
 import db
 import face_id
 import seguranca
@@ -781,12 +782,8 @@ def _resolve_model_path_for_user(uid, model_name: str) -> str:
 
 
 def _base_default_model() -> str:
-    """Modelo Argos treinado mais recente em models/ (treinamento/pipeline.py), senao o YOLO base."""
-    argos = []
-    if os.path.isdir(MODELS_DIR):
-        argos = sorted((f for f in os.listdir(MODELS_DIR) if f.startswith('argos_epi') and f.endswith('.pt')),
-                       key=lambda f: os.path.getmtime(os.path.join(MODELS_DIR, f)), reverse=True)
-    return argos[0] if argos else 'yolo26n.pt'
+    """Modelo Argos treinado com melhor mAP50 em models/ (YOLO ou DETR), senao o YOLO base."""
+    return melhor_modelo_argos(MODELS_DIR) or 'yolo26n.pt'
 
 
 def _default_model_for(uid):

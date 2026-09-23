@@ -48,9 +48,10 @@ O detector de EPIs aceita as duas famílias da Ultralytics pelo mesmo caminho:
 **YOLO** (rede convolucional com NMS, `argos_epi_v1`) e **RT-DETR**, o *Detection
 Transformer* em tempo real (atenção global sobre a imagem e saída sem NMS). O
 servidor descobre a arquitetura pelo próprio arquivo `.pt`
-(`epi_detector.arquitetura_de`) e a tela mostra *YOLO* ou *DETR (transformer)* no
-cartão do modelo e nos detalhes da câmera. Para treinar um DETR de EPIs com o
-mesmo dataset:
+(`epi_detector.arquitetura_de`). Quem usa o painel não escolhe modelo: o padrão é
+o modelo Argos de `models/` com o maior mAP50 no teste (`melhor_modelo_argos`, lido
+do `.json` do treino), seja YOLO ou DETR. Para treinar um DETR de EPIs com o mesmo
+dataset:
 
 ```bash
 python treinamento/treinar.py --dados D:/ArgosEPI/datasets/argos_epi_v1/data.yaml \
