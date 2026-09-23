@@ -19,8 +19,9 @@ import areas as areas_mod
 import auditoria
 import face_id
 import ppe_taxonomy as tax
-from epi_detector import (EpiDetector, is_cuda, merge_detections, pose_model_path, resolve_device,
-                          run_employee_model)
+from epi_detector import (MODELS_DIR, EpiDetector, info_do_modelo, is_cuda, merge_detections, modelo_de_reforco,
+                          pose_model_path, resolve_device, run_employee_model)
+from reforco import Reforco
 from live_pipeline import CONFIG_PADRAO, MODOS, LivePipeline, config_publica, normalizar_config
 from ppe_analyzer import PPEAnalyzer, draw_analysis
 from yolo_runtime import precision_kwargs
@@ -30,6 +31,7 @@ class VideoProcessor:
     def __init__(self, client_id: str = "local"):
         self.client_id = client_id
         self.detector = None
+        self.reforco = None      # segunda olhada (ROI e o outro detector) so para quem precisa
         self.analyzers = {}  # (nivel da pose, imgsz) -> PPEAnalyzer
         self.analyzer_lock = threading.RLock()
         self.running = False
@@ -148,10 +150,8 @@ class VideoProcessor:
 
     @classmethod
     def read_model_info(cls, model_path: str) -> dict:
-        from ultralytics import YOLO
-        names = YOLO(model_path).names
-        names = names if isinstance(names, dict) else dict(enumerate(names))
-        return {'classes': [str(names[i]) for i in sorted(names)]}
+        """{'classes': [...], 'arquitetura': 'yolo' | 'detr'}"""
+        return info_do_modelo(model_path)
 
     # ── Configuracao ────────────────────────────────────────────────
     @property
@@ -213,6 +213,7 @@ class VideoProcessor:
             self.model_classes = self.detector.class_names
             self.required_items = self.detector.clean_required(
                 tax.normalize_required(required_items) if required_items else tax.default_required(self.detector.names))
+            self.reforco = Reforco(self.detector, self._detector_extra(model_path))
             self.pose_ok = True
             self._analyzer_for(MODOS[self.mode])
             if camera_source is not None:
@@ -228,11 +229,26 @@ class VideoProcessor:
             if not self.use_external:
                 self.thread = threading.Thread(target=self._run_capture, daemon=True, name=f"cap-{self.client_id}")
                 self.thread.start()
-            self._log(f"Iniciado: {self.camera_source} | modelo={self.model_name} | runtime={self.runtime_backend} | "
+            self._log(f"Iniciado: {self.camera_source} | modelo={self.model_name} ({self.detector.arquitetura}) | "
+                      f"runtime={self.runtime_backend} | "
                       f"modo={self.mode} | pose={'sim' if self.pose_ok else 'nao'} | EPIs={self.required_items}")
         except Exception as e:
             self._log(f"ERRO: {e}")
             self.running = False
+
+    def _detector_extra(self, model_path):
+        """O modelo Argos da outra arquitetura (DETR x YOLO), para a segunda opiniao em quem esta
+        encoberto. Sem um treinado em models/, o reforco usa so o recorte (ROI)."""
+        caminho = modelo_de_reforco(MODELS_DIR, self.detector.arquitetura)
+        if not caminho or os.path.abspath(caminho) == os.path.abspath(model_path):
+            return None
+        try:
+            extra = EpiDetector(caminho, self.device, use_tensorrt=True, log=self._log)
+            self._log(f"Segunda opiniao para pessoas encobertas: {os.path.basename(caminho)} ({extra.arquitetura})")
+            return extra
+        except Exception as e:
+            self._log(f"Segunda opiniao indisponivel ({os.path.basename(caminho)}): {e}")
+            return None
 
     def load_extra_models(self, model_paths: list):
         from ultralytics import YOLO
@@ -380,6 +396,10 @@ class VideoProcessor:
         if perfil['recortes'] and people and run_det:
             dets = merge_detections(dets, det.detect_crops(img, [p['box'] for p in people], imgsz=640,
                                                             conf=perfil['conf']))
+        if self.reforco is not None and people and run_det:
+            # so quem esta encoberto ou sem evidencia de algum EPI ganha a segunda olhada
+            dets = self.reforco.aplicar(img, people, dets, required, t, ja_recortou=perfil['recortes'],
+                                        conf=perfil['conf'])
         employees = self._run_extra_models(img, dets)
         employees += self._reconhecer_rostos(img)
         if analyzer is not None:
@@ -459,6 +479,7 @@ class VideoProcessor:
             'camera': str(self.camera_source),
             'client_id': self.client_id,
             'model': self.model_name,
+            'arquitetura': self.detector.arquitetura if self.detector else None,
             'runtime_backend': self.runtime_backend,
             'inference_model_path': self.inference_model_path,
             'classes': list(self.model_classes),

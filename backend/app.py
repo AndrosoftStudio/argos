@@ -37,6 +37,7 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(__file__))
 from processor import VideoProcessor
+from epi_detector import melhor_modelo_argos
 import db
 import face_id
 import seguranca
@@ -666,12 +667,16 @@ def _safe_model_name(name: str) -> str:
     return name
 
 
-def _read_model_classes(model_path: str) -> list:
+def _read_model_info(model_path: str) -> dict:
+    """{'classes', 'arquitetura'}; modelo ilegivel volta sem classes e como YOLO."""
     try:
-        info = VideoProcessor.read_model_info(model_path)
-        return info.get('classes', [])
+        return VideoProcessor.read_model_info(model_path)
     except Exception:
-        return []
+        return {'classes': [], 'arquitetura': 'yolo'}
+
+
+def _read_model_classes(model_path: str) -> list:
+    return _read_model_info(model_path).get('classes', [])
 
 
 def _guess_required_items(classes: list) -> list:
@@ -686,11 +691,14 @@ def _guess_required_items(classes: list) -> list:
 def _base_model_display_name(name: str) -> str:
     """Nome amigavel dos modelos globais de models/, que aparecem para todos os usuarios."""
     stem = name[:-3] if name.endswith('.pt') else name
+    tamanhos = {'n': 'nano, mais rápido', 's': 'small, mais preciso', 'm': 'medium', 'l': 'large',
+                'x': 'extra large'}
     m = re.fullmatch(r'yolo(\d+)([nsmlx])', stem)
     if m:
-        tamanho = {'n': 'nano, mais rápido', 's': 'small, mais preciso', 'm': 'medium', 'l': 'large',
-                   'x': 'extra large'}[m.group(2)]
-        return f"YOLO{m.group(1)}{m.group(2)} ({tamanho}, só pessoas)"
+        return f"YOLO{m.group(1)}{m.group(2)} ({tamanhos[m.group(2)]}, só pessoas)"
+    m = re.fullmatch(r'rtdetr-([lx])', stem)
+    if m:
+        return f"RT-DETR {m.group(1)} (transformer, {tamanhos[m.group(1)]}, só pessoas)"
     if stem.startswith('argos_epi'):
         info = {}
         try:
@@ -700,6 +708,8 @@ def _base_model_display_name(name: str) -> str:
             pass
         versao = stem[len('argos_epi'):].strip('_') or 'v1'
         extra = f", mAP50 {info['map50_teste']:.2f}" if isinstance(info.get('map50_teste'), (int, float)) else ''
+        if info.get('arquitetura') == 'detr':
+            extra += ', DETR'
         return f"Argos EPI {versao} (treinado, {len(info.get('classes') or []) or 15} classes{extra})"
     return name
 
@@ -772,12 +782,8 @@ def _resolve_model_path_for_user(uid, model_name: str) -> str:
 
 
 def _base_default_model() -> str:
-    """Modelo Argos treinado mais recente em models/ (treinamento/pipeline.py), senao o YOLO base."""
-    argos = []
-    if os.path.isdir(MODELS_DIR):
-        argos = sorted((f for f in os.listdir(MODELS_DIR) if f.startswith('argos_epi') and f.endswith('.pt')),
-                       key=lambda f: os.path.getmtime(os.path.join(MODELS_DIR, f)), reverse=True)
-    return argos[0] if argos else 'yolo26n.pt'
+    """Modelo Argos treinado com melhor mAP50 em models/ (YOLO ou DETR), senao o YOLO base."""
+    return melhor_modelo_argos(MODELS_DIR) or 'yolo26n.pt'
 
 
 def _default_model_for(uid):
@@ -1034,7 +1040,8 @@ def list_models():
     base_default = _base_default_model()
 
     def add_model(full: str, name: str, tipo: str, owner_uid=None, display_name=None, editable=False):
-        classes = _read_model_classes(full)
+        info = _read_model_info(full)
+        classes = info['classes']
         meta_owner = owner_uid if owner_uid else (user['id'] if user and '_cam_session' not in user else None)
         meta = _load_model_meta(meta_owner).get(name, {}) if meta_owner else {}
         required_items = meta.get('required_items') or _guess_required_items(classes)
@@ -1044,6 +1051,7 @@ def list_models():
             'display_name': display_name or name,
             'size_mb': round(os.path.getsize(full) / 1024 / 1024, 1),
             'tipo': tipo,
+            'arquitetura': info['arquitetura'],
             'editable': editable,
             'configurable': bool(user and '_cam_session' not in user),
             'user_override': bool(user_meta.get(name)) if user and '_cam_session' not in user else False,
@@ -1353,7 +1361,7 @@ def _result_payload(p, sid):
 def _stream_info(p, sid):
     """Dados do stream que mudam pouco (vao em 'pronto' e 'estado', nao em todo quadro)."""
     st = p.get_status()
-    return {'stream_id': sid, 'config': p.public_config(), 'model': p.model_name,
+    return {'stream_id': sid, 'config': p.public_config(), 'model': p.model_name, 'arquitetura': st.get('arquitetura'),
             'required_items': st['required_items'], 'required_labels': st['required_labels'],
             'classes': st['classes'], 'pose': st['pose'], 'pipeline': st['pipeline'],
             'runtime_backend': st['runtime_backend'], 'camera': st['camera'],

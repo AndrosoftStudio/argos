@@ -23,14 +23,68 @@ registra o episódio com foto e atribui ao funcionário reconhecido.
 ## Como funciona, em uma passada
 
 1. Uma câmera entra no sistema — celular pelo link, navegador, RTSP ou a tela.
-2. Cada câmera roda em uma linha de processamento própria: um modelo YOLO de
-   EPIs + um modelo de pose que separa as pessoas e rastreia cada uma.
+2. Cada câmera roda em uma linha de processamento própria: um detector de
+   EPIs (YOLO ou DETR) + um modelo de pose que separa as pessoas e rastreia cada uma.
 3. O rosto de quem aparece é comparado com a galeria de funcionários
    (SCRFD + ArcFace, por embedding — **não existe etapa de treino**).
 4. Cada pessoa é cobrada pelos EPIs da **área** onde está pisando, não por uma
    lista única da câmera.
 5. Falta confirmada vira um **episódio** na auditoria, com até 3 fotos de
    evidência, e entra na ficha de desempenho do funcionário.
+
+### Regiões de interesse (ROI)
+
+O sistema usa ROI em três níveis:
+
+| Nível | Onde | O que faz |
+| --- | --- | --- |
+| Área da câmera | `areas.py`, tela *Mapear áreas* | Polígono desenhado sobre a imagem. A pessoa entra na área pelo ponto de apoio (entre os pés) e é cobrada pelos EPIs daquela área; uma área sem EPIs é *área livre*. |
+| Pessoa | `EpiDetector.detect_crops` (modo *Super detalhado*) | O detector roda de novo em um recorte ampliado de cada pessoa, para achar EPIs pequenos. |
+| Parte do corpo | `ppe_analyzer.body_regions` | Os pontos da pose dividem o corpo em cabeça, tronco, mãos e pés; cada EPI só conta na sua região (capacete na cabeça, bota nos pés). |
+
+### Trabalhador encoberto: o sistema decide sozinho quando reforçar
+
+Quando algo fica na frente do trabalhador (uma caixa, uma máquina, outra pessoa), o
+modelo de pose "completa" o corpo com pontos inventados e ainda cria uma segunda cópia
+da pessoa só com a parte de cima. Sem tratar isso, o EPI ficava com uma cópia e a outra
+aparecia sem EPI (alarme falso). A análise agora:
+
+1. **percebe a oclusão** (`ppe_analyzer.regioes_encobertas`): junta as cópias da mesma
+   pessoa e apaga os pontos inventados; marca a parte do corpo coberta por outra pessoa
+   que está na frente; e a parte que a pose estimou fora da silhueta que o modelo viu;
+2. **não deduz falta onde não dá para ver**: numa parte encoberta, não achar o EPI vira
+   *não visível*, e vale o último estado visto por até 12 s. A falta vista de fato
+   (classe `sem_capacete`, por exemplo) continua valendo atrás do objeto;
+3. **dá uma segunda olhada só em quem precisa** (`reforco.py`): encobertos e pessoas sem
+   evidência de algum EPI ganham o detector no recorte ampliado delas (ROI), no máximo
+   uma vez por segundo quando estão à vista. Nos encobertos, se houver um modelo Argos
+   da outra arquitetura em `models/` (um DETR treinado, se o padrão é YOLO), ele dá a
+   segunda opinião no mesmo recorte.
+
+Na tela, a pessoa aparece como *encoberto* e o alarme espera. Numa cena de teste com
+uma caixa na frente do tronco de um trabalhador (vídeo real, caixa desenhada), os quadros
+com alarme falso caíram de 50 para 0; sem obstáculo, o custo subiu cerca de 14 ms por
+quadro num notebook sem GPU.
+
+### YOLO e DETR
+
+O detector de EPIs aceita as duas famílias da Ultralytics pelo mesmo caminho:
+**YOLO** (rede convolucional com NMS, `argos_epi_v1`) e **RT-DETR**, o *Detection
+Transformer* em tempo real (atenção global sobre a imagem e saída sem NMS). O
+servidor descobre a arquitetura pelo próprio arquivo `.pt`
+(`epi_detector.arquitetura_de`). Quem usa o painel não escolhe modelo: o padrão é
+o modelo Argos de `models/` com o maior mAP50 no teste (`melhor_modelo_argos`, lido
+do `.json` do treino), seja YOLO ou DETR. Para treinar um DETR de EPIs com o mesmo
+dataset:
+
+```bash
+python treinamento/treinar.py --dados D:/ArgosEPI/datasets/argos_epi_v1/data.yaml \
+  --nome argos_epi_detr_v1 --arquitetura detr --exportar-para models/
+```
+
+O RT-DETR precisa de GPU para treinar (lote 8 a 640 px em 8 GB) e de mais épocas
+que o YOLO. Sem GPU ele também roda, porém mais devagar: cerca de 0,55 s por imagem
+num notebook, contra 0,07 s do `argos_epi_v1`.
 
 ## Rodando
 

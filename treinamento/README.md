@@ -128,5 +128,5 @@ O modo **super detalhado** guarda quadros duvidosos com pré-rótulos YOLO em `d
 | `baixar_datasets.py` | Download paralelo das fontes (`git clone` no Hugging Face, HTTP com retomada nos zips) e extração |
 | `montar_dataset.py` | Conversão de classes, limpeza, duplicatas (dHash) e divisão sem vazamento |
 | `pseudo_rotular.py` | Completa rótulos faltantes com o modelo professor |
-| `treinar.py` | Treino YOLO26 com retomada e cópia para `models/` |
+| `treinar.py` | Treino YOLO26 ou RT-DETR (`--arquitetura detr`) com retomada e cópia para `models/` |
 | `avaliar.py` | mAP comum e justo por classe |

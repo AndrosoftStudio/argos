@@ -1012,7 +1012,9 @@
 
       const lines = [];
       const who = (p.track_id !== null && p.track_id !== undefined ? 'ID ' + p.track_id : 'Pessoa') + (p.nome ? ' · ' + p.nome : '');
-      lines.push([[who, POSTURE[p.postura], p.movimento].filter(Boolean).join(' · '), color]);
+      // encoberto: um objeto ou outra pessoa esconde onde o EPI fica; o sistema segura o alarme
+      lines.push([[who, POSTURE[p.postura], p.movimento, (p.encoberto || []).length ? 'encoberto' : '']
+        .filter(Boolean).join(' · '), color]);
       if ((p.alertas || []).includes('Possível queda')) lines.push(['⚠ POSSÍVEL QUEDA', '#a00000']);
       for (const [text, c] of lines.reverse()) y = tag(text, X(x1), y, c);
     }

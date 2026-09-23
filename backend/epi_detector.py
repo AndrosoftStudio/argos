@@ -3,7 +3,9 @@ epi_detector.py - Detector de EPIs e conversao das deteccoes para a taxonomia Ar
 
 Compartilhado pelo tempo real (processor.py) e pelas analises de video (analysis_jobs.py).
 """
+import json
 import os
+import threading
 
 import torch
 
@@ -53,6 +55,86 @@ def _runtime_path(model_path, device, use_tensorrt):
     return model_path, 'pytorch'
 
 
+# Duas familias de detector rodam pelo mesmo caminho do Ultralytics: a YOLO (convolucional, com NMS)
+# e a RT-DETR (Detection Transformer em tempo real: atencao global e saida sem NMS). O YOLO() da
+# biblioteca reconhece o checkpoint RT-DETR sozinho; aqui so se descobre qual e, para a tela e o treino.
+ARQUITETURAS = {'yolo': 'YOLO', 'detr': 'DETR (transformer)'}
+
+
+def arquitetura_de(modelo):
+    """'detr' quando a cabeca da rede e o decodificador do RT-DETR; 'yolo' nos demais casos."""
+    try:
+        cabeca = modelo.model.model[-1]
+    except Exception:  # TensorRT e outros formatos exportados nao expoem as camadas
+        return 'yolo'
+    return 'detr' if 'DETR' in type(cabeca).__name__.upper() else 'yolo'
+
+
+_INFO_MODELOS = {}
+_INFO_TRAVA = threading.Lock()
+
+
+def info_do_modelo(caminho):
+    """Classes e arquitetura de um .pt. Fica guardado pela data do arquivo: a lista de modelos
+    abria cada peso a cada visita a tela."""
+    from ultralytics import YOLO
+    chave = (os.path.abspath(caminho), os.path.getmtime(caminho))
+    with _INFO_TRAVA:
+        info = _INFO_MODELOS.get(chave)
+    if info is None:
+        modelo = YOLO(caminho)
+        names = modelo.names if isinstance(modelo.names, dict) else dict(enumerate(modelo.names))
+        info = {'classes': [str(names[i]) for i in sorted(names)], 'arquitetura': arquitetura_de(modelo)}
+        with _INFO_TRAVA:
+            _INFO_MODELOS[chave] = info
+    return {'classes': list(info['classes']), 'arquitetura': info['arquitetura']}
+
+
+def melhor_modelo_argos(pasta):
+    """Nome do modelo Argos (argos_epi*.pt) com maior mAP50 no teste, lido do .json do treino.
+    Quem usa o painel nao escolhe modelo: um DETR treinado so vira padrao se detectar melhor
+    que o YOLO. Sem nota, vale o mais recente. None quando nao ha modelo Argos."""
+    try:
+        nomes = [f for f in os.listdir(pasta) if f.startswith('argos_epi') and f.endswith('.pt')]
+    except OSError:
+        return None
+    return melhor_modelo_argos_entre(pasta, nomes)
+
+
+def melhor_modelo_argos_entre(pasta, nomes):
+    """O de maior mAP50 no teste entre 'nomes' (arquivos de 'pasta'); sem nota, o mais recente."""
+    def nota(nome):
+        try:
+            with open(os.path.join(pasta, nome[:-3] + '.json'), encoding='utf-8') as f:
+                m = json.load(f).get('map50_teste')
+        except (OSError, ValueError, AttributeError):
+            m = None
+        return (float(m) if isinstance(m, (int, float)) else -1.0, os.path.getmtime(os.path.join(pasta, nome)))
+
+    return max(nomes, key=nota) if nomes else None
+
+
+def modelo_de_reforco(pasta, arquitetura_principal):
+    """Caminho do melhor modelo Argos da OUTRA arquitetura (DETR se o principal e YOLO, e vice-versa),
+    usado como segunda opiniao em pessoas encobertas. None quando a equipe ainda nao treinou um."""
+    try:
+        nomes = [f for f in os.listdir(pasta) if f.startswith('argos_epi') and f.endswith('.pt')]
+    except OSError:
+        return None
+    outros = [f for f in nomes if arquitetura_do_arquivo(os.path.join(pasta, f)) != arquitetura_principal]
+    if not outros:
+        return None
+    escolhido = melhor_modelo_argos_entre(pasta, outros)
+    return os.path.join(pasta, escolhido) if escolhido else None
+
+
+def arquitetura_do_arquivo(caminho):
+    try:
+        return info_do_modelo(caminho)['arquitetura']
+    except Exception:
+        return 'yolo'
+
+
 def _iou(a, b):
     ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
     iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
@@ -71,7 +153,7 @@ def merge_detections(*groups, iou=0.5):
 
 
 class EpiDetector:
-    """Modelo YOLO de EPIs (Argos, enviado pelo usuario ou COCO) com classes ja interpretadas."""
+    """Modelo de EPIs (YOLO ou RT-DETR; Argos, enviado pelo usuario ou COCO) com classes ja interpretadas."""
 
     def __init__(self, model_path, device='cpu', use_tensorrt=True, log=print):
         from ultralytics import YOLO
@@ -85,6 +167,7 @@ class EpiDetector:
             runtime, backend = model_path, 'pytorch'
             self.model = YOLO(runtime)
         self.model_path, self.runtime_path, self.backend = model_path, runtime, backend
+        self.arquitetura = arquitetura_de(self.model) if backend == 'pytorch' else arquitetura_do_arquivo(model_path)
         self.device = device
         self.half = bool(is_cuda(device) and backend != 'tensorrt')
         names = self.model.names
@@ -118,8 +201,9 @@ class EpiDetector:
         return out
 
     def detect(self, img, imgsz=640, conf=0.35, augment=False):
+        # o RT-DETR nao tem aumento no teste (TTA); o iou e ignorado por ele, que ja sai sem NMS
         r = self.model.predict(img, imgsz=imgsz, conf=conf, iou=0.5, device=self.device, verbose=False,
-                               augment=augment, **precision_kwargs(self.half))[0]
+                               augment=augment and self.arquitetura != 'detr', **precision_kwargs(self.half))[0]
         return self._convert(r)
 
     def detect_crops(self, img, boxes, imgsz=640, conf=0.3, margin=0.15, min_px=24):
