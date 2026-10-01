@@ -109,6 +109,10 @@ const HUB_PADRAO = 'https://backend-hub-vigilanciaepi.onrender.com';
 // entao ela nao depende so do config.js estar presente
 const HUB_URL = limpaUrl(window.BACKEND_HUB_URL || HUB_PADRAO);
 const NODE_ALVO = params.get('node') || '';
+// Link novo: ?conta=<id da conta>. A API do site lista os servidores ligados
+// daquela conta; o token cam_ vale em todos eles (a malha copia os links).
+const CONTA_ALVO = params.get('conta') || '';
+const API_SITE = limpaUrl(window.ARGOS_API_URL || 'https://argosepi.vercel.app/api');
 let BASE = limpaUrl(params.get('backend') || window.BACKEND_URL || '');
 let BASE_RESOLVIDO = Boolean(BASE);
 
@@ -156,10 +160,22 @@ async function _candidatosDoHub(){
   } catch { return []; }
 }
 
+async function _candidatosDaConta(){
+  if (!CONTA_ALVO) return [];
+  try {
+    const r = await fetch(API_SITE + '/enderecos/' + encodeURIComponent(CONTA_ALVO), { cache: 'no-store' });
+    if (!r.ok) return [];
+    const d = await r.json().catch(() => ({}));
+    return (Array.isArray(d.servidores) ? d.servidores : [])
+      .sort((a, b) => (b.availability || 0) - (a.availability || 0))
+      .map((s) => limpaUrl(s.url)).filter(Boolean);
+  } catch { return []; }
+}
+
 async function resolverBackend(tok){
   if (BASE_RESOLVIDO) return BASE;
   if (await _mesmaOrigemEhBackend()) { BASE = ''; BASE_RESOLVIDO = true; return BASE; }
-  const candidatos = await _candidatosDoHub();
+  const candidatos = [...new Set([...(await _candidatosDaConta()), ...(await _candidatosDoHub())])];
   for (const url of candidatos) {
     if (!tok || await _tokenServe(url, tok)) { BASE = url; BASE_RESOLVIDO = true; return BASE; }
   }
@@ -219,7 +235,8 @@ formToken.addEventListener('submit', (e) => {
   localStorage.setItem('cam_token', token);
   modal.close();
   btnStart.hidden = false;
-  history.replaceState({}, '', '?token=' + encodeURIComponent(token) + (NODE_ALVO ? '&node=' + encodeURIComponent(NODE_ALVO) : ''));
+  history.replaceState({}, '', '?token=' + encodeURIComponent(token) + (NODE_ALVO ? '&node=' + encodeURIComponent(NODE_ALVO) : '')
+    + (CONTA_ALVO ? '&conta=' + encodeURIComponent(CONTA_ALVO) : ''));
   loadConfig();
 });
 // sem codigo, a janela de acesso nao pode ser fechada no Esc

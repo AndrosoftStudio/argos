@@ -12,7 +12,7 @@ os.makedirs(os.path.join(BASE, "dados", "users"), exist_ok=True)
 os.makedirs(os.path.join(BASE, "models"), exist_ok=True)
 
 from backend.app import (app, _start_cf, get_local_ip, start_hub_registration,
-                         start_auditoria_manutencao, iniciar_banco)
+                         start_auditoria_manutencao, iniciar_banco, start_conta_e_malha, PORTA)
 import backend.app as AM
 import torch
 
@@ -44,7 +44,8 @@ if __name__ == "__main__":
             print("  AVISO GPU nao detectada - usando CPU")
 
     AM.local_ip = os.environ.get("ARGOS_LOCAL_IP", "").strip() or get_local_ip()
-    print(f"  URL local  : http://{AM.local_ip}:8088")
+    print(f"  URL local  : http://{AM.local_ip}:{PORTA}")
+    print(f"  Vinculo    : http://localhost:{PORTA}/parear (abre sozinho na primeira vez)")
     print("  CORS       : " + ", ".join(sorted(AM.CORS_ORIGINS)))
     print(f"  Dados      : {os.path.join(BASE, 'dados', 'users')}")
     print(f"  Modelos    : {os.path.join(BASE, 'models')}")
@@ -53,8 +54,13 @@ if __name__ == "__main__":
     print("  Iniciando Cloudflare Tunnel...")
     print("=" * 58)
 
-    threading.Thread(target=_start_cf, args=(8088,), daemon=True).start()
+    threading.Thread(target=_start_cf, args=(PORTA,), daemon=True).start()
     iniciar_banco()
     start_hub_registration()
     start_auditoria_manutencao()
-    app.run(host="0.0.0.0", port=8088, threaded=True, debug=False)
+    # No Docker nao ha navegador: o instalar_docker.bat abre a pagina de vinculo.
+    # Pelo iniciar.bat / iniciar.sh o proprio servidor abre o navegador.
+    abrir = (not os.path.exists("/.dockerenv")
+             and os.environ.get("ARGOS_ABRIR_NAVEGADOR", "1").strip().lower() not in ("0", "false", "nao", "no"))
+    start_conta_e_malha(abrir_navegador=abrir)
+    app.run(host="0.0.0.0", port=PORTA, threaded=True, debug=False)

@@ -55,7 +55,7 @@ if ! command -v cloudflared >/dev/null 2>&1 && [[ ! -x ./cloudflared && ! -f ./c
   say ""
 fi
 
-say "[INFO] Banco: ${DATABASE_URL:-postgresql://argos:argos@localhost:5432/argosepi (padrao)}"
+say "[INFO] Banco: ${DATABASE_URL:-postgresql://argos:argos@127.0.0.1:5432/argosepi (padrao)}"
 say "       Sem PostgreSQL, ligue so o banco do Docker: docker compose up -d db"
 say ""
 

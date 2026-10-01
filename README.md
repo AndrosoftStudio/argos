@@ -88,6 +88,11 @@ imagem num notebook sem GPU, contra 0,07 s do `argos_epi_v1`.
 Há dois jeitos de ligar o backend. Nos dois, o painel fica em `http://localhost:8088`.
 Passo a passo, pasta `models` e instruções para IA em [`COMO_INSTALAR.md`](COMO_INSTALAR.md).
 
+**Na primeira vez, o servidor pede para ser vinculado a uma conta:** o navegador abre
+`http://localhost:8088/parear`, que leva ao site com um código. A pessoa entra na conta
+(senha ou Google), confere o código e clica em **Vincular**. No Docker quem abre o
+navegador é o `instalar_docker.bat`; no `iniciar.bat`/`iniciar.sh`, o próprio servidor.
+
 | | Com Docker | Sem Docker (Windows) |
 |---|---|---|
 | Quando usar | PC próprio, servidor | PC sem Docker ou sem administrador (ex.: laboratório da escola) |
@@ -130,9 +135,35 @@ pesos `.pt` e evidências.
 
 `frontend/` também é publicado como site estático em
 [argosepi.vercel.app](https://argosepi.vercel.app), pelo repositório
-[argosepi-frontend](https://github.com/AndrosoftStudio/argosepi-frontend). O site
-encontra o backend pelo hub, porque o túnel Cloudflare sorteia um endereço novo a
-cada reinício.
+[argosepi-frontend](https://github.com/AndrosoftStudio/argosepi-frontend). Junto vai a
+API de contas (`frontend/api/argos.js`, uma função da Vercel): todas as rotas `/api/...`
+chegam nela pelo `vercel.json`.
+
+### Contas, servidores e malha
+
+- **Contas** ficam no Supabase (`supabase/esquema.sql`, rodado uma vez no SQL Editor).
+  Só a API da Vercel fala com ele, usando a secret key; o navegador nunca vê a tabela.
+  Entra-se com CPF/e-mail e senha ou com o Google (Firebase). Quem entra pelo Google
+  completa o cadastro (CPF, telefone, setor) depois, em **Ajustes → Minha conta**.
+- **Tokens**: a API assina o login com uma chave Ed25519. Os servidores conferem a
+  assinatura com a chave pública (embutida em `backend/conta.py`), sem ir à internet a
+  cada pedido. Um servidor só atende a conta a que foi vinculado.
+- **Vínculo do servidor**: na primeira vez o servidor pede um código à API, abre a
+  página `/parear` (só funciona na própria máquina, nunca pelo túnel) e espera a pessoa
+  aprovar no site. A credencial do servidor fica no banco local (tabela `servidor_local`).
+  Desvincular em **Servidores** faz ele pedir um vínculo novo.
+- **Página Servidores**: lista os servidores da conta (online, GPU/CPU, carga, câmeras,
+  malha), renomeia e desvincula. O painel escolhe sozinho o servidor mais livre que
+  responde; câmeras novas vão para o servidor mais livre.
+- **Malha** (`backend/malha.py`): servidores da mesma conta copiam entre si EPIs, equipe
+  (com os rostos), áreas e desenhos, links de celular e o histórico de faltas, com as
+  fotos. A cada 20 s cada um pergunta aos outros o que mudou; vale a mudança mais nova.
+  Modelos `.pt` e câmeras ligadas ficam em cada máquina.
+- **Variáveis da Vercel** (Settings → Environment Variables): `SUPABASE_URL`,
+  `SUPABASE_SECRET_KEY` e `ARGOS_CHAVE_PRIVADA`. Nenhuma delas vai para o GitHub nem
+  para os servidores. Depois de mudar, faça um Redeploy.
+- **Contas antigas** (do banco local): `scripts/migrar_contas_supabase.py` copia para o
+  Supabase mantendo o mesmo id e a mesma senha.
 
 > **Ordem ao mexer nos dois lados:** reconstruir o Docker primeiro, conferir que
 > as rotas novas respondem **401 em vez de 404**, e só então publicar o frontend.
@@ -144,20 +175,27 @@ cada reinício.
 Cada câmera pertence a uma conta: o painel só vê, altera ou remove as câmeras
 que criou e as dos celulares com link da própria conta; o celular só fala com
 o próprio stream. As senhas são guardadas com PBKDF2 e sal (contas antigas são
-convertidas no primeiro login), e a sessão expira após dias sem uso.
+convertidas no primeiro login), e o login do painel vale 7 dias (o site renova sozinho).
 
 Ajustes no `.env` (todos têm padrão; veja `.env.example`):
 
 | Variável | Padrão | Para quê |
 |---|---|---|
-| `ARGOS_CADASTRO_ABERTO` | `1` | `0` fecha a tela "Criar conta" (use numa empresa, depois de criar as contas) |
+| `ARGOS_API_URL` | `https://argosepi.vercel.app/api` | API de contas (vínculo do servidor e lista dos pares da malha) |
+| `ARGOS_SERVIDOR_NOME` | nome do PC | como o servidor aparece em **Servidores** |
+| `ARGOS_PORTA` | `8088` | porta do painel (para ligar dois servidores no mesmo PC) |
+| `ARGOS_ABRIR_NAVEGADOR` | `1` | `0` não abre o navegador para o vínculo (fora do Docker) |
+| `ARGOS_TUNEL` | `1` | `0` não abre o túnel do Cloudflare (só rede local) |
+| `ARGOS_FUSO` | `America/Bahia` | fuso dos gráficos de desempenho (dias) |
+| `ARGOS_LOGIN_LOCAL` | `0` | `1` volta a aceitar o login antigo, guardado no servidor (teste sem internet) |
+| `ARGOS_CADASTRO_ABERTO` | `1` | com `ARGOS_LOGIN_LOCAL=1`: `0` fecha o cadastro local |
 | `ARGOS_UPLOAD_MODELOS` | `todos` | `admin` ou `desligado`: o `.pt` enviado executa código ao ser carregado |
 | `ARGOS_SESSAO_DIAS` | `30` | dias sem uso até pedir login de novo |
 | `ARGOS_MAX_UPLOAD_MB` | `2048` | tamanho máximo de vídeo, modelo ou zip enviado |
 
-No Render, defina `HUB_API_KEY` no hub **e** no `.env` dos backends: sem ela,
-qualquer pessoa registra um “backend” no hub e o site passa a enviar para ele
-o login de quem entra.
+O hub do Render continua só para os links antigos de celular (`?node=`). Se usar,
+defina `HUB_API_KEY` no hub **e** no `.env` dos backends. O painel não depende mais
+dele: acha os servidores pela conta.
 
 Testes das regras de segurança (não precisam de GPU nem de banco):
 

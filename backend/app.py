@@ -44,6 +44,8 @@ import seguranca
 import users as user_mgr
 import areas as areas_mod
 import auditoria
+import conta
+import malha
 from camera_discovery import discover_cameras, list_local_webcams
 from analysis_jobs import MODES as ANALYSIS_MODES, JobManager, valid_job_id
 import ppe_taxonomy as tax
@@ -72,6 +74,9 @@ def _ligado(nome, padrao='1'):
 # Cadastro aberto: qualquer pessoa que chegue ao endereco do servidor cria conta.
 # Bom para demonstracao; numa empresa, desligue (ARGOS_CADASTRO_ABERTO=0).
 CADASTRO_ABERTO = _ligado('ARGOS_CADASTRO_ABERTO')
+# As contas agora ficam no site (Supabase). O login com senha guardada neste
+# servidor so continua para quem ligar ARGOS_LOGIN_LOCAL=1 (teste sem internet).
+LOGIN_LOCAL = _ligado('ARGOS_LOGIN_LOCAL', '0')
 # Envio de modelo .pt: o arquivo e carregado pelo PyTorch, que executa codigo
 # embutido nele. 'todos' (padrao), 'admin' (so administradores) ou 'desligado'.
 UPLOAD_MODELOS = os.environ.get('ARGOS_UPLOAD_MODELOS', 'todos').strip().lower()
@@ -101,7 +106,11 @@ def _erro_interno(e):
     print(f'[erro] {request.method} {request.path}: {e}')
     return jsonify({'error': 'Algo deu errado no servidor. Tente de novo em instantes.'}), 500
 
-DEFAULT_CORS_ORIGINS = 'https://argosepi.vercel.app,http://localhost:8088,http://127.0.0.1:8088'
+# Porta do servidor: 8088 por padrao. Para ligar dois servidores no mesmo computador
+# (teste da malha), o segundo usa ARGOS_PORTA=8089.
+PORTA = int(os.environ.get('ARGOS_PORTA', '8088') or '8088')
+DEFAULT_CORS_ORIGINS = (f'https://argosepi.vercel.app,http://localhost:{PORTA},http://127.0.0.1:{PORTA},'
+                        'http://localhost:8088,http://127.0.0.1:8088')
 CORS_ORIGINS = {o.strip().rstrip('/') for o in os.environ.get('CORS_ORIGINS', DEFAULT_CORS_ORIGINS).split(',') if o.strip()}
 # Previews da Vercel: argosepi-<hash>-<equipe>.vercel.app
 VERCEL_PREVIEW_ORIGIN = re.compile(r'^https://argosepi(-[a-z0-9-]+)?\.vercel\.app$')
@@ -207,9 +216,29 @@ def _token():
     if auth.startswith('Bearer '): return auth[7:]
     return request.args.get('token') or (request.get_json(silent=True) or {}).get('token')
 
+def _auth_conta_do_site(t):
+    """Token da conta, assinado pela API do site. Este servidor so atende a conta
+    a que foi vinculado."""
+    d = conta.ler_token(t)
+    if not d or d.get('tipo') != 'conta':
+        return None, (jsonify({'error':'Sua sessão expirou. Entre de novo.'}), 401)
+    if not conta.vinculado():
+        return None, (jsonify({'error':'Este servidor ainda não foi vinculado a uma conta.',
+                               'codigo':'nao_vinculado'}), 503)
+    if d.get('sub') != conta.conta_id():
+        return None, (jsonify({'error':'Este servidor pertence a outra conta.', 'codigo':'outra_conta'}), 403)
+    u = user_mgr.espelhar_conta(d['sub'], d.get('nome') or '', d.get('email') or '', d.get('doc') or '',
+                                d.get('role') or 'user')
+    if not u:
+        return None, (jsonify({'error':'Não foi possível abrir a sua conta neste servidor.'}), 500)
+    return u, None
+
+
 def _auth():
     t = _token()
     if not t: return None, (jsonify({'error':'Faça login para continuar.'}), 401)
+    if conta.parece_token_do_site(t):
+        return _auth_conta_do_site(t)
     if t.startswith('cam_'):
         cam_info = user_mgr.validate_cam_token(t)
         if not cam_info: return None, (jsonify({'error':'Este link de celular foi removido. Peça um link novo no painel.'}), 401)
@@ -819,6 +848,9 @@ def get_local_ip():
 
 def _start_cf(port=8088):
     global cloudflare_url
+    if not _ligado('ARGOS_TUNEL'):   # ARGOS_TUNEL=0: so rede local (testes, rede sem internet)
+        print("[CF] Tunel desligado (ARGOS_TUNEL=0)")
+        return
     cmds = ["cloudflared",
             os.path.join(BASE_DIR,"cloudflared.exe"),
             os.path.join(BASE_DIR,"cloudflared")]
@@ -844,6 +876,7 @@ def _start_cf(port=8088):
                 cloudflare_url = m.group(0)
                 print(f"[CF] ✓ {cloudflare_url}")
                 hub_event.set()
+                conta.sinal_agora()   # o site guarda o endereco novo deste servidor
                 threading.Thread(target=lambda: [_ for _ in iter(proc.stdout.readline,'')], daemon=True).start()
                 return
         # cloudflared encerrou sem tunel (sem internet, por exemplo): tenta de novo
@@ -911,7 +944,7 @@ def _hub_payload():
             'tensorrt_error': _tensorrt_dependency_error(),
         },
         'metrics': metrics,
-        'version': 'v17',
+        'version': 'v20',
         'ts': time.time(),
     }
 
@@ -975,6 +1008,7 @@ def iniciar_banco():
     ficar pronto depois do backend, entao esperamos ele responder."""
     db.esperar_banco()
     db.criar_esquema()
+    malha.criar_esquema()
 
 
 def start_auditoria_manutencao():
@@ -999,8 +1033,15 @@ def start_hub_registration():
 CAMPOS_CADASTRO = {'nome': 'o nome completo', 'doc': 'o CPF ou CNPJ', 'email': 'o e-mail', 'senha': 'a senha'}
 
 
+def _login_so_no_site():
+    return jsonify({'error':'As contas agora ficam no site do Argos EPI. Entre por https://argosepi.vercel.app.',
+                    'codigo':'entre_pelo_site'}), 410
+
+
 @app.route('/auth/register', methods=['POST'])
 def register():
+    if not LOGIN_LOCAL:
+        return _login_so_no_site()
     if not CADASTRO_ABERTO:
         return jsonify({'error':'O cadastro está fechado neste servidor. Peça uma conta ao administrador.'}), 403
     d = request.get_json(force=True, silent=True) or {}
@@ -1016,6 +1057,8 @@ def register():
 
 @app.route('/auth/login', methods=['POST'])
 def do_login():
+    if not LOGIN_LOCAL:
+        return _login_so_no_site()
     d = request.get_json(force=True, silent=True) or {}
     cred = str(d.get('credencial') or d.get('email') or d.get('doc') or '').strip()
     if not cred or not d.get('senha'):
@@ -1044,6 +1087,143 @@ def me():
     u, err = _auth()
     if err: return err
     return jsonify({'user':u})
+
+# ═══════════════════════════════════════════════════════════════
+# VINCULO DO SERVIDOR A CONTA (so da propria maquina) e MALHA
+# ═══════════════════════════════════════════════════════════════
+_REDES_PRIVADAS = ('10.', '192.168.', '172.', 'fd', 'fe80:')
+EM_DOCKER = os.path.exists('/.dockerenv')
+
+
+def _pedido_local() -> bool:
+    """A pagina de vinculo so abre na propria maquina. Quem chega pelo tunel do
+    Cloudflare tambem aparece como 127.0.0.1 (o cloudflared roda aqui dentro),
+    por isso os cabecalhos Cf-* barram. No Docker o navegador do computador chega
+    pela rede interna do Docker, entao ali vale endereco de rede privada."""
+    if request.headers.get('Cf-Ray') or request.headers.get('Cf-Connecting-Ip'):
+        return False
+    ip = (request.remote_addr or '').lower()
+    if ip in ('127.0.0.1', '::1', '::ffff:127.0.0.1'):
+        return True
+    return EM_DOCKER and ip.startswith(_REDES_PRIVADAS)
+
+
+def _pagina_vinculo(titulo, texto, recarregar=False, link='', status=200):
+    import html as _html
+    botao = f'<p><a class="b" href="{_html.escape(link)}">Abrir o site do Argos EPI</a></p>' if link else ''
+    meta = '<meta http-equiv="refresh" content="2">' if recarregar else ''
+    corpo = f"""<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">{meta}
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Argos EPI - vincular servidor</title>
+<style>body{{font-family:system-ui,sans-serif;background:#0b0f17;color:#e8ecf3;display:grid;place-items:center;
+min-height:100vh;margin:0}}.c{{max-width:460px;padding:32px;border:1px solid #273043;border-radius:16px;background:#111827;
+text-align:center}}h1{{font-size:20px;color:#f5c542}}p{{color:#aab4c5;line-height:1.5}}
+a.b{{display:inline-block;padding:10px 18px;border-radius:10px;background:#f5c542;color:#111;text-decoration:none;
+font-weight:600}}</style></head><body><div class="c"><img src="/logo.png" alt="" width="72" onerror="this.remove()">
+<h1>{_html.escape(titulo)}</h1><p>{_html.escape(texto)}</p>{botao}</div></body></html>"""
+    return Response(corpo, status=status, mimetype='text/html')
+
+
+@app.route('/parear', methods=['GET'])
+def pagina_parear():
+    if not _pedido_local():
+        return _pagina_vinculo('Abra no próprio servidor', 'O vínculo do servidor com a conta só pode ser '
+                               'feito no computador onde ele está ligado.', status=403)
+    e = conta.estado_publico()
+    if e['vinculado']:
+        c = e.get('conta') or {}
+        return _pagina_vinculo('Servidor já vinculado',
+                               f"Este servidor já está vinculado à conta de {c.get('nome') or c.get('email') or 'você'}. "
+                               'Pode fechar esta página e abrir o painel pelo site.',
+                               link='https://argosepi.vercel.app')
+    if e['link'] and float(e['expira_em'] or 0) > time.time():
+        return Response('', status=302, headers={'Location': e['link']})
+    if e['erro']:
+        return _pagina_vinculo('Aguardando o site do Argos', e['erro'] + '. Tentando de novo...', recarregar=True)
+    return _pagina_vinculo('Preparando o código de vínculo...', 'Esta página continua sozinha em instantes.',
+                           recarregar=True)
+
+
+@app.route('/pareamento', methods=['GET'])
+def estado_pareamento():
+    if not _pedido_local():
+        return jsonify({'error':'Disponível só no próprio servidor.'}), 403
+    if request.args.get('simples'):   # para o instalar_docker.bat decidir se abre o navegador
+        return Response('vinculado' if conta.vinculado() else 'nao_vinculado', mimetype='text/plain')
+    return jsonify(conta.estado_publico())
+
+
+@app.route('/malha/mudancas', methods=['GET'])
+def malha_mudancas():
+    if not malha.par_autorizado(_token()):
+        return jsonify({'error':'Servidor não autorizado.'}), 401
+    try:
+        desde = int(request.args.get('desde') or 0)
+        limite = int(request.args.get('limite') or malha.LIMITE)
+    except ValueError:
+        return jsonify({'error':'Parâmetros inválidos.'}), 400
+    return jsonify(malha.mudancas(conta.conta_id(), desde, limite))
+
+
+@app.route('/malha/arquivo', methods=['GET'])
+def malha_arquivo():
+    if not malha.par_autorizado(_token()):
+        return jsonify({'error':'Servidor não autorizado.'}), 401
+    caminho = malha.rel_seguro(request.args.get('rel'), conta.conta_id())
+    if not caminho:
+        return jsonify({'error':'Arquivo não encontrado.'}), 404
+    from flask import send_file
+    return send_file(caminho, conditional=True)
+
+
+def _info_servidor():
+    """O que este servidor conta ao site a cada minuto (aparece na pagina Servidores)."""
+    metrics = _sys_metrics()
+    with streams_lock:
+        ativos = len(streams)
+    return {
+        'url': _public_backend_url() or '',
+        'url_local': f'http://{local_ip}:{PORTA}' if local_ip else '',
+        'tipo': _server_kind(),
+        'versao': 'v20',
+        'node_id': BACKEND_NODE_ID,
+        'hardware': {'cpu_count': psutil.cpu_count(logical=True), 'gpu_name': metrics.get('gpu_name'),
+                     'ram_total': metrics.get('ram_total'), 'docker': EM_DOCKER},
+        'estado': {'availability': _availability_score(metrics), 'active_streams': ativos,
+                   'cpu': metrics.get('cpu'), 'ram_pct': metrics.get('ram_pct'),
+                   'malha': malha.estado()},
+    }
+
+
+def _ao_mudar_conta():
+    """A conta do site ganha uma copia na tabela usuarios (as tabelas daqui apontam para ela)."""
+    if not conta.vinculado():
+        return
+    dados = conta.dados_conta()
+    if dados.get('id'):
+        try:
+            user_mgr.espelhar_conta(dados['id'], dados.get('nome') or '', dados.get('email') or '',
+                                    dados.get('doc') or '', dados.get('role') or 'user')
+        except Exception as e:
+            print(f'[conta] nao foi possivel copiar a conta para este banco: {e}')
+
+
+def _ao_aplicar_malha(uid, tabelas):
+    """Chegou mudanca de outro servidor: recarrega o que as cameras ligadas usam."""
+    tabelas = set(tabelas or ())
+    if {'funcionarios', 'func_fotos'} & tabelas:
+        _atualizar_galeria(uid)
+    if {'areas', 'zonas'} & tabelas:
+        _aplicar_zonas_em_streams(uid)
+
+
+def start_conta_e_malha(abrir_navegador=False):
+    """Vinculo com a conta do site (na primeira vez pede login no navegador) e a
+    sincronizacao com os outros servidores da mesma conta."""
+    conta.ao_mudar(_ao_mudar_conta)
+    malha.ao_aplicar(_ao_aplicar_malha)
+    conta.iniciar(_info_servidor, abrir_navegador=abrir_navegador, porta=PORTA)
+    _ao_mudar_conta()
+    malha.iniciar()
 
 # ═══════════════════════════════════════════════════════════════
 # MODELOS disponíveis
@@ -2880,15 +3060,18 @@ def status():
                     "availability":_availability_score(),
                     "node_id":BACKEND_NODE_ID,
                     "public_backend_url":_public_backend_url(),
+                    "vinculado":conta.vinculado(),
+                    "servidor_id":conta.servidor_id() or None,
+                    "versao":"v20",
                     "tensorrt_available":_tensorrt_export_available(),
                     "tensorrt_error":_tensorrt_dependency_error()})
 
 @app.route('/tunnels', methods=['GET'])
 def tunnels():
     return jsonify({
-        "local_ip_url": f"http://{local_ip}:8088" if local_ip else None,
+        "local_ip_url": f"http://{local_ip}:{PORTA}" if local_ip else None,
         "cloudflare_url": cloudflare_url,
-        "frontend_local": f"http://{local_ip}:8088" if local_ip else None,
+        "frontend_local": f"http://{local_ip}:{PORTA}" if local_ip else None,
         "frontend_cloudflare": cloudflare_url
     })
 
@@ -2944,7 +3127,8 @@ if __name__ == '__main__':
         except: _device_global = 'cpu'
     local_ip = get_local_ip()
     iniciar_banco()
-    threading.Thread(target=_start_cf, args=(8088,), daemon=True).start()
+    threading.Thread(target=_start_cf, args=(PORTA,), daemon=True).start()
     start_hub_registration()
     start_auditoria_manutencao()
-    app.run(host='0.0.0.0', port=8088, threaded=True, debug=False)
+    start_conta_e_malha()
+    app.run(host='0.0.0.0', port=PORTA, threaded=True, debug=False)

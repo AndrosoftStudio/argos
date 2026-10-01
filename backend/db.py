@@ -20,7 +20,7 @@ from psycopg_pool import ConnectionPool
 
 # Dentro do compose o endereco vem pronto no ambiente. Fora dele (iniciar.bat)
 # vale o padrao, que aponta para o container do banco publicado em localhost.
-PADRAO = 'postgresql://argos:argos@localhost:5432/argosepi'
+PADRAO = 'postgresql://argos:argos@127.0.0.1:5432/argosepi'
 DATABASE_URL = os.environ.get('DATABASE_URL', '').strip() or PADRAO
 
 _pool = None

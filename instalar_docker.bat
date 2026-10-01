@@ -137,12 +137,23 @@ ping -n 6 127.0.0.1 >nul
 goto :espera_backend
 
 :pronto
+REM Primeira vez: o servidor precisa ser vinculado a uma conta do site.
+REM O container nao tem navegador, entao a pagina de vinculo abre por aqui.
+set "VINCULO="
+for /f "delims=" %%v in ('curl -s "http://localhost:8088/pareamento?simples=1" 2^>nul') do set "VINCULO=%%v"
+if /i "%VINCULO%"=="nao_vinculado" (
+    echo.
+    echo  [*] Abrindo o navegador para vincular este servidor a sua conta...
+    echo      Se nao abrir, acesse: http://localhost:8088/parear
+    start "" "http://localhost:8088/parear"
+)
 echo.
 echo  =====================================================
 echo   TUDO PRONTO! Argos EPI rodando no Docker (modo %PERFIL%)
 echo  =====================================================
 echo.
 echo   Painel local : http://localhost:8088
+echo   Vincular     : http://localhost:8088/parear  (so na primeira vez)
 echo   Status       : http://localhost:8088/status
 echo   Site         : https://argosepi.vercel.app
 echo.

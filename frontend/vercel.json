@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/api/:caminho*", "destination": "/api/argos?caminho=:caminho*" }
+  ]
+}

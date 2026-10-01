@@ -16,7 +16,10 @@ Não ligue os dois ao mesmo tempo, porque os dois usam a porta 8088.
 2. Extraia a pasta do Argos onde quiser (ex.: `C:\ArgosEPI`).
 3. Dê dois cliques em **`instalar_docker.bat`**.
 4. Espere terminar. Na primeira vez demora de 10 a 30 minutos porque baixa o PyTorch.
-5. Abra **http://localhost:8088** no navegador.
+5. Na primeira vez abre sozinha a página **Vincular servidor**: entre na sua conta do
+   Argos (senha ou Google), confira o código e clique em **Vincular**. Se não abrir,
+   acesse **http://localhost:8088/parear**.
+6. Use o painel em **https://argosepi.vercel.app** (ou **http://localhost:8088**).
 
 O `.bat` faz tudo sozinho:
 
@@ -38,8 +41,13 @@ Serve para o PC do laboratório, onde não dá para instalar o Docker nem o Pyth
 1. Extraia a pasta do Argos onde tiver permissão de escrita (ex.: `Documentos` ou um
    pendrive). Evite pastas do OneDrive: o banco não gosta de ser sincronizado.
 2. Dê dois cliques em **`configurar.bat`** e espere. Ele baixa cerca de 1,5 GB.
-3. Dê dois cliques em **`iniciar.bat`** e abra **http://localhost:8088**.
-4. Para desligar, Ctrl+C ou feche a janela.
+3. Dê dois cliques em **`iniciar.bat`**. Na primeira vez o navegador abre a página
+   **Vincular servidor**: entre na sua conta e clique em **Vincular**.
+4. Use o painel em **https://argosepi.vercel.app** (ou **http://localhost:8088**).
+5. Para desligar, Ctrl+C ou feche a janela.
+
+O banco portátil e o do Docker são servidores diferentes: cada um é vinculado uma vez.
+Vinculados à mesma conta, eles se sincronizam sozinhos (veja "Vários servidores").
 
 O `configurar.bat` não instala nada no Windows. Tudo fica dentro da pasta:
 
@@ -74,11 +82,27 @@ de novo é seguro: ele aproveita o que já foi baixado e não apaga o banco.
 A pasta `models` não fica no GitHub porque é pesada. Ela vai no pacote `.zip` enviado pelo
 André. Quem clonar o repositório precisa copiar essa pasta para dentro do projeto.
 
-## Site argosepi.vercel.app
+## Site argosepi.vercel.app e contas
 
-O backend local funciona sem nada além disso. Para o **site** encontrar o seu backend,
-preencha `HUB_API_KEY` no `.env` com a chave do hub (peça ao André; ela não vai no
-pacote nem no GitHub) e rode o `instalar_docker.bat` de novo.
+As contas ficam no site. Cada servidor (Docker, `iniciar.bat` ou `iniciar.sh`) é vinculado
+a **uma** conta e só processa para ela. Depois do vínculo, ele aparece no site em
+**Servidores** e o painel o encontra sozinho, sem `HUB_API_KEY` e sem configurar nada.
+
+- Trocar a conta do servidor: no site, **Servidores → Desvincular**. Em até 1 minuto
+  ele volta a pedir vínculo (abra **http://localhost:8088/parear**).
+- O vínculo só pode ser feito no próprio computador do servidor (a página `/parear`
+  recusa quem chega pelo link público).
+
+## Vários servidores (malha)
+
+Vincule mais de um servidor à mesma conta (outro PC, o Docker e o `iniciar.bat`, etc.).
+Eles formam uma malha: EPIs, equipe com os rostos, áreas e desenhos, links de celular e o
+histórico de faltas são copiados entre eles a cada 20 segundos, com as fotos. O painel
+mostra as câmeras de todos e põe as câmeras novas no servidor mais livre. Modelos `.pt`
+ficam em cada máquina.
+
+Para os servidores se acharem, eles precisam estar na mesma rede ou ter o link do
+Cloudflare ligado (padrão).
 
 ## Problemas comuns
 
@@ -93,6 +117,11 @@ pacote nem no GitHub) e rode o `instalar_docker.bat` de novo.
   (https://aka.ms/vs/17/release/vc_redist.x64.exe). Quase todo PC já tem.
 - **Erro de GPU**: atualize o driver da NVIDIA ou use `instalar_docker.bat cpu`.
 - **Ver o que está acontecendo**: `docker logs -f argosepi-backend` (ou `argosepi-backend-cpu`).
+- **A página de vínculo não abriu**: acesse **http://localhost:8088/parear** no próprio PC.
+  O código também aparece na janela do servidor (ou em `docker logs argosepi-backend`).
+- **"Este servidor pertence a outra conta"**: ele foi vinculado a outra pessoa. Quem é
+  dono desvincula em **Servidores**, ou entre com a conta certa.
+- **"Nenhum servidor ligado"** no site: o servidor está desligado ou ainda não foi vinculado.
 
 ---
 
@@ -121,5 +150,11 @@ Se você é uma IA ajudando a instalar o Argos EPI v20 nesta máquina Windows, s
    guarda o banco: **nunca** rode `docker volume rm argosepi-pgdata` nem `down -v`.
 5. **Conferir**: `curl http://localhost:8088/status` deve responder 200 e o container
    ficar `healthy` (`docker ps`). O campo do túnel Cloudflare pode levar alguns segundos.
+6. **Vínculo com a conta**: `curl "http://localhost:8088/pareamento?simples=1"` responde
+   `nao_vinculado` na primeira vez. Abra (ou peça ao usuário para abrir)
+   `http://localhost:8088/parear` **nesta máquina**: o **usuário** entra na conta dele e
+   clica em Vincular. Você não aprova o vínculo nem pede a senha dele. Depois disso a
+   resposta vira `vinculado`. Não apague a tabela `servidor_local` do banco (é a
+   credencial do servidor).
 6. **Não envie para o git**: `.env`, `dados/`, `models/`, `*.pt`, `cloudflared.exe`, `bin/`, `python/`
    (já estão no `.gitignore`). `dados/` tem fotos e rostos de pessoas reais.

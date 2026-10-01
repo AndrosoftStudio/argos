@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Vincular servidor · Argos EPI</title>
+<meta name="theme-color" content="#3740b4">
+<meta name="robots" content="noindex">
+<link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script src="config.js"></script>
+<script type="module" src="google-login.js"></script>
+<style>
+  :root{--brand:#3740b4;--navy:#05075a;--gold:#fbc343;--gold-ink:#5c3d00;--tx:#14163a;--mt:#5b5f86;--bd:#d9dcef;--dn:#c81e1e;--ok:#15803d;}
+  *{box-sizing:border-box;margin:0;}
+  body{font-family:'Outfit',system-ui,sans-serif;background:radial-gradient(circle at 20% 0%,#3740b4,#05075a 70%);color:var(--tx);
+       min-height:100vh;display:grid;place-items:center;padding:24px;}
+  main{width:100%;max-width:460px;background:#fff;border-radius:20px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.35);}
+  .marca{display:flex;align-items:center;gap:12px;margin-bottom:18px;}
+  .marca img{width:48px;height:48px;}
+  .marca strong{font-size:1.3rem;letter-spacing:.04em;color:var(--navy);}
+  .marca span{display:block;font-size:.82rem;color:var(--mt);font-weight:600;}
+  h1{font-size:1.25rem;margin-bottom:6px;color:var(--navy);}
+  p{line-height:1.5;color:var(--mt);margin:6px 0;}
+  .codigo{font:800 1.9rem/1 'Outfit',monospace;letter-spacing:.12em;text-align:center;background:#f3f4fb;border:2px dashed var(--bd);
+          border-radius:14px;padding:14px;margin:14px 0;color:var(--navy);}
+  .info{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:.88rem;margin:10px 0 14px;}
+  .info dt{color:var(--mt);font-weight:600;} .info dd{margin:0;font-weight:700;}
+  label{display:block;font-size:.84rem;font-weight:700;margin:12px 0 4px;}
+  input{width:100%;padding:11px 12px;border:1px solid var(--bd);border-radius:10px;font:inherit;font-size:.95rem;}
+  input:focus{outline:3px solid rgba(55,64,180,.25);border-color:var(--brand);}
+  button{width:100%;padding:12px 16px;border-radius:12px;border:1px solid transparent;font:700 1rem 'Outfit',sans-serif;cursor:pointer;
+         display:flex;align-items:center;justify-content:center;gap:8px;margin-top:14px;}
+  button:disabled{opacity:.6;cursor:default;}
+  .prim{background:var(--brand);color:#fff;}
+  .ouro{background:var(--gold);color:var(--gold-ink);}
+  .google{background:#fff;border-color:#dadce0;color:#1f1f1f;}
+  .ou{display:flex;align-items:center;gap:10px;margin:14px 0 2px;font-size:.8rem;font-weight:700;color:var(--mt);}
+  .ou::before,.ou::after{content:"";flex:1;height:1px;background:var(--bd);}
+  .erro{color:var(--dn);font-weight:700;background:#fdecec;border-radius:10px;padding:9px 12px;margin-top:12px;}
+  .ok{color:var(--ok);font-weight:700;}
+  .conta{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:.85rem;background:#f3f4fb;border-radius:10px;padding:8px 12px;margin-top:8px;}
+  .conta a{color:var(--brand);font-weight:700;cursor:pointer;}
+  .grande{font-size:3rem;text-align:center;margin:6px 0;}
+  [hidden]{display:none !important;}
+</style>
+</head>
+<body>
+<main>
+  <div class="marca"><img src="logo.png" alt=""><div><strong>ARGOS EPI</strong><span>Vincular servidor à sua conta</span></div></div>
+
+  <section id="passo-codigo" hidden>
+    <h1>Qual é o código?</h1>
+    <p>O código aparece na janela do servidor (Docker, iniciar.bat ou iniciar.sh).</p>
+    <form id="form-codigo"><label for="codigo">Código</label><input id="codigo" placeholder="ABCD-2345" maxlength="9" autocomplete="off"><button class="prim" type="submit">Continuar</button></form>
+  </section>
+
+  <section id="passo-login" hidden>
+    <h1>Entre na sua conta</h1>
+    <p>O servidor vai processar e guardar os dados só para a conta que você entrar agora.</p>
+    <button class="google" type="button" id="btn-google">
+      <svg viewBox="0 0 48 48" width="20" height="20" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
+      Entrar com Google</button>
+    <p class="ou">ou</p>
+    <form id="form-login">
+      <label for="cred">CPF, CNPJ ou e-mail</label><input id="cred" autocomplete="username">
+      <label for="senha">Senha</label><input id="senha" type="password" autocomplete="current-password">
+      <button class="prim" type="submit">Entrar</button>
+    </form>
+    <p style="margin-top:12px;font-size:.85rem">Ainda não tem conta? <a href="/" target="_blank" rel="noopener">Crie no site do Argos EPI</a> e volte aqui.</p>
+  </section>
+
+  <section id="passo-confirmar" hidden>
+    <h1>Vincular este servidor?</h1>
+    <p>Confira se o código abaixo é o mesmo que aparece na janela do servidor.</p>
+    <div class="codigo" id="codigo-ver"></div>
+    <dl class="info" id="info"></dl>
+    <form id="form-vincular">
+      <label for="nome">Nome do servidor</label><input id="nome" maxlength="60" placeholder="Ex.: PC da portaria">
+      <button class="ouro" type="submit" id="btn-vincular">Vincular à minha conta</button>
+    </form>
+    <div class="conta"><span id="conta-txt"></span><a id="trocar">Trocar de conta</a></div>
+  </section>
+
+  <section id="passo-pronto" hidden>
+    <p class="grande">✅</p>
+    <h1>Servidor vinculado!</h1>
+    <p id="pronto-txt"></p>
+    <p>Em alguns segundos ele aparece em <b>Servidores</b> no painel. Pode fechar esta página.</p>
+    <button class="prim" type="button" onclick="location.href='/#servidores'">Abrir o painel</button>
+  </section>
+
+  <p class="erro" id="erro" hidden></p>
+</main>
+<script>
+const API = String(window.ARGOS_API_URL || '/api').replace(/\/+$/, '');
+const $ = (id) => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+let codigo = (params.get('codigo') || '').toUpperCase();
+let token = localStorage.getItem('epi_token') || '';
+let usuario = null;
+
+function mostrar(passo){
+  for (const p of ['passo-codigo','passo-login','passo-confirmar','passo-pronto']) $(p).hidden = p !== passo;
+}
+function erro(msg){ $('erro').textContent = msg || ''; $('erro').hidden = !msg; }
+
+async function api(caminho, { method = 'GET', body } = {}){
+  const headers = {};
+  if (token) headers.Authorization = 'Bearer ' + token;
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  let r;
+  try { r = await fetch(API + caminho, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), cache: 'no-store' }); }
+  catch { throw new Error('Sem conexão com o site do Argos. Verifique a internet.'); }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(d.error || ('Erro ' + r.status)); e.status = r.status; throw e; }
+  return d;
+}
+
+function entrou(d){
+  token = d.token; usuario = d.user;
+  localStorage.setItem('epi_token', token);
+  carregarPedido();
+}
+
+const GB = (b) => b ? (b / 1073741824).toFixed(0) + ' GB' : '';
+async function carregarPedido(){
+  erro('');
+  if (!codigo) { mostrar('passo-codigo'); return; }
+  if (!token) { mostrar('passo-login'); return; }
+  try {
+    if (!usuario) usuario = (await api('/auth/eu')).user;
+    const p = await api('/parear/' + encodeURIComponent(codigo));
+    $('codigo-ver').textContent = p.codigo;
+    $('nome').value = p.nome || '';
+    const hw = p.hardware || {};
+    const linhas = [['Computador', p.nome], ['Placa de vídeo', hw.gpu_name || 'sem GPU (usa o processador)'],
+                    ['Processador', hw.cpu_count ? hw.cpu_count + ' núcleos' : ''], ['Memória', GB(hw.ram_total)],
+                    ['Modo', hw.docker === undefined ? '' : (hw.docker ? 'Docker' : 'Sem Docker (.bat / .sh)')],
+                    ['Vale até', new Date(p.expira_em * 1000).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })]];
+    $('info').innerHTML = '';
+    for (const [k, v] of linhas) {
+      if (!v) continue;
+      const dt = document.createElement('dt'); dt.textContent = k;
+      const dd = document.createElement('dd'); dd.textContent = v;
+      $('info').append(dt, dd);
+    }
+    $('conta-txt').textContent = 'Conta: ' + (usuario.nome || usuario.email);
+    if (p.aprovado && p.da_minha_conta) { pronto(p.nome); return; }
+    mostrar('passo-confirmar');
+  } catch (e) {
+    if (e.status === 401) { token = ''; usuario = null; localStorage.removeItem('epi_token'); mostrar('passo-login'); return; }
+    if (e.status === 404) { mostrar('passo-codigo'); }
+    erro(e.message);
+  }
+}
+
+function pronto(nome){
+  $('pronto-txt').textContent = `"${nome}" agora processa e guarda os dados só para a conta de ${usuario.nome || usuario.email}.`;
+  mostrar('passo-pronto');
+}
+
+$('form-codigo').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const v = $('codigo').value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (v.length !== 8) { erro('O código tem 8 letras/números (ex.: ABCD-2345).'); return; }
+  codigo = v.slice(0, 4) + '-' + v.slice(4);
+  history.replaceState({}, '', '?codigo=' + codigo);
+  carregarPedido();
+});
+
+$('form-login').addEventListener('submit', async (e) => {
+  e.preventDefault(); erro('');
+  const b = e.submitter || e.target.querySelector('button'); b.disabled = true;
+  try { entrou(await api('/auth/entrar', { method: 'POST', body: { credencial: $('cred').value, senha: $('senha').value } })); }
+  catch (er) { erro(er.message); }
+  b.disabled = false;
+});
+
+$('btn-google').addEventListener('click', async () => {
+  erro('');
+  if (typeof window.argosGoogleLogin !== 'function') { erro('O login com o Google ainda está carregando. Tente de novo.'); return; }
+  $('btn-google').disabled = true;
+  try {
+    const idToken = await window.argosGoogleLogin();
+    entrou(await api('/auth/google', { method: 'POST', body: { idToken } }));
+  } catch (er) {
+    const c = String((er && er.code) || '');
+    if (!c.includes('popup-closed') && !c.includes('cancelled-popup')) erro(er.message || 'Não foi possível entrar com o Google.');
+  }
+  $('btn-google').disabled = false;
+});
+
+$('form-vincular').addEventListener('submit', async (e) => {
+  e.preventDefault(); erro('');
+  $('btn-vincular').disabled = true;
+  try {
+    const nome = $('nome').value.trim();
+    await api('/parear/' + encodeURIComponent(codigo) + '/aprovar', { method: 'POST', body: { nome } });
+    pronto(nome || 'O servidor');
+  } catch (er) { erro(er.message); }
+  $('btn-vincular').disabled = false;
+});
+
+$('trocar').addEventListener('click', () => {
+  token = ''; usuario = null; localStorage.removeItem('epi_token');
+  mostrar('passo-login');
+});
+
+carregarPedido();
+</script>
+</body>
+</html>

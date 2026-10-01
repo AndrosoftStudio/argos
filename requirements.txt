@@ -8,6 +8,8 @@ ultralytics>=8.4.0
 lap>=0.5.12
 numpy>=1.24.0,<2.0
 requests>=2.31.0
+# confere a assinatura (Ed25519) dos logins e do vinculo feitos no site
+cryptography>=42
 psutil>=5.9.0
 gevent
 Pillow

@@ -15,6 +15,8 @@ x-backend: &backend
   environment:
     # o backend fala com o container do banco pelo nome do servico
     DATABASE_URL: postgresql://${POSTGRES_USER:-argos}:${POSTGRES_PASSWORD:-argos}@db:5432/${POSTGRES_DB:-argosepi}
+    # nome com que o servidor aparece na pagina Servidores do site
+    ARGOS_SERVIDOR_NOME: ${ARGOS_SERVIDOR_NOME:-${COMPUTERNAME:-Argos} (Docker)}
   ports:
     - "8088:8088"
   volumes:

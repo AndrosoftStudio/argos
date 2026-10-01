@@ -31,6 +31,12 @@ RETENCAO_EVENTOS_DIAS = 365
 MARGEM_RECORTE = 0.12      # folga ao redor da caixa, para pegar o funcionario todo
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Fuso usado para separar os dias nos graficos. Antes era 'localtime', que o
+# PostgreSQL do Docker (imagem alpine) nao reconhece: a consulta dava erro e a
+# pagina de desempenho do funcionario nunca mostrava as faltas registradas.
+FUSO = (os.environ.get('ARGOS_FUSO') or os.environ.get('TZ') or 'America/Bahia').strip()
+if '/' not in FUSO and FUSO.upper() != 'UTC':   # TZ=UTC0 e afins do Linux: usa o padrao
+    FUSO = 'America/Bahia'
 
 _episodios = {}
 _ep_lock = threading.Lock()
@@ -101,7 +107,7 @@ def episodio(dados_dir, uid, *, stream_id, chave_pessoa, tipo, epi=None, epi_lab
             if est is not None:
                 _encerrar(est)
             est = {'uid': uid, 'dados_dir': dados_dir, 'inicio': t, 'visto': t,
-                   'fotos': [], 'ultima_foto': 0.0, 'rowid': None}
+                   'fotos': [], 'ultima_foto': 0.0, 'rowid': None, 'func_id': func_id}
             _episodios[chave] = est
             est['rowid'] = registrar(uid, {
                 'ts': t, 'tipo': tipo, 'func_id': func_id, 'func_nome': func_nome,
@@ -109,9 +115,21 @@ def episodio(dados_dir, uid, *, stream_id, chave_pessoa, tipo, epi=None, epi_lab
                 'stream_id': stream_id, 'area_id': area_id, 'area_nome': area_nome,
                 'epi': epi, 'epi_label': epi_label, 'detalhe': detalhe, 'fotos': []})
         est['visto'] = t
+        # o alerta costuma disparar antes de o rosto ser reconhecido: o episodio
+        # abria sem dono e a falta nunca chegava ao desempenho do funcionario.
+        # Quando a identidade aparece no mesmo episodio, a linha ganha o dono.
+        dar_dono = bool(func_id) and not est.get('func_id') and est.get('rowid')
+        if dar_dono:
+            est['func_id'] = func_id
         pode_fotografar = (img is not None and box is not None
                            and len(est['fotos']) < MAX_FOTOS_EPISODIO
                            and (t - est['ultima_foto']) >= INTERVALO_FOTO_S)
+    if dar_dono:
+        try:
+            db.executar('UPDATE auditoria SET func_id=%s, func_nome=%s WHERE id=%s AND uid=%s AND func_id IS NULL',
+                        (func_id, func_nome, est['rowid'], uid))
+        except Exception:
+            pass
     # o recorte roda fora do lock: e I/O e nao deve travar a thread de analise
     if pode_fotografar:
         rel = salvar_evidencia(dados_dir, uid, img, box)
@@ -206,9 +224,9 @@ def desempenho(uid: str, func_id=None, dias=30) -> dict:
 
     por_dia = [{'dia': str(l['dia']), 'violacoes': int(l['n']), 'segundos': round(float(l['s'] or 0), 1)}
                for l in db.consultar(
-                   "SELECT to_char(to_timestamp(ts) AT TIME ZONE 'localtime', 'YYYY-MM-DD') AS dia,"
+                   "SELECT to_char(to_timestamp(ts) AT TIME ZONE %s, 'YYYY-MM-DD') AS dia,"
                    ' COUNT(*) AS n, SUM(duracao) AS s FROM auditoria' + filtro +
-                   ' GROUP BY dia ORDER BY dia', args)]
+                   ' GROUP BY dia ORDER BY dia', [FUSO] + args)]
     por_epi = [{'epi': l['epi'], 'label': l['epi_label'] or l['epi'], 'violacoes': int(l['n']),
                 'segundos': round(float(l['s'] or 0), 1)}
                for l in db.consultar(

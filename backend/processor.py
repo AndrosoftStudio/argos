@@ -130,7 +130,11 @@ class VideoProcessor:
             if not confirmados and 'Possível queda' not in (p.get('alertas') or []):
                 continue
             func_id, func_nome = self._identificar(p)
-            chave = func_id or f"track:{p.get('track_id')}"
+            # o episodio segue a pessoa rastreada (track), nao o nome: o rosto costuma
+            # ser reconhecido so depois do alerta, e trocar a chave no meio abria
+            # outro episodio e deixava o primeiro sem dono
+            tid = p.get('track_id')
+            chave = f"track:{tid}" if tid is not None else (func_id or 'sem_track')
             # o t do pipeline e relogio de desempenho (perf_counter), nao data: gravado
             # assim, o episodio saia em 1970, a faxina apagava e cada quadro abria outro
             comum = dict(stream_id=self.client_id, chave_pessoa=chave, func_id=func_id,

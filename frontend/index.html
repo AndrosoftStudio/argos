@@ -15,6 +15,7 @@
 <meta property="og:image" content="https://argosepi.vercel.app/og-argos.png">
 <meta name="twitter:card" content="summary_large_image">
 <script src="config.js"></script>
+<script type="module" src="google-login.js"></script>
 <script src="argos-stream.js?v=20260923"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -22,7 +23,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Outfit:wght@300;400;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="painel.css?v=20260922-2">
+<link rel="stylesheet" href="painel.css?v=20261001-contas">
 </head>
 <body><div id="root"></div>
 <script type="text/babel">
@@ -36,9 +37,10 @@ const CAM_SHARE_BASE = cleanUrl(window.CAM_SHARE_BASE || '');
 /* Link do celular-câmera. Sem endereço fixo configurado, cai no túnel (como antes).
    Com endereço fixo, o link é permanente e leva o node para a página achar o
    backend pelo hub, mesmo depois de o túnel trocar de endereço. */
-function buildCamLink(token,{nodeId,fallback}={}){
+function buildCamLink(token,{nodeId,fallback,conta}={}){
   if(!CAM_SHARE_BASE) return `${fallback||''}/cam?token=${encodeURIComponent(token)}&auto=1`;
   const q=new URLSearchParams({token,auto:'1'});
+  if(conta) q.set('conta',conta);
   if(nodeId) q.set('node',nodeId);
   return `${CAM_SHARE_BASE}/cam.html?${q}`;
 }
@@ -68,7 +70,7 @@ const LOGO_URL = String(window.ARGOS_LOGO_URL || '').trim();
 // O id tambem e o endereco (#cameras, #epis...): o "voltar" do navegador funciona.
 const NAV_ITEMS = [
   {id:'cameras',label:'Câmeras',icon:'camera'},
-  {id:'analises',label:'Análises',icon:'film'},
+  {id:'servidores',label:'Servidores',icon:'server'},
   {id:'epis',label:'EPIs',icon:'helmet'},
   {id:'funcionarios',label:'Equipe',icon:'users'},
   {id:'devices',label:'Dispositivos',icon:'phone'},
@@ -434,93 +436,101 @@ const maskCameraUrl=(value)=>{
 // evita o "Enter" recarregar a página: todo <form> daqui é tratado em JS
 const enviar=(fn)=>(e)=>{e.preventDefault();fn();};
 
-async function resolveBackendFromHub({attempts=1,delayMs=1200}={}){
-  if(!CONFIG_HUB_URL) return '';
-  let lastError='Hub sem backend disponivel';
-  for(let i=0;i<attempts;i++){
-    try{
-      const r=await fetch(CONFIG_HUB_URL+'/nodes',{cache:'no-store',headers:{'ngrok-skip-browser-warning':'true'}});
-      const d=await r.json().catch(()=>({}));
-      if(r.ok){
-        const nodes=Array.isArray(d.nodes)?d.nodes:[];
-        const live=(await Promise.all(nodes.map(probeBackendNode))).filter(Boolean);
-        live.sort((a,b)=>
-          (b.availability-a.availability) ||
-          (a.activeStreams-b.activeStreams) ||
-          (a.pingMs-b.pingMs)
-        );
-        if(live[0]) return live[0].url;
-        lastError=nodes.length?'Nenhum backend respondeu ao teste de disponibilidade':'Hub sem backend disponivel';
-      }else{
-        lastError=d.error || lastError;
-      }
-    }catch(e){
-      lastError=e.message || lastError;
-    }
-    if(i<attempts-1) await sleep(delayMs);
-  }
-  throw new Error(lastError);
+/* ═══ CONTA E SERVIDORES ═════════════════════════════════════
+   As contas ficam no site (API da Vercel + Supabase). Cada servidor (Docker,
+   iniciar.bat ou iniciar.sh) é vinculado a uma conta e só processa para ela;
+   o painel pergunta à API quais servidores a conta tem e fala direto com eles. */
+const ARGOS_API = cleanUrl(window.ARGOS_API_URL || 'https://argosepi.vercel.app/api');
+const RENOVAR_MS = 12*3600*1000;
+
+async function apiSite(caminho,{token,method='GET',body}={}){
+  const headers={};
+  if(token) headers.Authorization='Bearer '+token;
+  if(body!==undefined) headers['Content-Type']='application/json';
+  let r;
+  try{
+    r=await fetch(ARGOS_API+caminho,{method,headers,body:body!==undefined?JSON.stringify(body):undefined,cache:'no-store'});
+  }catch{throw new Error('Sem conexão com o site do Argos. Verifique a internet.');}
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){const e=new Error(d.error||('Erro '+r.status));e.status=r.status;e.dados=d;throw e;}
+  return d;
 }
 
-async function probeBackendNode(node){
-  const url=cleanUrl(node&&node.url);
-  if(!url) return null;
-  const started=performance.now();
-  try{
-    const r=await af(url+'/status',{cache:'no-store'});
-    if(!r.ok) return null;
-    const status=await r.json().catch(()=>({}));
-    return {
-      url,
-      node,
-      status,
-      availability:Number(status.availability ?? node.availability ?? 0),
-      activeStreams:Number(status.active_streams ?? node.active_streams ?? 0),
-      pingMs:Math.round(performance.now()-started)
-    };
-  }catch{
-    return null;
+async function entrarComGoogle(){
+  if(typeof window.argosGoogleLogin!=='function') throw new Error('O login com o Google ainda está carregando. Tente de novo em instantes.');
+  let idToken;
+  try{ idToken=await window.argosGoogleLogin(); }
+  catch(e){
+    const c=String((e&&e.code)||'');
+    if(c.includes('popup-closed')||c.includes('cancelled-popup')) return null;
+    if(c.includes('unauthorized-domain')) throw new Error('O login com o Google só funciona pelo site (argosepi.vercel.app) ou por localhost. Use CPF/e-mail e senha aqui.');
+    if(c.includes('popup-blocked')) throw new Error('O navegador bloqueou a janela do Google. Libere pop-ups para este site.');
+    throw new Error('Não foi possível entrar com o Google. Tente de novo.');
   }
+  return apiSite('/auth/google',{method:'POST',body:{idToken}});
 }
+
+const SETORES=['Construção Civil','Mineração','Metalurgia','Química','Elétrica','Logística','Alimentício','Outro'];
+function SetorSelect({valor,onChange}){
+  return(
+    <select className="largo" value={valor||''} onChange={e=>onChange(e.target.value)}>
+      <option value="">Setor (opcional)</option>
+      {SETORES.map(s=><option key={s}>{s}</option>)}
+    </select>
+  );
+}
+
+function BotaoGoogle({onLogin,onErro,rotulo='Entrar com Google'}){
+  const [carregando,setCarregando]=useState(false);
+  const clicar=async()=>{
+    setCarregando(true);onErro&&onErro('');
+    try{
+      const d=await entrarComGoogle();
+      if(d) onLogin(d.token,d.user,{novo:d.novo});
+    }catch(e){onErro&&onErro(mensagemErro(e));}
+    setCarregando(false);
+  };
+  return(
+    <button type="button" className="btn btn-google btn-full" onClick={clicar} disabled={carregando}>
+      <svg viewBox="0 0 48 48" className="ic" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
+      {carregando?'Abrindo o Google...':rotulo}
+    </button>
+  );
+}
+
 /* ═══ AUTH ═══════════════════════════════════════════════════ */
-function AuthScreen({onLogin,backendUrl}){
+function AuthScreen({onLogin}){
   const [tab,setTab]=useState('login');
   const [err,setErr]=useState('');
-  const [ok,setOk]=useState('');
   const [loading,setLoading]=useState(false);
   const [cred,setCred]=useState('');
   const [senha,setSenha]=useState('');
   const [form,setForm]=useState({nome:'',doc:'',telefone:'',email:'',setor:'',senha:'',confirmar_senha:''});
-  const api=backendUrl || INITIAL_API;
 
   const doLogin=async()=>{
-    if(!cred||!senha){setErr('Preencha todos os campos');return;}
+    if(!cred||!senha){setErr('Preencha o CPF (ou e-mail) e a senha.');return;}
     setLoading(true);setErr('');
     try{
-      const r=await af(api+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credencial:cred,senha})});
-      const d=await r.json();
-      if(!r.ok){setErr(d.error||'Erro');setLoading(false);return;}
+      const d=await apiSite('/auth/entrar',{method:'POST',body:{credencial:cred,senha}});
       onLogin(d.token,d.user);
     }catch(e){setErr(mensagemErro(e));}
     setLoading(false);
   };
 
   const doCadastro=async()=>{
-    if(!form.nome||!form.doc||!form.email||!form.senha){setErr('Preencha nome, CPF/CNPJ, e-mail e senha');return;}
-    if(form.senha!==form.confirmar_senha){setErr('Senhas não conferem');return;}
-    if(form.senha.length<6){setErr('Senha deve ter ao menos 6 caracteres');return;}
+    if(!form.nome||!form.doc||!form.email||!form.senha){setErr('Preencha nome, CPF/CNPJ, e-mail e senha.');return;}
+    if(form.senha!==form.confirmar_senha){setErr('As duas senhas não são iguais.');return;}
+    if(form.senha.length<6){setErr('A senha precisa ter pelo menos 6 caracteres.');return;}
     setLoading(true);setErr('');
     try{
-      const r=await af(api+'/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form)});
-      const d=await r.json();
-      if(!r.ok){setErr(d.error||'Erro');setLoading(false);return;}
-      setOk('Conta criada! Agora é só entrar.');setTab('login');
+      const d=await apiSite('/auth/cadastro',{method:'POST',body:form});
+      onLogin(d.token,d.user);
     }catch(e){setErr(mensagemErro(e));}
     setLoading(false);
   };
 
   const sf=(k,v)=>setForm(p=>({...p,[k]:v}));
-  const trocar=(t)=>{setTab(t);setErr('');setOk('');};
+  const trocar=(t)=>{setTab(t);setErr('');};
   return(
     <main className="auth-wrap">
       <header className="auth-hero">
@@ -536,7 +546,8 @@ function AuthScreen({onLogin,backendUrl}){
           <button type="button" role="tab" id="aba-cadastro" aria-controls="painel-cadastro" aria-selected={tab==='cadastro'} className={"auth-tab"+(tab==='cadastro'?' active':'')} onClick={()=>trocar('cadastro')}>Criar conta</button>
         </div>
         {err&&<p className="err-msg" role="alert"><Icon n="alert"/>{err}</p>}
-        {ok&&<p className="ok-msg" role="status"><Icon n="check"/>{ok}</p>}
+        <BotaoGoogle onLogin={onLogin} onErro={setErr} rotulo={tab==='login'?'Entrar com Google':'Criar conta com Google'}/>
+        <p className="auth-ou"><span>ou</span></p>
         {tab==='login'?(
           <form id="painel-login" role="tabpanel" aria-labelledby="aba-login" onSubmit={enviar(doLogin)}>
             <Campo ic="user" rotulo="CPF, CNPJ ou e-mail"><input value={cred} onChange={e=>setCred(e.target.value)} placeholder="CPF, CNPJ ou e-mail" autoComplete="username"/></Campo>
@@ -547,11 +558,11 @@ function AuthScreen({onLogin,backendUrl}){
           <form id="painel-cadastro" role="tabpanel" aria-labelledby="aba-cadastro" onSubmit={enviar(doCadastro)}>
             <Campo ic="user" rotulo="Nome completo"><input value={form.nome} onChange={e=>sf('nome',e.target.value)} placeholder="Nome completo" autoComplete="name" required/></Campo>
             <div className="field-row">
-              <Campo ic="id" rotulo="CPF ou CNPJ"><input value={form.doc} onChange={e=>sf('doc',e.target.value)} placeholder="CPF ou CNPJ" required/></Campo>
+              <Campo ic="id" rotulo="CPF ou CNPJ"><input value={form.doc} onChange={e=>sf('doc',e.target.value)} placeholder="CPF ou CNPJ" inputMode="numeric" required/></Campo>
               <Campo ic="call" rotulo="Telefone (opcional)"><input type="tel" value={form.telefone} onChange={e=>sf('telefone',e.target.value)} placeholder="Telefone (opcional)" autoComplete="tel"/></Campo>
             </div>
             <Campo ic="mail" rotulo="E-mail"><input type="email" value={form.email} onChange={e=>sf('email',e.target.value)} placeholder="E-mail" autoComplete="email" required/></Campo>
-            <Campo ic="factory" rotulo="Setor (opcional)"><select className="largo" value={form.setor} onChange={e=>sf('setor',e.target.value)}><option value="">Setor (opcional)</option><option>Construção Civil</option><option>Mineração</option><option>Metalurgia</option><option>Química</option><option>Elétrica</option><option>Logística</option><option>Alimentício</option><option>Outro</option></select></Campo>
+            <Campo ic="factory" rotulo="Setor (opcional)"><SetorSelect valor={form.setor} onChange={v=>sf('setor',v)}/></Campo>
             <div className="field-row">
               <Campo ic="lock" rotulo="Senha"><input type="password" value={form.senha} onChange={e=>sf('senha',e.target.value)} placeholder="Senha" autoComplete="new-password" required minLength={6}/></Campo>
               <Campo ic="lock" rotulo="Repetir senha"><input type="password" value={form.confirmar_senha} onChange={e=>sf('confirmar_senha',e.target.value)} placeholder="Repetir senha" autoComplete="new-password" required/></Campo>
@@ -561,6 +572,271 @@ function AuthScreen({onLogin,backendUrl}){
         )}
       </section>
     </main>
+  );
+}
+
+/* Dados do cadastro (nome, CPF, telefone, setor). Quem entrou pelo Google ainda
+   não tem CPF: o formulário aparece logo após o primeiro login e fica em Ajustes. */
+function FormPerfil({user,token,onAtualizado,onToast,botao='Salvar',onDepois}){
+  const [f,setF]=useState({nome:user.nome||'',doc:user.doc||'',telefone:user.telefone||'',setor:user.setor||''});
+  const [salvando,setSalvando]=useState(false);
+  const [err,setErr]=useState('');
+  const sf=(k,v)=>setF(p=>({...p,[k]:v}));
+  const salvar=async()=>{
+    setSalvando(true);setErr('');
+    try{
+      const corpo={nome:f.nome,telefone:f.telefone,setor:f.setor};
+      if(f.doc.trim()) corpo.doc=f.doc;
+      const d=await apiSite('/conta',{token,method:'PUT',body:corpo});
+      onAtualizado(d.token,d.user);
+      onToast&&onToast('Cadastro atualizado!');
+    }catch(e){setErr(mensagemErro(e));}
+    setSalvando(false);
+  };
+  return(
+    <form onSubmit={enviar(salvar)} className="form-perfil">
+      {err&&<p className="err-msg" role="alert"><Icon n="alert"/>{err}</p>}
+      <Campo ic="user" rotulo="Nome completo"><input value={f.nome} onChange={e=>sf('nome',e.target.value)} placeholder="Nome completo" autoComplete="name" required/></Campo>
+      <div className="field-row">
+        <Campo ic="id" rotulo="CPF ou CNPJ"><input value={f.doc} onChange={e=>sf('doc',e.target.value)} placeholder="CPF ou CNPJ" inputMode="numeric"/></Campo>
+        <Campo ic="call" rotulo="Telefone (opcional)"><input type="tel" value={f.telefone} onChange={e=>sf('telefone',e.target.value)} placeholder="Telefone (opcional)" autoComplete="tel"/></Campo>
+      </div>
+      <Campo ic="factory" rotulo="Setor (opcional)"><SetorSelect valor={f.setor} onChange={v=>sf('setor',v)}/></Campo>
+      <footer className="modal-actions">
+        {onDepois&&<button type="button" className="btn btn-secondary" onClick={onDepois}>Agora não</button>}
+        <button type="submit" className="btn btn-primary" disabled={salvando}><Icon n="check"/>{salvando?'Salvando...':botao}</button>
+      </footer>
+    </form>
+  );
+}
+
+function FormSenha({user,token,onToast}){
+  const [atual,setAtual]=useState('');
+  const [nova,setNova]=useState('');
+  const [rep,setRep]=useState('');
+  const [err,setErr]=useState('');
+  const [salvando,setSalvando]=useState(false);
+  const salvar=async()=>{
+    setErr('');
+    if(nova.length<6){setErr('A senha precisa ter pelo menos 6 caracteres.');return;}
+    if(nova!==rep){setErr('As duas senhas não são iguais.');return;}
+    setSalvando(true);
+    try{
+      const d=await apiSite('/conta/senha',{token,method:'POST',body:{atual,nova}});
+      setAtual('');setNova('');setRep('');
+      onToast&&onToast(d.message||'Senha salva!');
+    }catch(e){setErr(mensagemErro(e));}
+    setSalvando(false);
+  };
+  return(
+    <form onSubmit={enviar(salvar)} className="form-perfil">
+      {err&&<p className="err-msg" role="alert"><Icon n="alert"/>{err}</p>}
+      {!user.tem_senha&&<p className="dica-linha"><Icon n="key"/>Sua conta entra pelo Google. Criando uma senha, dá para entrar também com CPF/e-mail.</p>}
+      <div className="field-row">
+        {user.tem_senha&&<Campo ic="lock" rotulo="Senha atual"><input type="password" value={atual} onChange={e=>setAtual(e.target.value)} placeholder="Senha atual" autoComplete="current-password" required/></Campo>}
+        <Campo ic="lock" rotulo="Nova senha"><input type="password" value={nova} onChange={e=>setNova(e.target.value)} placeholder="Nova senha" autoComplete="new-password" minLength={6} required/></Campo>
+        <Campo ic="lock" rotulo="Repetir a nova senha"><input type="password" value={rep} onChange={e=>setRep(e.target.value)} placeholder="Repetir a nova senha" autoComplete="new-password" required/></Campo>
+      </div>
+      <footer className="modal-actions">
+        <button type="submit" className="btn btn-primary" disabled={salvando}><Icon n="key"/>{salvando?'Salvando...':(user.tem_senha?'Trocar senha':'Criar senha')}</button>
+      </footer>
+    </form>
+  );
+}
+
+function MinhaConta({user,token,onAtualizado,onToast,onSair}){
+  const idTitulo=useId();
+  return(
+    <section className="bloco" id="minha-conta" aria-labelledby={idTitulo}>
+      <header className="bloco-titulo"><Icon n="user"/><h2 id={idTitulo}>Minha conta</h2></header>
+      <div className="conta">
+        <abbr className="avatar grande" title={user.nome}>{iniciais(user.nome)}</abbr>
+        <div className="card-txt">
+          <p className="card-nome">{user.nome}</p>
+          <p className="card-sub">{user.email}{user.setor?' · '+user.setor:''}{user.google?' · Google':''}</p>
+        </div>
+        <button type="button" className="btn btn-danger btn-sm" onClick={onSair}><Icon n="logout"/>Sair</button>
+      </div>
+      {user.perfil_incompleto&&<p className="pref-aviso" style={{marginTop:12}}><Icon n="id"/>Falta o CPF/CNPJ no seu cadastro.</p>}
+      <details className="avancado" open={user.perfil_incompleto} style={{marginTop:12}}>
+        <summary><Icon n="pencil"/><h3>Dados do cadastro</h3><Icon n="chevron" className="seta"/></summary>
+        <div className="avancado-corpo"><FormPerfil user={user} token={token} onAtualizado={onAtualizado} onToast={onToast}/></div>
+      </details>
+      <details className="avancado" style={{marginTop:8}}>
+        <summary><Icon n="key"/><h3>{user.tem_senha?'Trocar senha':'Criar senha'}</h3><Icon n="chevron" className="seta"/></summary>
+        <div className="avancado-corpo"><FormSenha user={user} token={token} onToast={onToast}/></div>
+      </details>
+    </section>
+  );
+}
+
+/* ── Achar os servidores da conta ───────────────────────────── */
+async function sondarServidor(base,esperado,ms=5000){
+  base=cleanUrl(base);
+  if(!base) return null;
+  // página em https (Vercel) não pode chamar http (rede local): o navegador bloqueia
+  if(window.location.protocol==='https:'&&base.startsWith('http:')) return null;
+  const ctl=new AbortController();
+  const t=setTimeout(()=>ctl.abort(),ms);
+  const inicio=performance.now();
+  try{
+    const r=await af(base+'/status',{cache:'no-store',signal:ctl.signal});
+    if(!r.ok) return null;
+    const st=await r.json().catch(()=>({}));
+    // o endereço antigo de um túnel pode ter ido para outro servidor: confere o id
+    if(esperado&&st.servidor_id&&st.servidor_id!==esperado) return null;
+    return {base,status:st,ping:Math.round(performance.now()-inicio)};
+  }catch{return null;}
+  finally{clearTimeout(t);}
+}
+
+async function localizarServidores(lista){
+  const candidatos=(s)=>{
+    const urls=[];
+    if(LOCAL_BACKEND_ORIGIN) urls.push(LOCAL_BACKEND_ORIGIN);
+    urls.push(s.url_local,s.url);
+    return [...new Set(urls.filter(Boolean).map(cleanUrl))];
+  };
+  const achados=await Promise.all((lista||[]).map(async s=>{
+    for(const base of candidatos(s)){
+      const r=await sondarServidor(base,s.id);
+      if(r&&r.status.servidor_id===s.id) return [s.id,r];
+    }
+    return [s.id,null];
+  }));
+  return Object.fromEntries(achados);
+}
+
+function melhorServidor(lista,alcance){
+  const vivos=(lista||[]).filter(s=>alcance[s.id]);
+  if(!vivos.length) return null;
+  // aberto pelo próprio servidor (localhost ou rede local): fica nele
+  const local=vivos.find(s=>alcance[s.id].base===LOCAL_BACKEND_ORIGIN);
+  if(local) return local;
+  vivos.sort((a,b)=>{
+    const sa=alcance[a.id].status, sb=alcance[b.id].status;
+    return (Number(sb.availability||0)-Number(sa.availability||0))
+      || (Number(sa.active_streams||0)-Number(sb.active_streams||0))
+      || (alcance[a.id].ping-alcance[b.id].ping);
+  });
+  return vivos[0];
+}
+
+const SITE_PAREAR=(ARGOS_API.replace(/\/api$/,'')||'https://argosepi.vercel.app')+'/parear.html';
+function ComoVincular({compacto}){
+  const [codigo,setCodigo]=useState('');
+  return(
+    <div className="como-vincular">
+      <Passos rotulo="Como vincular um servidor" itens={[
+        {ic:'server',txt:'Ligue o Argos no computador: instalar_docker.bat, iniciar.bat ou iniciar.sh'},
+        {ic:'globe',txt:'O navegador abre sozinho a página de vínculo (ou acesse localhost:8088/parear)'},
+        {ic:'check',txt:'Entre nesta conta, confira o código e clique em Vincular'},
+      ]}/>
+      {!compacto&&(
+        <form className="aj-linha" style={{marginTop:12}} onSubmit={enviar(()=>{const c=codigo.trim();if(c) window.location.href=SITE_PAREAR+'?codigo='+encodeURIComponent(c);})}>
+          <Campo ic="key" rotulo="Código do servidor"><input value={codigo} onChange={e=>setCodigo(e.target.value.toUpperCase())} placeholder="Já tem o código? (ex.: ABCD-2345)" maxLength={9}/></Campo>
+          <button type="submit" className="btn btn-primary btn-sm" disabled={codigo.trim().length<8}><Icon n="link"/>Vincular</button>
+        </form>
+      )}
+    </div>
+  );
+}
+
+const quandoFoi=(ts)=>{
+  if(!ts) return 'nunca';
+  const s=Math.max(0,Date.now()/1000-ts);
+  if(s<90) return 'agora';
+  if(s<3600) return `há ${Math.round(s/60)} min`;
+  if(s<86400) return `há ${Math.round(s/3600)} h`;
+  return new Date(ts*1000).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+};
+const gb=(b)=>b?(b/1073741824).toFixed(0)+' GB':'—';
+
+function ServidorCard({s,alc,principal,onUsar,onRenomear,onRemover}){
+  const est=s.estado||{};
+  const hw=s.hardware||{};
+  const malha=(est.malha&&est.malha.pares)||[];
+  const st=alc&&alc.status;
+  const disp=st?st.availability:est.availability;
+  const cams=st?st.active_streams:est.active_streams;
+  const errosMalha=malha.filter(p=>p.erro);
+  const idTitulo=useId();
+  return(
+    <article className={"card servidor-card"+(principal?' principal':'')} aria-labelledby={idTitulo}>
+      <header className="card-topo">
+        <span className="card-ico"><Icon n="server"/></span>
+        <div className="card-txt">
+          <h2 className="card-nome" id={idTitulo}>{s.nome}</h2>
+          <p className="card-sub">
+            <span className={"dot"+(s.online?' on':'')}/> {s.online?(alc?'Online':'Online (fora de alcance daqui)'):'Offline · visto '+quandoFoi(s.visto_em)}
+            {principal&&' · em uso neste painel'}
+          </p>
+        </div>
+        <button type="button" className="ib sm" onClick={()=>onRenomear(s)} aria-label={'Renomear '+s.nome} data-dica="Renomear"><Icon n="pencil"/></button>
+        <button type="button" className="ib sm perigo dica-dir" onClick={()=>onRemover(s)} aria-label={'Desvincular '+s.nome} data-dica="Desvincular"><Icon n="trash"/></button>
+      </header>
+      <ul className="diag" aria-label="Situação do servidor">
+        {s.tipo&&<li className="chip"><Icon n="chip"/>{s.tipo==='gpu'?'GPU':s.tipo.toUpperCase()}{hw.gpu_name?' · '+hw.gpu_name:''}</li>}
+        {hw.docker!==undefined&&<li className="chip"><Icon n="box"/>{hw.docker?'Docker':'Sem Docker'}</li>}
+        {disp!=null&&<li className={"chip"+(disp<30?' alerta':' bom')}><Icon n="gauge"/>Livre {disp}%</li>}
+        {cams!=null&&<li className="chip"><Icon n="camera"/>{cams} câmera(s)</li>}
+        {hw.cpu_count&&<li className="chip"><Icon n="chip"/>{hw.cpu_count} núcleos · {gb(hw.ram_total)}</li>}
+        {s.versao&&<li className="chip"><Icon n="hash"/>{s.versao}</li>}
+        {alc&&<li className="chip"><Icon n="wifi"/>{alc.ping} ms</li>}
+      </ul>
+      {malha.length>0&&(
+        <p className={"dica-linha"+(errosMalha.length?' alerta':'')} style={{marginTop:8}}>
+          <Icon n="refresh"/>Malha: {errosMalha.length
+            ? `sem contato com ${errosMalha.length} de ${malha.length} servidor(es)`
+            : `sincronizado com ${malha.length} servidor(es)`}
+          {est.malha.ultimo?' · '+quandoFoi(est.malha.ultimo):''}
+        </p>
+      )}
+      {alc&&!principal&&(
+        <footer className="card-acoes">
+          <button type="button" className="btn btn-secondary btn-sm" onClick={()=>onUsar(s)}><Icon n="check"/>Usar neste painel</button>
+        </footer>
+      )}
+    </article>
+  );
+}
+
+function ServidoresPage({servidores,alcance,principalId,carregando,onAtualizar,onUsar,token,onToast}){
+  const renomear=async(s)=>{
+    const nome=await pedirTexto({titulo:'Nome do servidor',ic:'server',valor:s.nome,placeholder:'Ex.: PC da portaria'});
+    if(!nome||nome===s.nome) return;
+    try{await apiSite('/servidores/'+s.id,{token,method:'PATCH',body:{nome}});onToast('Servidor renomeado!');onAtualizar();}
+    catch(e){onToast(mensagemErro(e),'err');}
+  };
+  const remover=async(s)=>{
+    if(!await confirmar({titulo:`Desvincular "${s.nome}"?`,texto:'Ele para de processar para esta conta e sai da malha. Os dados que já estão nele continuam no computador. Para usar de novo, é só vincular outra vez.',botao:'Desvincular'})) return;
+    try{const d=await apiSite('/servidores/'+s.id,{token,method:'DELETE'});onToast(d.message||'Servidor desvinculado.');onAtualizar();}
+    catch(e){onToast(mensagemErro(e),'err');}
+  };
+  const online=servidores.filter(s=>s.online).length;
+  return(
+    <Pagina ic="server" titulo="Servidores" total={servidores.length} acoes={
+      <button type="button" className="btn btn-claro" onClick={onAtualizar} disabled={carregando} aria-label="Atualizar"><Icon n="refresh"/><span className="btn-rotulo" aria-hidden="true">{carregando?'Buscando...':'Atualizar'}</span></button>}>
+      {servidores.length===0
+        ? <Vazio ic="server" titulo="Nenhum servidor vinculado"><ComoVincular/></Vazio>
+        : <>
+            <p className="dica-linha" style={{marginBottom:12}}>
+              <Icon n="globe"/>{online} de {servidores.length} online. Os servidores da conta formam uma malha: EPIs, equipe, áreas, links de celular e o histórico de faltas são copiados entre eles.
+            </p>
+            <ul className="cards" aria-label="Servidores da conta">
+              {servidores.map(s=>(
+                <li key={s.id}>
+                  <ServidorCard s={s} alc={alcance[s.id]} principal={s.id===principalId}
+                    onUsar={onUsar} onRenomear={renomear} onRemover={remover}/>
+                </li>
+              ))}
+            </ul>
+            <section className="bloco" style={{marginTop:16}} aria-label="Adicionar servidor">
+              <header className="bloco-titulo"><Icon n="plus"/><h2>Adicionar outro servidor</h2></header>
+              <ComoVincular/>
+            </section>
+          </>}
+    </Pagina>
   );
 }
 
@@ -583,7 +859,7 @@ function Faltas({status,sm}){
   return txt.length?<span className="faltas-txt">{txt.join(', ')}</span>:null;
 }
 
-function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,device,index,onRemove,alarmeLigado,onToast,visual='medio'}){
+function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,device,index,onRemove,alarmeLigado,onToast,visual='medio',servidorNome}){
   const [status,setStatus]=useState(null);
   const [info,setInfo]=useState(null);
   const [showZonas,setShowZonas]=useState(false);
@@ -851,6 +1127,7 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
         <input id={idTitulo+'-nome'} className="cam-nome" value={nome}
           onChange={e=>setApelido(e.target.value)}
           onFocus={e=>e.target.select()}/>
+        {servidorNome&&<span className="cam-servidor" title="Servidor que processa esta câmera"><Icon n="server"/>{servidorNome}</span>}
         {usingCam&&<button type="button" className="ib sm perigo" onClick={stopCam} aria-label="Parar câmera" data-dica="Parar"><Icon n="stop"/></button>}
         <button type="button" className={"ib sm"+(ajustes?' ativo':'')} onClick={()=>setAjustes(v=>!v)}
           aria-expanded={ajustes} aria-controls={idAjustes} aria-label="Ajustes da câmera" data-dica="Ajustes"><Icon n="sliders"/></button>
@@ -1481,13 +1758,7 @@ function NetworkCameraModal({open,onClose,backendUrl,token,onUseStream,onToast})
   );
 }
 
-/* ═══ ANÁLISES DE VÍDEO ═══════════════════════════════════════ */
-const JOB_STATUS={recebendo:'Recebendo vídeo',na_fila:'Na fila',processando:'Analisando',revisando:'Revisando',gerando_video:'Gerando vídeo',concluido:'Concluído',erro:'Erro',cancelando:'Cancelando'};
-const JOB_ACTIVE=['processando','revisando','gerando_video'];
-const JOB_ICONE={recebendo:'upload',na_fila:'clock',processando:'search',revisando:'search',gerando_video:'film',concluido:'check',erro:'alert',cancelando:'x'};
-const POSTURA_TXT={em_pe:'Em pé',agachado:'Agachado',curvado:'Curvado',caido:'Caído',desconhecida:'Não identificada'};
-const MOV_TXT={parado:'Parado',andando:'Andando',correndo:'Correndo'};
-const topEntries=(obj,names)=>Object.entries(obj||{}).filter(([,s])=>s>=0.5).sort((a,b)=>b[1]-a[1]).slice(0,2).map(([k,s])=>`${names[k]||k} ${Math.round(s)}s`).join(', ')||'—';
+/* ═══ COMPONENTES DE PAINEL ═════════════════════════════════ */
 const isoDe=(ts)=>{try{return new Date(ts*1000).toISOString();}catch{return undefined;}};
 
 /* Número com rótulo: um par <dt>/<dd> dentro de <dl className="stats">. */
@@ -1497,216 +1768,6 @@ function Stat({ic,label,value,danger}){
       <dt>{ic&&<Icon n={ic}/>}{label}</dt>
       <dd>{value}</dd>
     </div>
-  );
-}
-
-function AnalysisDetail({job,fileUrl,videoRef,onSeek,onRemove}){
-  const r=job.resultado;
-  const running=!['concluido','erro'].includes(job.status);
-  const pct=Math.round((job.progresso||0)*100);
-  const idTitulo=useId();
-  return(
-    <section className="bloco" aria-labelledby={idTitulo}>
-      <header className="bloco-titulo">
-        <Icon n="film"/><h2 id={idTitulo}>{job.nome}</h2>
-        <div className="acoes-dir">
-          <span className="chip"><Icon n={JOB_ICONE[job.status]||'clock'}/>{JOB_STATUS[job.status]||job.status}</span>
-          <button type="button" className="ib sm perigo dica-dir" onClick={onRemove} aria-label={running?'Cancelar análise':'Remover análise'} data-dica={running?'Cancelar':'Remover'}><Icon n={running?'x':'trash'}/></button>
-        </div>
-      </header>
-      {running&&(
-        <div className="progresso-envio">
-          <ul className="diag" style={{marginBottom:8}}>
-            {JOB_ACTIVE.includes(job.status)&&<li className="chip">{pct}%</li>}
-            {job.posicao_fila?<li className="chip"><Icon n="clock"/>{job.posicao_fila}º na fila</li>:null}
-            {job.fps_processamento?<li className="chip"><Icon n="gauge"/>{job.fps_processamento} q/s</li>:null}
-            {job.restante_s?<li className="chip"><Icon n="hourglass"/>~{ArgosStream.formatDuration(job.restante_s)}</li>:null}
-          </ul>
-          <progress className="barra" max={100} value={pct} aria-label="Progresso da análise">{pct}%</progress>
-        </div>
-      )}
-      {job.erro&&<p className="err-msg"><Icon n="alert"/>{job.erro}</p>}
-      {r&&(<>
-        <dl className="stats">
-          <Stat ic="clock" label="Duração" value={ArgosStream.formatDuration(r.duracao_s)}/>
-          <Stat ic="users" label="Pessoas" value={r.pessoas.length}/>
-          <Stat ic="alert" label="Alertas" value={r.eventos.length} danger={r.eventos.length>0}/>
-          <Stat ic="shield" label="Tempo seguro" value={r.percentual_seguro!=null?r.percentual_seguro+'%':'—'}/>
-          <Stat ic="gauge" label="Quadros/s" value={r.fps_processamento}/>
-        </dl>
-        {r.video&&<video ref={videoRef} className="analysis-video" src={fileUrl(job,r.video)} controls playsInline preload="metadata"/>}
-        <div className="analysis-grid">
-          <section aria-labelledby={idTitulo+'-alertas'}>
-            <h3 className="sub-title" id={idTitulo+'-alertas'}><Icon n="alert"/>Alertas</h3>
-            {r.eventos.length===0&&<p className="ok-msg"><Icon n="shield"/>Nenhum alerta</p>}
-            {r.eventos.length>0&&(
-              <ol className="event-list">
-                {r.eventos.map((e,i)=>(
-                  <li key={i}>
-                    <button type="button" className="event-item" onClick={()=>onSeek(e.inicio)} title="Ir para este momento do vídeo">
-                      {e.miniatura&&<img src={fileUrl(job,'miniaturas/'+e.miniatura)} alt="" loading="lazy"/>}
-                      <span className="event-corpo">
-                        <span className="event-title">
-                          {e.tipo==='possivel_queda'
-                            ? <><Icon n="alert"/>Possível queda</>
-                            : <>{e.item&&<EpiSelo item={e.item} estado="falta" sm rotulo={e.rotulo}/>}Sem {String(e.rotulo).toLowerCase()}</>}
-                        </span>
-                        <span className="event-meta">{e.nome||(e.track_id!=null?`Pessoa ${e.track_id}`:'Pessoa')} · {ArgosStream.formatDuration(e.inicio)} → {ArgosStream.formatDuration(e.fim)} ({e.duracao}s)</span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ol>
-            )}
-          </section>
-          <section aria-labelledby={idTitulo+'-pessoas'}>
-            <h3 className="sub-title" id={idTitulo+'-pessoas'}><Icon n="users"/>Pessoas</h3>
-            <div className="table-wrap">
-              <table className="people-table">
-                <caption className="sr">Pessoas que apareceram no vídeo</caption>
-                <thead><tr><th scope="col">Pessoa</th><th scope="col">Em cena</th><th scope="col">Sem EPI</th><th scope="col">Postura</th><th scope="col">Movimento</th></tr></thead>
-                <tbody>
-                  {r.pessoas.map(p=>(
-                    <tr key={p.track_id}>
-                      <th scope="row">{p.nome||('#'+p.track_id)}</th>
-                      <td>{ArgosStream.formatDuration(p.inicio)}–{ArgosStream.formatDuration(p.fim)}</td>
-                      <td>{Object.entries(p.faltando_s||{}).filter(([,s])=>s>=1).map(([k,s])=>(
-                        <span key={k} className="falta-s"><EpiSelo item={k} estado="falta" sm/>{Math.round(s)}s</span>
-                      ))}{!Object.values(p.faltando_s||{}).some(s=>s>=1)&&'—'}</td>
-                      <td>{topEntries(p.postura_s,POSTURA_TXT)}</td>
-                      <td>{topEntries(p.movimento_s,MOV_TXT)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {(r.epis_exigidos||[]).length>0&&(
-              <div className="aj-linha" style={{marginTop:12}}>
-                <span className="aj-rot" data-dica="EPIs exigidos"><Icon n="helmet"/></span>
-                <EpiSelos itens={r.epis_exigidos} sm max={9} titulo="EPIs exigidos"/>
-              </div>
-            )}
-          </section>
-        </div>
-      </>)}
-    </section>
-  );
-}
-
-function AnalysesPage({token,backendUrl,availableModels,defaultModel,onToast,focusId}){
-  const [jobs,setJobs]=useState([]);
-  const [selected,setSelected]=useState(focusId||null);
-  const [detail,setDetail]=useState(null);
-  const [file,setFile]=useState(null);
-  const [mode,setMode]=useState('detalhado');
-  const [model,setModel]=useState('');
-  const [uploadPct,setUploadPct]=useState(null);
-  const videoRef=useRef(null);
-  const idModelo=useId();
-  const fileUrl=(job,rel)=>`${backendUrl}/analises/${job.id}/arquivo/${rel}?token=${encodeURIComponent(token)}`;
-
-  const load=useCallback(async()=>{
-    try{const r=await authFetch(backendUrl+'/analises',token);if(r.ok){const d=await r.json();setJobs(d.analises||[]);}}catch{}
-  },[backendUrl,token]);
-  const loadDetail=useCallback(async(id)=>{
-    try{
-      const r=await authFetch(backendUrl+'/analises/'+id,token);
-      if(r.ok){const d=await r.json();setDetail(d.analise);}
-      else if(r.status===404){setSelected(null);setDetail(null);}
-    }catch{}
-  },[backendUrl,token]);
-
-  const anyActive=jobs.some(j=>!['concluido','erro'].includes(j.status));
-  useEffect(()=>{load();},[load]);
-  useEffect(()=>{if(focusId) setSelected(focusId);},[focusId]);
-  useEffect(()=>{if(selected) loadDetail(selected); else setDetail(null);},[selected,loadDetail]);
-  useEffect(()=>{
-    if(!anyActive) return;
-    const iv=setInterval(()=>{load();if(selected) loadDetail(selected);},2000);
-    return()=>clearInterval(iv);
-  },[anyActive,selected,load,loadDetail]);
-
-  const send=async()=>{
-    if(!file) return;
-    setUploadPct(0);
-    try{
-      const job=await ArgosStream.uploadAnalysisFile({backendUrl,token,file,mode,model,name:file.name,onProgress:p=>setUploadPct(Math.round(p*100))});
-      onToast('Vídeo enviado para a fila de análise');
-      setFile(null);
-      setSelected(job.id);
-      load();
-    }catch(e){onToast(mensagemErro(e),'err');}
-    setUploadPct(null);
-  };
-  const remove=async(job)=>{
-    const running=!['concluido','erro'].includes(job.status);
-    if(!await confirmar(running?{titulo:`Cancelar a análise "${job.nome}"?`,botao:'Cancelar análise',ic:'x'}:{titulo:`Remover a análise "${job.nome}"?`,texto:'O vídeo analisado e os alertas dele serão apagados.'})) return;
-    await authFetch(backendUrl+'/analises/'+job.id,token,{method:'DELETE'}).catch(()=>{});
-    setSelected(null);
-    load();
-  };
-  const seek=(t)=>{
-    const v=videoRef.current;
-    if(!v) return;
-    v.currentTime=Math.max(0,t-1);
-    v.play().catch(()=>{});
-    v.scrollIntoView({behavior:'smooth',block:'center'});
-  };
-
-  return(
-    <Pagina ic="film" titulo="Análises" total={jobs.length}>
-      <form className="bloco" onSubmit={enviar(send)} aria-label="Enviar vídeo para análise">
-        <div className="envio">
-          <label className={"arquivo"+(file?' cheio':'')}>
-            <Icon n={file?'film':'upload'}/><span>{file?file.name:'Escolher vídeo'}</span>
-            <input type="file" accept="video/*" className="sr" onChange={e=>{setFile((e.target.files&&e.target.files[0])||null);e.target.value='';}}/>
-          </label>
-          <Opcoes rotulo="Modo de análise" valor={mode} onChange={setMode}
-            opcoes={[{id:'detalhado',ic:'target',txt:'Detalhado'},{id:'super',ic:'zoom',txt:'Super',dica:'Super detalhado: mais preciso, mais lento'}]}/>
-          <label className="aj-rot" data-dica="Modelo de IA" htmlFor={idModelo}><Icon n="chip"/><span className="sr">Modelo de IA</span></label>
-          <select id={idModelo} value={model} onChange={e=>setModel(e.target.value)}>
-            <option value="">Padrão{defaultModel?` (${defaultModel})`:''}</option>
-            {availableModels.map(m=><option key={m.name} value={m.name}>{m.display_name||m.name}</option>)}
-          </select>
-          <button type="submit" className="btn btn-primary" disabled={!file||uploadPct!==null}><Icon n="upload"/>{uploadPct!==null?`${uploadPct}%`:'Analisar'}</button>
-        </div>
-        {uploadPct!==null&&<progress className="barra progresso-envio" max={100} value={uploadPct} aria-label="Envio do vídeo">{uploadPct}%</progress>}
-      </form>
-
-      {jobs.length===0&&(
-        <Vazio ic="film" titulo="Nenhuma análise">
-          <Passos itens={[{ic:'target',txt:'Gravar no modo detalhado'},{ic:'upload',txt:'Ou enviar um vídeo'},{ic:'alert',txt:'Ver os alertas'}]}/>
-        </Vazio>
-      )}
-      {jobs.length>0&&(
-        <ul className="jobs" aria-label="Vídeos analisados">
-          {jobs.map(j=>{
-            const pct=Math.round((j.progresso||0)*100);
-            const ativo=!['concluido','erro'].includes(j.status);
-            return(
-              <li key={j.id}>
-                <article className={"job"+(selected===j.id?' ativo':'')}>
-                  <span className={"job-ico s-"+j.status}><Icon n={JOB_ICONE[j.status]||'clock'}/></span>
-                  <div className="job-corpo">
-                    <h2 className="job-nome"><button type="button" className="job-abrir" onClick={()=>setSelected(j.id)} aria-pressed={selected===j.id}>{j.nome}</button></h2>
-                    <p className="job-meta"><time dateTime={isoDe(j.criado_em)}>{new Date(j.criado_em*1000).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</time> · {JOB_STATUS[j.status]||j.status}{JOB_ACTIVE.includes(j.status)?` ${pct}%`:''}</p>
-                    {ativo&&<progress className="barra" max={100} value={pct} aria-label="Progresso">{pct}%</progress>}
-                    {j.resumo&&(
-                      <ul className="diag" aria-label="Resumo">
-                        <li className={"chip"+(j.resumo.eventos>0?' alerta':'')}><Icon n="alert"/>{j.resumo.eventos}<span className="sr"> alerta(s)</span></li>
-                        <li className="chip"><Icon n="users"/>{j.resumo.pessoas}<span className="sr"> pessoa(s)</span></li>
-                        {j.resumo.percentual_seguro!=null&&<li className="chip"><Icon n="shield"/>{j.resumo.percentual_seguro}%<span className="sr"> do tempo seguro</span></li>}
-                      </ul>
-                    )}
-                  </div>
-                </article>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {detail&&<AnalysisDetail job={detail} fileUrl={fileUrl} videoRef={videoRef} onSeek={seek} onRemove={()=>remove(detail)}/>}
-    </Pagina>
   );
 }
 
@@ -2045,119 +2106,314 @@ function AreasBoard({token,backendUrl,onToast}){
   );
 }
 
-/* ═══ EDITOR DE ZONAS (desenha a área sobre o vídeo) ═════════ */
+/* ═══ EDITOR DE ZONAS (desenha a área sobre o vídeo) ═════════
+   Desenhar: clique nos cantos; fecha clicando no 1º ponto, com duplo clique ou Enter.
+   Editar: clique num desenho para selecionar, arraste os pontos, troque a área ou apague.
+   A imagem da câmera se atualiza sozinha enquanto a janela está aberta.          */
+const CORES_AREA=['#e53935','#fb8c00','#fdd835','#43a047','#1e88e5','#8e24aa','#00acc1','#6d4c41'];
+const limitar01=(v)=>Math.min(Math.max(v,0),1);
+function centroDe(pts){
+  if(!pts.length) return [0.5,0.5];
+  const s=pts.reduce((a,p)=>[a[0]+p[0],a[1]+p[1]],[0,0]);
+  return [s[0]/pts.length,s[1]/pts.length];
+}
+
 function ZonaEditor({streamId,token,backendUrl,onClose,onToast}){
   const [frame,setFrame]=useState(null);
+  const [aoVivo,setAoVivo]=useState(true);
   const [areas,setAreas]=useState([]);
+  const [episDisp,setEpisDisp]=useState([]);
   const [zonas,setZonas]=useState([]);
   const [areaAtual,setAreaAtual]=useState('');
-  const [pontos,setPontos]=useState([]);
+  const [pontos,setPontos]=useState([]);          // desenho em andamento
+  const [selecionada,setSelecionada]=useState(''); // id da zona em edição
+  const [arrastando,setArrastando]=useState(false);
+  const arrasteRef=useRef(null);                   // {zona:'id'|'', i, moveu}
   const [salvando,setSalvando]=useState(false);
+  const [mudou,setMudou]=useState(false);
+  const [novaArea,setNovaArea]=useState(null);     // formulário de área nova
   const svgRef=useRef();
   const nomeGrupo=useId();
 
+  const carregarAreas=useCallback(async(escolher)=>{
+    try{
+      const r=await authFetch(backendUrl+'/areas',token);const d=await r.json();
+      setAreas(d.areas||[]);setEpisDisp(d.epis_disponiveis||[]);
+      if(escolher) setAreaAtual(escolher);
+      else setAreaAtual(a=>a||((d.areas||[])[0]||{}).id||'');
+    }catch{}
+  },[token,backendUrl]);
+
   useEffect(()=>{
     authFetch(backendUrl+'/streams/'+streamId+'/zonas',token).then(r=>r.json())
-      .then(d=>{
-        setZonas(d.zonas||[]);setAreas(d.areas||[]);
-        if((d.areas||[]).length) setAreaAtual(d.areas[0].id);
-      }).catch(()=>{});
-    authFetch(backendUrl+'/frame?stream='+streamId,token)
+      .then(d=>{setZonas(d.zonas||[]);}).catch(()=>{});
+    carregarAreas();
+  },[streamId,token,backendUrl,carregarAreas]);
+
+  // imagem ao vivo: um quadro novo a cada 1,5 s (pausa enquanto arrasta um ponto)
+  useEffect(()=>{
+    let vivo=true;
+    const buscar=()=>authFetch(backendUrl+'/frame?stream='+streamId,token)
       .then(r=>r.status===204?null:r.json())
-      .then(d=>{if(d&&d.frame) setFrame('data:image/jpeg;base64,'+d.frame);})
+      .then(d=>{if(vivo&&d&&d.frame) setFrame('data:image/jpeg;base64,'+d.frame);})
       .catch(()=>{});
-  },[streamId,token,backendUrl]);
+    buscar();
+    if(!aoVivo) return()=>{vivo=false;};
+    const iv=setInterval(()=>{if(!document.hidden) buscar();},1500);
+    return()=>{vivo=false;clearInterval(iv);};
+  },[streamId,token,backendUrl,aoVivo]);
 
   const areaPorId=(id)=>areas.find(a=>a.id===id);
   const corDe=(id)=>(areaPorId(id)||{}).cor||'#c81e1e';
+  const zonaSel=zonas.find(z=>z.id===selecionada)||null;
 
-  const clique=(e)=>{
+  const posicao=(e)=>{
     const r=svgRef.current.getBoundingClientRect();
-    const x=(e.clientX-r.left)/r.width, y=(e.clientY-r.top)/r.height;
-    setPontos(p=>[...p,[Math.min(Math.max(x,0),1),Math.min(Math.max(y,0),1)]]);
+    return [limitar01((e.clientX-r.left)/r.width),limitar01((e.clientY-r.top)/r.height)];
+  };
+  // perto do 1º ponto (em pixels da tela): clicar ali fecha o desenho
+  const pertoDoInicio=(e)=>{
+    if(pontos.length<3) return false;
+    const r=svgRef.current.getBoundingClientRect();
+    const dx=(pontos[0][0]*r.width+r.left)-e.clientX, dy=(pontos[0][1]*r.height+r.top)-e.clientY;
+    return Math.hypot(dx,dy)<14;
   };
 
-  const fecharPoligono=()=>{
-    if(pontos.length<3){onToast&&onToast('Marque pelo menos 3 pontos para fechar a área.','err');return;}
-    if(!areaAtual){onToast&&onToast('Crie uma área primeiro, em Ajustes.','err');return;}
-    setZonas(z=>[...z,{id:'z'+Date.now(),area_id:areaAtual,pontos}]);
-    setPontos([]);
+  const fecharPoligono=useCallback(()=>{
+    if(pontos.length<3){onToast&&onToast('Marque pelo menos 3 cantos para fechar a área.','err');return;}
+    if(!areaAtual){onToast&&onToast('Escolha ou crie a área antes de desenhar.','err');return;}
+    const id='z'+Date.now();
+    setZonas(z=>[...z,{id,area_id:areaAtual,pontos}]);
+    setPontos([]);setSelecionada(id);setMudou(true);
+  },[pontos,areaAtual,onToast]);
+
+  const cliqueNoPalco=(e)=>{
+    const arraste=arrasteRef.current;
+    arrasteRef.current=null;
+    if(arraste&&arraste.moveu) return;     // fim de um arraste, não é clique
+    if(e.detail>1) return;                 // o duplo clique fecha (abaixo), sem somar ponto
+    if(pertoDoInicio(e)){fecharPoligono();return;}
+    if(selecionada&&!pontos.length){setSelecionada('');return;}   // clique fora tira a seleção
+    setPontos(p=>[...p,posicao(e)]);
+  };
+  const duploClique=(e)=>{e.preventDefault();if(pontos.length>=3) fecharPoligono();};
+
+  const selecionarZona=(e,z)=>{
+    if(pontos.length) return;              // desenhando: o clique vira ponto
+    e.stopPropagation();
+    setSelecionada(z.id);setAreaAtual(z.area_id);
+  };
+
+  // arrastar um ponto: só conta como arraste se o mouse andou; sem andar, vira clique
+  // (clicar no 1º ponto fecha o desenho)
+  const comecarArrasto=(e,zona,i)=>{
+    e.stopPropagation();
+    arrasteRef.current={zona,i,moveu:false,x:e.clientX,y:e.clientY};
+    setArrastando(true);
+  };
+  const mover=(e)=>{
+    const a=arrasteRef.current;
+    if(!a||!arrastando) return;
+    if(!a.moveu&&Math.hypot(e.clientX-a.x,e.clientY-a.y)<4) return;
+    a.moveu=true;
+    const p=posicao(e);
+    if(!a.zona) setPontos(l=>l.map((q,j)=>j===a.i?p:q));
+    else{setZonas(l=>l.map(z=>z.id!==a.zona?z:{...z,pontos:z.pontos.map((q,j)=>j===a.i?p:q)}));setMudou(true);}
+  };
+  const soltar=()=>{
+    setArrastando(false);
+    const a=arrasteRef.current;
+    if(a&&a.moveu) setTimeout(()=>{if(arrasteRef.current===a) arrasteRef.current=null;},0);
+  };
+
+  const apagarSelecionada=useCallback(()=>{
+    if(!selecionada) return;
+    setZonas(l=>l.filter(z=>z.id!==selecionada));setSelecionada('');setMudou(true);
+  },[selecionada]);
+  const apagarPonto=(zonaId,i)=>{
+    setZonas(l=>l.map(z=>z.id!==zonaId||z.pontos.length<=3?z:{...z,pontos:z.pontos.filter((_,j)=>j!==i)}));
+    setMudou(true);
+  };
+  const trocarArea=(id)=>{
+    setAreaAtual(id);
+    if(selecionada){setZonas(l=>l.map(z=>z.id===selecionada?{...z,area_id:id}:z));setMudou(true);}
+  };
+  const telaInteira=()=>{
+    if(!areaAtual){onToast&&onToast('Escolha ou crie a área antes.','err');return;}
+    const id='z'+Date.now();
+    setZonas(z=>[...z,{id,area_id:areaAtual,pontos:[[0,0],[1,0],[1,1],[0,1]]}]);
+    setPontos([]);setSelecionada(id);setMudou(true);
+  };
+
+  // teclado: Enter fecha, Esc cancela, Backspace desfaz, Delete apaga o desenho selecionado
+  useEffect(()=>{
+    const tecla=(e)=>{
+      const alvo=e.target&&e.target.tagName;
+      if(['INPUT','TEXTAREA','SELECT'].includes(alvo)) return;
+      if(e.key==='Enter'&&pontos.length>=3){e.preventDefault();fecharPoligono();}
+      else if(e.key==='Escape'&&(pontos.length||selecionada)){e.preventDefault();e.stopPropagation();setPontos([]);setSelecionada('');}
+      else if((e.key==='Backspace'||(e.key==='z'&&(e.ctrlKey||e.metaKey)))&&pontos.length){e.preventDefault();setPontos(p=>p.slice(0,-1));}
+      else if(e.key==='Delete'&&selecionada){e.preventDefault();apagarSelecionada();}
+    };
+    window.addEventListener('keydown',tecla,true);
+    return()=>window.removeEventListener('keydown',tecla,true);
+  },[pontos,selecionada,fecharPoligono,apagarSelecionada]);
+
+  const criarArea=async()=>{
+    const nome=(novaArea.nome||'').trim();
+    if(!nome){onToast&&onToast('Dê um nome à área.','err');return;}
+    try{
+      const r=await authFetch(backendUrl+'/areas',token,{method:'POST',
+        body:JSON.stringify({nome,cor:novaArea.cor,epis_obrigatorios:novaArea.epis})});
+      const d=await r.json();
+      if(!r.ok) throw new Error(d.error||'Erro');
+      const area=d.area||{};
+      setNovaArea(null);
+      await carregarAreas(area.id);
+      if(selecionada&&area.id){setZonas(l=>l.map(z=>z.id===selecionada?{...z,area_id:area.id}:z));setMudou(true);}
+      onToast&&onToast('Área criada! Agora desenhe onde ela fica.');
+    }catch(e){onToast&&onToast(mensagemErro(e),'err');}
   };
 
   const salvar=async()=>{
+    if(pontos.length>=3){onToast&&onToast('Feche o desenho atual (Enter) ou cancele (Esc) antes de salvar.','err');return;}
     setSalvando(true);
     try{
       const r=await authFetch(backendUrl+'/streams/'+streamId+'/zonas',token,
-        {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({zonas})});
+        {method:'POST',body:JSON.stringify({zonas})});
       const d=await r.json();
       if(!r.ok) throw new Error(d.error||'Erro');
       onToast&&onToast('Áreas mapeadas nesta câmera!');
+      setMudou(false);
       onClose();
     }catch(e){onToast&&onToast(mensagemErro(e),'err');}
     setSalvando(false);
   };
+  const fechar=async()=>{
+    if(mudou&&!await confirmar({titulo:'Sair sem salvar?',texto:'Os desenhos novos desta câmera serão descartados.',botao:'Sair',ic:'x'})) return;
+    onClose();
+  };
 
   const pathDe=(pts)=>pts.map(p=>(p[0]*100)+','+(p[1]*100)).join(' ');
+  const alca=(p,i,zona,cor)=>(
+    <g key={(zona||'novo')+'-'+i}>
+      <circle cx={p[0]*100} cy={p[1]*100} r="2.6" fill="#000" fillOpacity="0" pointerEvents="all" className="zona-alca-area"
+        onPointerDown={e=>comecarArrasto(e,zona,i)}
+        onClick={zona?(e=>{e.stopPropagation();arrasteRef.current=null;}):undefined}
+        onDoubleClick={zona?(e=>{e.stopPropagation();apagarPonto(zona,i);}):undefined}/>
+      <circle cx={p[0]*100} cy={p[1]*100} r={(!zona&&i===0&&pontos.length>=3)?1.6:1.1} fill="#fff"
+        stroke={cor} strokeWidth="2" vectorEffect="non-scaling-stroke" pointerEvents="none"/>
+    </g>
+  );
+  const dica=pontos.length
+    ? (pontos.length<3?`Clique nos cantos da área · ${pontos.length} ponto(s)`:'Clique no 1º ponto, dê duplo clique ou Enter para fechar · Esc cancela')
+    : (zonaSel?'Arraste os pontos para ajustar · duplo clique num ponto apaga o ponto · Delete apaga o desenho'
+              :'Clique na imagem para começar a desenhar · clique num desenho para editar');
 
   return(
-    <Janela titulo="Mapear áreas" ic="map" onClose={onClose} tamanho="largo">
-      {areas.length===0&&(
-        <p className="err-msg"><Icon n="alert"/>Crie as áreas primeiro em Ajustes → Áreas de risco.</p>
-      )}
-
+    <Janela titulo="Mapear áreas" ic="map" onClose={fechar} tamanho="largo" fecharFora={false}>
       {frame
         ? <figure className="zona-palco">
-            <img src={frame} alt="Imagem atual da câmera"/>
-            <svg ref={svgRef} className="zona-svg" viewBox="0 0 100 100" preserveAspectRatio="none" onClick={clique}
+            <img src={frame} alt="Imagem atual da câmera" draggable={false}/>
+            <svg ref={svgRef} className={"zona-svg"+(arrastando?' arrastando':'')} viewBox="0 0 100 100" preserveAspectRatio="none"
+              onClick={cliqueNoPalco} onDoubleClick={duploClique} onPointerMove={mover} onPointerUp={soltar} onPointerCancel={soltar}
               role="img" aria-label={'Desenho das áreas: '+zonas.length+' área(s), '+pontos.length+' ponto(s) no desenho atual'}>
-              {zonas.map(z=>(
-                <polygon key={z.id} points={pathDe(z.pontos)} fill={corDe(z.area_id)} fillOpacity="0.28"
-                  stroke={corDe(z.area_id)} strokeWidth="0.5" vectorEffect="non-scaling-stroke"/>
-              ))}
+              {zonas.map(z=>{
+                const sel=z.id===selecionada;
+                return(
+                  <polygon key={z.id} points={pathDe(z.pontos)} fill={corDe(z.area_id)} fillOpacity={sel?0.38:0.24}
+                    stroke={sel?'#fff':corDe(z.area_id)} strokeWidth={sel?2.5:1.5} strokeDasharray={sel?'6 3':undefined}
+                    vectorEffect="non-scaling-stroke" className="zona-poligono" onClick={e=>selecionarZona(e,z)}/>
+                );
+              })}
               {pontos.length>1&&(
                 <polyline points={pathDe(pontos)} fill="none" stroke={corDe(areaAtual)} strokeWidth="2"
-                  strokeDasharray="4 3" vectorEffect="non-scaling-stroke"/>
+                  strokeDasharray="4 3" vectorEffect="non-scaling-stroke" pointerEvents="none"/>
               )}
-              {pontos.map((p,i)=>(
-                <circle key={i} cx={p[0]*100} cy={p[1]*100} r="1.1" fill="#fff"
-                  stroke={corDe(areaAtual)} strokeWidth="2" vectorEffect="non-scaling-stroke"/>
-              ))}
+              {zonaSel&&zonaSel.pontos.map((p,i)=>alca(p,i,zonaSel.id,corDe(zonaSel.area_id)))}
+              {pontos.map((p,i)=>alca(p,i,'',corDe(areaAtual)))}
             </svg>
+            {zonas.map(z=>{
+              const c=centroDe(z.pontos);const a=areaPorId(z.area_id);
+              return <span key={'r'+z.id} className="zona-rotulo" style={{left:(c[0]*100)+'%',top:(c[1]*100)+'%',background:corDe(z.area_id)}}>{(a||{}).nome||'Área removida'}</span>;
+            })}
+            <button type="button" className={"zona-vivo"+(aoVivo?' on':'')} onClick={()=>setAoVivo(v=>!v)}
+              aria-pressed={aoVivo} title={aoVivo?'Congelar a imagem':'Voltar a atualizar a imagem'}>
+              <Icon n={aoVivo?'pause':'play'}/>{aoVivo?'Ao vivo':'Congelada'}
+            </button>
           </figure>
-        : <p className="zona-sem-frame"><Icon n="video-off"/>Ligue a câmera e abra de novo</p>}
+        : <p className="zona-sem-frame"><Icon n="video-off"/>Ligue a câmera para desenhar sobre a imagem dela</p>}
 
-      {areas.length>0&&(
-        <fieldset className="zona-areas">
-          <legend className="sr">Área que estou desenhando</legend>
-          {areas.map(a=>(
-            <label key={a.id} className={"zona-area"+(areaAtual===a.id?' ativo':'')}>
-              <input type="radio" className="sr" name={nomeGrupo} checked={areaAtual===a.id} onChange={()=>setAreaAtual(a.id)}/>
-              <span className="area-swatch" style={{background:a.cor}}/>{a.nome}
-            </label>
-          ))}
-        </fieldset>
+      <p className="dica-linha" style={{marginTop:10}}><Icon n="pointer"/>{dica}</p>
+
+      <fieldset className="zona-areas">
+        <legend className="sr">{selecionada?'Área do desenho selecionado':'Área que estou desenhando'}</legend>
+        {areas.map(a=>(
+          <label key={a.id} className={"zona-area"+(areaAtual===a.id?' ativo':'')}>
+            <input type="radio" className="sr" name={nomeGrupo} checked={areaAtual===a.id} onChange={()=>trocarArea(a.id)}/>
+            <span className="area-swatch" style={{background:a.cor}}/>{a.nome}
+            {(a.epis_obrigatorios||[]).length>0&&<EpiSelos itens={a.epis_obrigatorios} sm max={4}/>}
+          </label>
+        ))}
+        <button type="button" className="zona-area" onClick={()=>setNovaArea(novaArea?null:{nome:'',cor:CORES_AREA[areas.length%CORES_AREA.length],epis:[]})}
+          aria-expanded={Boolean(novaArea)}><Icon n={novaArea?'x':'plus'}/>{novaArea?'Cancelar':'Nova área'}</button>
+      </fieldset>
+
+      {novaArea&&(
+        <form className="zona-nova" onSubmit={enviar(criarArea)} aria-label="Nova área">
+          <div className="field-row">
+            <Campo ic="text" rotulo="Nome da área"><input autoFocus value={novaArea.nome} placeholder="Nome (ex.: Solda, Andaime)" onChange={e=>setNovaArea(p=>({...p,nome:e.target.value}))}/></Campo>
+            <p className="field"><label className="sr" htmlFor={nomeGrupo+'-cor'}>Cor</label><input id={nomeGrupo+'-cor'} type="color" value={novaArea.cor} onChange={e=>setNovaArea(p=>({...p,cor:e.target.value}))}/></p>
+          </div>
+          {episDisp.length>0&&(
+            <fieldset className="epi-opcoes">
+              <legend className="dica-linha">EPIs obrigatórios nesta área (nenhum = área livre, sem alarme)</legend>
+              {episDisp.map(e=>{
+                const on=novaArea.epis.includes(e.key);
+                return(
+                  <label key={e.key} className={"epi-opcao"+(on?' on':'')}>
+                    <input type="checkbox" className="sr" checked={on} onChange={()=>setNovaArea(p=>({...p,epis:on?p.epis.filter(k=>k!==e.key):[...p.epis,e.key]}))}/>
+                    <span className="epi-b sm"><EpiGlifo item={e.key}/></span>{e.label}
+                  </label>
+                );
+              })}
+            </fieldset>
+          )}
+          <p className="acoes"><button type="submit" className="btn btn-primary btn-sm" disabled={!novaArea.nome.trim()}><Icon n="check"/>Criar área</button></p>
+        </form>
       )}
 
-      <div className="aj-linha">
-        <p className="dica-linha"><Icon n="pointer"/>Clique nos cantos · {pontos.length} ponto(s)</p>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={fecharPoligono} disabled={pontos.length<3}><Icon n="check"/>Fechar área</button>
-        <button type="button" className="ib sm" onClick={()=>setPontos(p=>p.slice(0,-1))} disabled={!pontos.length} aria-label="Desfazer ponto" data-dica="Desfazer"><Icon n="undo"/></button>
+      <div className="aj-linha zona-ferramentas">
+        {pontos.length>0
+          ? <>
+              <button type="button" className="btn btn-primary btn-sm" onClick={fecharPoligono} disabled={pontos.length<3}><Icon n="check"/>Fechar área</button>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={()=>setPontos(p=>p.slice(0,-1))}><Icon n="undo"/>Desfazer ponto</button>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={()=>setPontos([])}><Icon n="x"/>Cancelar desenho</button>
+            </>
+          : <>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={telaInteira} disabled={!areaAtual||!frame}><Icon n="maximize"/>Imagem inteira</button>
+              {zonaSel&&<button type="button" className="btn btn-danger btn-sm" onClick={apagarSelecionada}><Icon n="trash"/>Apagar desenho</button>}
+            </>}
       </div>
 
       {zonas.length>0&&(
         <ul className="zona-legenda" aria-label="Áreas desenhadas nesta câmera">
           {zonas.map(z=>(
-            <li key={z.id} className="zona-item">
-              <span className="area-swatch" style={{background:corDe(z.area_id)}}/>
-              {(areaPorId(z.area_id)||{}).nome||'Área removida'}
-              <button type="button" className="ib sm perigo" style={{width:28,height:28}} onClick={()=>setZonas(list=>list.filter(x=>x.id!==z.id))} aria-label="Apagar este desenho"><Icon n="x"/></button>
+            <li key={z.id} className={"zona-item"+(z.id===selecionada?' ativo':'')}>
+              <button type="button" className="zona-item-nome" onClick={()=>{setPontos([]);setSelecionada(z.id);setAreaAtual(z.area_id);}}>
+                <span className="area-swatch" style={{background:corDe(z.area_id)}}/>
+                {(areaPorId(z.area_id)||{}).nome||'Área removida'}
+              </button>
+              <button type="button" className="ib sm perigo" style={{width:28,height:28}} onClick={()=>{setZonas(list=>list.filter(x=>x.id!==z.id));if(selecionada===z.id)setSelecionada('');setMudou(true);}} aria-label="Apagar este desenho"><Icon n="x"/></button>
             </li>
           ))}
         </ul>
       )}
 
+      <p className="dica-linha" style={{marginTop:10}}><Icon n="user"/>A pessoa conta como dentro da área pelo ponto dos pés. Fora de todas as áreas valem os EPIs da câmera.</p>
+
       <footer className="modal-actions">
-        <button type="button" className="btn btn-secondary" onClick={onClose}>Cancelar</button>
+        <button type="button" className="btn btn-secondary" onClick={fechar}>Cancelar</button>
         <button type="button" className="btn btn-primary" onClick={salvar} disabled={salvando}><Icon n="check"/>{salvando?'Salvando...':'Salvar'}</button>
       </footer>
     </Janela>
@@ -2176,9 +2432,15 @@ function App(){
   const [user,setUser]=useState(null);
   // a página vem do endereço (#cameras, #epis...): link direto e "voltar" funcionam
   const [page,setPage]=useState(paginaDoHash);
-  const [backendUrl,setBackendUrl]=useState(INITIAL_API);
-  const [backendSource,setBackendSource]=useState(CONFIG_BACKEND_URL?'fixo':(CONFIG_HUB_URL?'hub':'manual'));
-  const [resolvingBackend,setResolvingBackend]=useState(false);
+  // servidor principal deste painel (EPIs, equipe, áreas, modelos). As câmeras podem
+  // rodar em qualquer servidor da conta: cada uma guarda o endereço do seu.
+  const [backendUrl,setBackendUrl]=useState(CONFIG_BACKEND_URL);
+  const [servidores,setServidores]=useState([]);
+  const [alcance,setAlcance]=useState({});
+  const [principalId,setPrincipalId]=useState('');
+  const [buscandoServidores,setBuscandoServidores]=useState(false);
+  const [servidoresCarregados,setServidoresCarregados]=useState(false);
+  const [completarCadastro,setCompletarCadastro]=useState(false);
   const [online,setOnline]=useState(false);
   const [streams_list,setStreamsList]=useState([]);
   const [defaultModel,setDefaultModel]=useState(()=>localStorage.getItem('epi_defaultModel')||'yolo26n.pt');
@@ -2227,13 +2489,15 @@ function App(){
   const [showNetCam,setShowNetCam]=useState(false);
   const [treinandoFaces,setTreinandoFaces]=useState(false);
   const [rostos,setRostos]=useState(null);   // situação do reconhecimento facial
-  const [analysisFocus,setAnalysisFocus]=useState(null);
   // modo de visualização das câmeras; vazio = decide sozinho pelo número de câmeras
   const [visual,setVisual]=useState(()=>localStorage.getItem('epi_visual')||'');
   const escolherVisual=(v)=>{setVisual(v);localStorage.setItem('epi_visual',v);};
   const nextIndex=useRef(0);
   // FIX remover câmera: conjunto de streams gerenciados localmente
   const managedStreams=useRef(new Set());
+  const alcanceRef=useRef({});
+  const principalRef=useRef('');
+  useEffect(()=>{alcanceRef.current=alcance;},[alcance]);
   const idServidor=useId();
 
   const loadTokens=useCallback(async(bUrl,tok)=>{
@@ -2261,47 +2525,90 @@ function App(){
   const showToast=(msg,type='ok')=>{setToast({msg,type});setTimeout(()=>setToast(null),3000);};
   const copyURL=(t)=>{try{navigator.clipboard.writeText(t);}catch{} showToast('Link copiado!');};
 
-  const refreshBackendFromHub=useCallback(async({attempts=6,delayMs=1200}={})=>{
-    if(!CONFIG_HUB_URL) return;
-    setResolvingBackend(true);
-    try{
-      const url=await resolveBackendFromHub({attempts,delayMs});
-      if(url){
-        setBackendUrl(url);
-        setBackendSource('hub');
-        localStorage.setItem('epi_backendUrl',url);
-        showToast('Backend selecionado pelo hub');
-      }
-    }catch(e){
-      showToast(mensagemErro(e,'Hub indisponivel'),'err');
-    }
-    setResolvingBackend(false);
-  },[]);
-
-  useEffect(()=>{
-    if(CONFIG_HUB_URL && !backendUrl){
-      refreshBackendFromHub({attempts:10,delayMs:1000});
-    }
-  },[backendUrl,refreshBackendFromHub]);
-
-  const onLogin=(tok,usr)=>{
+  const onLogin=(tok,usr,extra={})=>{
     setToken(tok);setUser(usr);
     localStorage.setItem('epi_token',tok);
+    // primeiro login pelo Google: pede o resto do cadastro (dá para deixar para depois)
+    if(extra.novo) setCompletarCadastro(true);
   };
 
   const logout=()=>{
-    authFetch(backendUrl+'/auth/logout',token,{method:'POST'}).catch(()=>{});
     setToken('');setUser(null);localStorage.removeItem('epi_token');
-    setStreamsList([]);
+    setStreamsList([]);setServidores([]);setAlcance({});setPrincipalId('');principalRef.current='';setServidoresCarregados(false);
+    if(!CONFIG_BACKEND_URL) setBackendUrl('');
     managedStreams.current.clear();
   };
 
+  // a sessão vem do site: confere e renova o token ao abrir e a cada 12 h
+  useEffect(()=>{
+    if(!token) return;
+    let vivo=true;
+    const renovar=()=>apiSite('/auth/renovar',{token,method:'POST'}).then(d=>{
+      if(!vivo) return;
+      setUser(d.user);
+      if(d.token&&d.token!==token){localStorage.setItem('epi_token',d.token);setToken(d.token);}
+    }).catch(e=>{
+      if(!vivo) return;
+      if(e.status===401||e.status===403){setToken('');setUser(null);localStorage.removeItem('epi_token');}
+    });
+    if(!user) renovar();
+    const iv=setInterval(renovar,RENOVAR_MS);
+    return()=>{vivo=false;clearInterval(iv);};
+  },[token]);
+
+  // servidores da conta: lista do site + teste de quais respondem daqui
+  const carregarServidores=useCallback(async({trocarPrincipal=false}={})=>{
+    if(!token) return;
+    setBuscandoServidores(true);
+    try{
+      const d=await apiSite('/servidores',{token});
+      const lista=d.servidores||[];
+      const alc=await localizarServidores(lista);
+      setServidores(lista);setAlcance(alc);
+      if(!CONFIG_BACKEND_URL){
+        const atual=principalRef.current;
+        const manter=!trocarPrincipal&&atual&&alc[atual];
+        const escolhido=manter?lista.find(s=>s.id===atual):melhorServidor(lista,alc);
+        principalRef.current=escolhido?escolhido.id:'';
+        setPrincipalId(principalRef.current);
+        setBackendUrl(escolhido?alc[escolhido.id].base:'');
+      }
+    }catch(e){
+      if(e.status===401){setToken('');setUser(null);localStorage.removeItem('epi_token');}
+    }
+    setBuscandoServidores(false);
+    setServidoresCarregados(true);
+  },[token]);
+  useEffect(()=>{
+    if(!token) return;
+    carregarServidores();
+    const iv=setInterval(()=>{if(!document.hidden) carregarServidores();},30000);
+    return()=>clearInterval(iv);
+  },[token,carregarServidores]);
+  const usarServidor=(s)=>{
+    const a=alcance[s.id];
+    if(!a) return;
+    principalRef.current=s.id;setPrincipalId(s.id);setBackendUrl(a.base);
+    showToast('Painel usando '+s.nome);
+  };
+  const nomeServidor=(base)=>{
+    if(servidores.length<2) return '';
+    const s=servidores.find(x=>alcance[x.id]&&alcance[x.id].base===base);
+    return s?s.nome:'';
+  };
+  // nova câmera vai para o servidor mais livre da conta
+  const servidorParaCamera=()=>{
+    const vivos=servidores.filter(s=>alcance[s.id]);
+    if(!vivos.length) return backendUrl;
+    vivos.sort((a,b)=>(Number(alcance[b.id].status.availability||0)-Number(alcance[a.id].status.availability||0))
+      ||(Number(alcance[a.id].status.active_streams||0)-Number(alcance[b.id].status.active_streams||0)));
+    return alcance[vivos[0].id].base;
+  };
+  const novoSid=()=>user.id+'_'+Math.random().toString(36).slice(2,8);
+
   useEffect(()=>{
     if(!token || !backendUrl) return;
-    authFetch(backendUrl+'/auth/me',token).then(r=>r.json()).then(d=>{
-      if(d.user){setUser(d.user);loadTokens(backendUrl,token);}
-      else{setToken('');localStorage.removeItem('epi_token');}
-    }).catch(()=>{});
+    loadTokens(backendUrl,token);
     authFetch(backendUrl+'/models',token).then(r=>r.json()).then(d=>{
       if(d.models&&d.models.length>0){setAvailableModels(d.models);const serverDefault=(d.models.find(m=>m.is_default)||{}).name;const saved=localStorage.getItem('epi_defaultModel');const pick=serverDefault||saved||d.models[0].name;setDefaultModel(pick);localStorage.setItem('epi_defaultModel',pick);}
     }).catch(()=>{});
@@ -2311,16 +2618,17 @@ function App(){
     if(!token || !backendUrl) return;
     const iv=setInterval(async()=>{
       try{
-        const r=await af(backendUrl+'/status');
+        const r=await authFetch(backendUrl+'/status',token);
         if(r.ok){
           setOnline(true);
           const d=await r.json();if(typeof d.paused==='boolean')setPaused(d.paused);
           if(d.node_id) setNodeId(d.node_id);
-        }
-        // Sincroniza streams EXTERNOS (criados por cam.html / outros dispositivos)
-        // mas NUNCA readiciona streams que o usuário removeu (managedStreams controla isso)
-        try{
-          const rs=await authFetch(backendUrl+'/streams',token);
+        }else setOnline(false);
+        // Sincroniza streams EXTERNOS (criados por cam.html / outros dispositivos) de todos
+        // os servidores da conta, mas NUNCA readiciona os que o usuário removeu
+        const bases=[...new Set([backendUrl,...Object.values(alcanceRef.current).filter(Boolean).map(a=>a.base)])];
+        await Promise.all(bases.map(async base=>{try{
+          const rs=await authFetch(base+'/streams',token);
           if(rs.ok){
             const ds=await rs.json();
             if(ds.streams){
@@ -2337,12 +2645,12 @@ function App(){
                   return false;
                 });
                 if(toAdd.length===0) return prev;
-                const novos=toAdd.map(s=>({streamId:s.stream_id,index:nextIndex.current++}));
+                const novos=toAdd.map(s=>({streamId:s.stream_id,index:nextIndex.current++,base}));
                 return [...prev,...novos];
               });
             }
           }
-        }catch{}
+        }catch{}}));
       }catch{setOnline(false);}
     },3000);
     af(backendUrl+'/tunnels').then(r=>r.json()).then(d=>setServerLinks(d)).catch(()=>{});
@@ -2414,27 +2722,28 @@ function App(){
     // Recarregar modelos ao abrir qualquer aba (pode ter novos modelos treinados)
     if(token&&page==='cameras') loadModels();
     if(token&&page==='config') loadModels();
-    if(token&&page==='analises') loadModels();
-  },[page,token]);
+    if(token&&page==='servidores') carregarServidores();
+  },[page,token,backendUrl]);
 
   const addStream=()=>{
     const idx=nextIndex.current++;
-    const sid=user.id+'_'+idx;
+    const sid=novoSid();
     managedStreams.current.add(sid);
-    setStreamsList(p=>[...p,{streamId:sid,index:idx}]);
+    setStreamsList(p=>[...p,{streamId:sid,index:idx,base:servidorParaCamera()}]);
   };
 
   const addDiscoveredStream=async(stream)=>{
     const url=String(stream?.uri||'').trim();
     if(!url){showToast('Stream sem URL','err');return;}
     const idx=nextIndex.current++;
-    const sid=user.id+'_'+idx;
+    const sid=novoSid();
     const source=url.toLowerCase().startsWith('rtsp://')?'rtsp':'http';
     managedStreams.current.add(sid);
     localStorage.setItem('epi_source_'+sid,source);
     localStorage.setItem('epi_camurl_'+sid,url);
     localStorage.setItem('epi_sm_'+sid,defaultModel);
-    setStreamsList(p=>[...p,{streamId:sid,index:idx}]);
+    // a busca na rede roda no servidor principal: a câmera achada fica nele
+    setStreamsList(p=>[...p,{streamId:sid,index:idx,base:backendUrl}]);
     try{
       const modelCfg=getModelRequiredItems(findModelByValue(availableModels,defaultModel));
       const r=await authFetch(backendUrl+'/streams/add',token,{method:'POST',body:JSON.stringify({
@@ -2454,9 +2763,10 @@ function App(){
 
   // FIX remover câmera: remove apenas localmente + avisa o servidor
   const removeStream=async(sid)=>{
+    const base=(streams_list.find(s=>s.streamId===sid)||{}).base||backendUrl;
     managedStreams.current.delete(sid);
     setStreamsList(p=>p.filter(s=>s.streamId!==sid));
-    try{await authFetch(backendUrl+'/streams/remove',token,{method:'POST',body:JSON.stringify({stream_id:sid})});}catch{}
+    try{await authFetch(base+'/streams/remove',token,{method:'POST',body:JSON.stringify({stream_id:sid})});}catch{}
   };
 
   const togglePause=async()=>{
@@ -2512,26 +2822,11 @@ function App(){
 
   const aviso=toast&&<Aviso toast={toast} onClose={()=>setToast(null)}/>;
 
-  if(!backendUrl){
-    return(<>
-      <main className="auth-wrap">
-        <header className="auth-hero">
-          <h1 className="auth-hero-marca">
-            {LOGO_URL&&<img src={LOGO_URL} alt=""/>}
-            <Brand size="xl" logo={false}/>
-          </h1>
-        </header>
-        <section className="auth-box" aria-label="Conexão com o servidor">
-          <p className="err-msg" role="status">{resolvingBackend?<span className="giro"/>:<Icon n="server"/>}{resolvingBackend?'Procurando o servidor...':'Servidor não encontrado'}</p>
-          {CONFIG_HUB_URL&&<button type="button" className="btn btn-primary btn-full" onClick={()=>refreshBackendFromHub()} disabled={resolvingBackend}><Icon n="refresh"/>{resolvingBackend?'Procurando...':'Procurar de novo'}</button>}
-          <div style={{marginTop:16}}><Campo ic="server" rotulo="Endereço do servidor"><input type="url" value={backendUrl} onChange={e=>{const v=cleanUrl(e.target.value);setBackendUrl(v);setBackendSource('manual');localStorage.setItem('epi_backendUrl',v);}} placeholder="Endereço do servidor (https://...)"/></Campo></div>
-        </section>
-      </main>
-      {aviso}
-    </>);
-  }
-
-  if(!token||!user) return <AuthScreen onLogin={onLogin} backendUrl={backendUrl}/>;
+  if(!token||!user) return <><AuthScreen onLogin={onLogin}/>{aviso}</>;
+  const atualizarConta=(tok,usr)=>{if(tok){setToken(tok);localStorage.setItem('epi_token',tok);}setUser(usr);};
+  // páginas que dependem de um servidor ligado
+  const precisaServidor=!['servidores','config'].includes(page);
+  const semServidor=!backendUrl;
 
   // Sem escolha do usuário: uma câmera sozinha abre em "grande", várias em "médio".
   const visualAtivo=visual||(streams_list.length<=1?'grande':'medio');
@@ -2545,7 +2840,7 @@ function App(){
       <header className="topbar">
         <a className="brand-link" href="#cameras" aria-label="Argos EPI: início"><Brand/></a>
         <div className="topo-dir">
-          <span className="rede" role="status" data-dica={online?'Servidor online':'Servidor offline'}>
+          <span className="rede" role="status" data-dica={backendUrl?(online?'Servidor online':'Servidor offline'):'Nenhum servidor ligado'}>
             <Icon n="server"/><span className={"dot"+(online?' on':'')}/><span className="sr">{online?'Servidor online':'Servidor offline'}</span>
           </span>
           <button type="button" className={"ib"+(alarmeLigado?'':' aceso')} onClick={()=>trocarAlarme(!alarmeLigado)}
@@ -2573,7 +2868,26 @@ function App(){
 
       <main className="main">
 
-      {page==='cameras'&&(
+      {user.perfil_incompleto&&page!=='config'&&(
+        <p className="faixa-aviso" role="status"><Icon n="id"/>Complete seu cadastro (CPF, telefone e setor) quando puder.
+          <a className="btn btn-secondary btn-sm" href="#config">Completar</a></p>
+      )}
+
+      {precisaServidor&&semServidor&&(
+        <Pagina ic="server" titulo="Nenhum servidor ligado">
+          {!servidoresCarregados||buscandoServidores
+            ? <p className="dica-linha"><span className="giro"/>Procurando os servidores da sua conta...</p>
+            : servidores.length===0
+              ? <Vazio ic="server" titulo="Vincule o primeiro servidor"><ComoVincular/></Vazio>
+              : <Vazio ic="server" titulo="Nenhum servidor da conta respondeu">
+                  <p className="dica-linha">Ligue um dos servidores ({servidores.map(s=>s.nome).join(', ')}) e aguarde alguns segundos.</p>
+                  <p className="acoes"><button type="button" className="btn btn-primary" onClick={()=>carregarServidores({trocarPrincipal:true})}><Icon n="refresh"/>Procurar de novo</button>
+                    <a className="btn btn-claro" href="#servidores"><Icon n="server"/>Servidores</a></p>
+                </Vazio>}
+        </Pagina>
+      )}
+
+      {page==='cameras'&&!semServidor&&(
         <Pagina ic="camera" titulo="Câmeras" total={streams_list.length} acoes={streams_list.length>0&&<>
           <SeletorVisual valor={visualAtivo} onChange={escolherVisual}/>
           <button type="button" className="btn btn-claro" onClick={()=>setShowNetCam(true)} aria-label="Buscar câmeras na rede"><Icon n="wifi"/><span className="btn-rotulo" aria-hidden="true">Rede</span></button>
@@ -2592,9 +2906,9 @@ function App(){
             <ul className={"grade v-"+visualAtivo} aria-label="Câmeras">
               {streams_list.map(s=>(
                 <li key={s.streamId}>
-                  <StreamCard streamId={s.streamId} token={token} backendUrl={backendUrl}
+                  <StreamCard streamId={s.streamId} token={token} backendUrl={s.base||backendUrl}
                     availableModels={availableModels} defaultModel={defaultModel} device={device} index={s.index}
-                    alarmeLigado={alarmeLigado} onToast={showToast} visual={visualAtivo}
+                    alarmeLigado={alarmeLigado} onToast={showToast} visual={visualAtivo} servidorNome={nomeServidor(s.base||backendUrl)}
                     onRemove={()=>removeStream(s.streamId)}/>
                 </li>
               ))}
@@ -2603,11 +2917,12 @@ function App(){
         </Pagina>
       )}
 
-      {page==='analises'&&(
-        <AnalysesPage token={token} backendUrl={backendUrl} availableModels={availableModels} defaultModel={defaultModel} onToast={showToast} focusId={analysisFocus}/>
+      {page==='servidores'&&(
+        <ServidoresPage servidores={servidores} alcance={alcance} principalId={principalId} carregando={buscandoServidores}
+          onAtualizar={()=>carregarServidores()} onUsar={usarServidor} token={token} onToast={showToast}/>
       )}
 
-      {page==='epis'&&(
+      {page==='epis'&&!semServidor&&(
         <Pagina ic="helmet" titulo="EPIs" total={epis.length} acoes={epis.length>0&&
           <button type="button" className="btn btn-gold" onClick={()=>setShowNovoEpi(true)} aria-label="Adicionar EPI"><Icon n="plus"/><span className="btn-rotulo" aria-hidden="true">EPI</span></button>}>
           {epis.length===0&&(
@@ -2629,7 +2944,7 @@ function App(){
         </Pagina>
       )}
 
-      {page==='funcionarios'&&(
+      {page==='funcionarios'&&!semServidor&&(
         <Pagina ic="users" titulo="Equipe" total={funcs.length} acoes={funcs.length>0&&
           <button type="button" className="btn btn-gold" onClick={()=>setShowNovoFunc(true)} aria-label="Cadastrar funcionário"><Icon n="user-plus"/><span className="btn-rotulo" aria-hidden="true">Funcionário</span></button>}>
           {rostos&&!rostos.disponivel&&(
@@ -2675,7 +2990,7 @@ function App(){
       )}
 
 
-      {page==='devices'&&(
+      {page==='devices'&&!semServidor&&(
         <Pagina ic="phone" titulo="Dispositivos remotos" total={camTokens.length} acoes={camTokens.length>0&&
           <button type="button" className="btn btn-gold" onClick={addToken} aria-label="Criar link para celular"><Icon n="plus"/><span className="btn-rotulo" aria-hidden="true">Link</span></button>}>
           {camTokens.length===0&&(
@@ -2697,7 +3012,7 @@ function App(){
                       </div>
                     </header>
                     <footer className="card-acoes">
-                      <button type="button" className="btn btn-primary btn-sm" onClick={()=>copyURL(buildCamLink(t.token,{nodeId,fallback:cfURL||flURL||backendUrl}))}><Icon n="link"/>Copiar link</button>
+                      <button type="button" className="btn btn-primary btn-sm" onClick={()=>copyURL(buildCamLink(t.token,{nodeId,conta:user.id,fallback:cfURL||flURL||backendUrl}))}><Icon n="link"/>Copiar link</button>
                       <button type="button" className="ib sm perigo dica-dir" onClick={()=>delToken(t.token)} aria-label={'Remover '+t.nome} data-dica="Remover"><Icon n="trash"/></button>
                     </footer>
                   </article>
@@ -2747,7 +3062,10 @@ function App(){
             )}
           </section>
 
+          <MinhaConta user={user} token={token} onAtualizado={atualizarConta} onToast={showToast} onSair={logout}/>
+
           {/* o link para abrir o sistema em outro aparelho so aparecia no log do servidor */}
+          {!semServidor&&<>
           <section className="bloco" aria-labelledby="titulo-acesso">
             <header className="bloco-titulo"><Icon n="globe"/><h2 id="titulo-acesso">Abrir em outro aparelho</h2></header>
             {cfURL
@@ -2761,26 +3079,14 @@ function App(){
 
           <AreasBoard token={token} backendUrl={backendUrl} onToast={showToast}/>
 
-          <section className="bloco" aria-labelledby="titulo-conta">
-            <h2 className="sr" id="titulo-conta">Minha conta</h2>
-            <div className="conta">
-              <abbr className="avatar grande" title={user.nome}>{iniciais(user.nome)}</abbr>
-              <div className="card-txt">
-                <p className="card-nome">{user.nome}</p>
-                <p className="card-sub">{user.email}{user.setor?' · '+user.setor:''}</p>
-              </div>
-              <button type="button" className="btn btn-danger btn-sm" onClick={logout}><Icon n="logout"/>Sair</button>
-            </div>
-          </section>
-
           <details className="avancado">
             <summary><Icon n="server"/><h2>Avançado</h2><Icon n="chevron" className="seta"/></summary>
             <div className="avancado-corpo">
               <section className="bloco" aria-labelledby={idServidor}>
                 <header className="bloco-titulo"><Icon n="server"/><h3 id={idServidor}>Servidor</h3></header>
                 <form className="form-grade" onSubmit={enviar(()=>{})}>
-                  <p className="field"><label htmlFor={idServidor+'-url'}><Icon n="globe"/>Endereço</label><input id={idServidor+'-url'} type="url" value={backendUrl} onChange={e=>{const v=cleanUrl(e.target.value);setBackendUrl(v);setBackendSource('manual');localStorage.setItem('epi_backendUrl',v);}}/></p>
-                  <p className="field"><span className="field-rot"><Icon n="refresh"/>Hub</span><button type="button" className="btn btn-secondary" onClick={()=>refreshBackendFromHub()} disabled={!CONFIG_HUB_URL||resolvingBackend}><Icon n="refresh"/>{CONFIG_HUB_URL?(resolvingBackend?'Buscando...':'Atualizar via hub'):('Origem: '+backendSource)}</button></p>
+                  <p className="field"><label htmlFor={idServidor+'-url'}><Icon n="globe"/>Endereço</label><input id={idServidor+'-url'} type="url" value={backendUrl} readOnly/></p>
+                  <p className="field"><span className="field-rot"><Icon n="refresh"/>Escolha</span><button type="button" className="btn btn-secondary" onClick={()=>carregarServidores({trocarPrincipal:true})} disabled={buscandoServidores}><Icon n="refresh"/>{buscandoServidores?'Buscando...':'Escolher o mais livre'}</button></p>
                   <p className="field"><label htmlFor={idServidor+'-modelo'}><Icon n="chip"/>Modelo padrão</label>
                     <select id={idServidor+'-modelo'} value={defaultModel} onChange={e=>{setDefaultModel(e.target.value);localStorage.setItem('epi_defaultModel',e.target.value);}}>
                       {availableModels.length>0
@@ -2808,7 +3114,7 @@ function App(){
                 <ul className="diag" style={{marginTop:12}} aria-label="Situação">
                   <li className={"chip"+(online?' bom':' alerta')}><Icon n="server"/>{online?'online':'offline'}</li>
                   {paused&&<li className="chip alerta"><Icon n="pause"/>IA pausada</li>}
-                  <li className="chip"><Icon n="id"/>{user.doc}</li>
+                  {user.doc&&<li className="chip"><Icon n="id"/>{user.doc}</li>}
                 </ul>
               </section>
 
@@ -2833,11 +3139,20 @@ function App(){
               </section>
             </div>
           </details>
+          </>}
         </Pagina>
       )}
       </main>
       <footer className="rodape"><small>Argos EPI · SENAI Lauro de Freitas/BA · TCC Desenvolvimento de Sistemas</small></footer>
 
+      {completarCadastro&&(
+        <Janela titulo="Complete seu cadastro" ic="id" onClose={()=>setCompletarCadastro(false)}>
+          <p className="pergunta-texto">Bem-vindo(a) ao Argos EPI! Informe seus dados para completar a conta. Dá para fazer depois em Ajustes.</p>
+          <FormPerfil user={user} token={token} botao="Salvar cadastro" onToast={showToast}
+            onAtualizado={(tok,usr)=>{atualizarConta(tok,usr);setCompletarCadastro(false);}}
+            onDepois={()=>setCompletarCadastro(false)}/>
+        </Janela>
+      )}
       <Perguntas/>
       <NetworkCameraModal open={showNetCam} onClose={()=>setShowNetCam(false)} backendUrl={backendUrl} token={token} onUseStream={addDiscoveredStream} onToast={showToast}/>
       {aviso}

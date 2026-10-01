@@ -233,3 +233,40 @@ def validate_cam_token(token: str) -> Optional[dict]:
         return None
     l = db.consultar_um('SELECT uid, token, nome FROM cam_tokens WHERE token=%s', (token,))
     return {'uid': l['uid'], 'token': l['token'], 'nome': l['nome']} if l else None
+
+
+# ── Contas do site (Supabase) ───────────────────────────────────────
+
+_espelhadas = {}
+
+
+def espelhar_conta(uid: str, nome: str = '', email: str = '', doc: str = '', role: str = 'user') -> Optional[dict]:
+    """Garante a conta do site na tabela usuarios deste servidor.
+
+    As contas agora vivem no site; aqui fica so uma copia, porque as tabelas do
+    servidor (EPIs, funcionarios, cameras...) apontam para usuarios(uid). Uma
+    conta antiga daqui com o mesmo e-mail/CPF mas outro uid tem os campos
+    renomeados, para nao travar o cadastro (os dados dela continuam no banco)."""
+    uid = str(uid or '').strip()
+    if not uid:
+        return None
+    email_n = _norm(email) or f'conta:{uid}'
+    doc_n = _norm_doc(doc) if doc else ''
+    doc_n = doc_n or f'conta:{uid}'
+    role = role if role in ('user', 'admin') else 'user'
+    chave = (nome, email_n, doc_n, role)
+    if _espelhadas.get(uid) == chave:
+        return get_user(uid)
+    with _lock:
+        for l in db.consultar('SELECT uid, email, doc FROM usuarios WHERE uid<>%s AND (email=%s OR doc=%s)',
+                              (uid, email_n, doc_n)):
+            db.executar('UPDATE usuarios SET email=%s, doc=%s WHERE uid=%s',
+                        (f"legado:{l['uid']}:{l['email']}", f"legado:{l['uid']}:{l['doc']}", l['uid']))
+        db.executar(
+            'INSERT INTO usuarios (uid,nome,doc,telefone,email,setor,senha_hash,role,blocked,restricoes,criado_em)'
+            " VALUES (%s,%s,%s,'',%s,'','',%s,FALSE,'[]'::jsonb,%s)"
+            ' ON CONFLICT (uid) DO UPDATE SET nome=EXCLUDED.nome, email=EXCLUDED.email, doc=EXCLUDED.doc,'
+            ' role=EXCLUDED.role, blocked=FALSE',
+            (uid, str(nome or '').strip() or email_n, doc_n, email_n, role, time.time()))
+        _espelhadas[uid] = chave
+    return get_user(uid)
