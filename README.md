@@ -172,3 +172,15 @@ CSS — gradiente radial sempre lê como círculo e a emenda entre dois aparece:
 ```bash
 python scripts/gerar_fundo.py     # escreve frontend/fundo-malha.jpg
 ```
+
+## Trocando a logo
+
+A logo, os ícones (192, 512, apple-touch), o favicon e a prévia de link
+(`og-argos.png`) saem todos da arte original com fundo branco:
+
+```bash
+python scripts/gerar_logo.py caminho/da/arte.jpeg
+```
+
+O script tira o fundo branco e grava em `frontend/`, `coisas/` e
+`treinamento/site_treinamento/public/`. Os ícones usam só a cabeça do lince.
