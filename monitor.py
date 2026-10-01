@@ -419,7 +419,7 @@ class MonitorApp:
                 text=True, bufsize=1, cwd=BASE_DIR)
             self._back_proc = proc
             self._log_sistema(f"[Sistema] Backend PID: {proc.pid}")
-            pat = re.compile(r"https://[a-z0-9\-]+\.trycloudflare\.com")
+            pat = re.compile(r"https://(?!api\.)[a-z0-9\-]+\.trycloudflare\.com")
             for line in iter(proc.stdout.readline,''):
                 line = line.rstrip()
                 self._log_backend(line)

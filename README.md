@@ -85,7 +85,12 @@ imagem num notebook sem GPU, contra 0,07 s do `argos_epi_v1`.
 
 ## Rodando
 
-Tudo sobe por Docker Compose, a partir da raiz do projeto:
+No Windows, o jeito mais fácil é dar dois cliques em **`instalar_docker.bat`**: ele liga o
+Docker Desktop, cria o `.env`, escolhe GPU ou CPU, constrói e sobe tudo, e espera o painel
+responder (`parar_docker.bat` desliga). Passo a passo, pasta `models` e instruções para IA
+em [`COMO_INSTALAR.md`](COMO_INSTALAR.md).
+
+Ou, à mão, a partir da raiz do projeto:
 
 ```bash
 cp .env.example .env      # ajuste antes de subir

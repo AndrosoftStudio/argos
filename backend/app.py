@@ -813,19 +813,28 @@ def _start_cf(port=8088):
                 cmd = c; break
         except: pass
     if not cmd: print("[CF] cloudflared não encontrado"); return
-    print(f"[CF] Iniciando tunnel → porta {port} (frontend)...")
-    proc = subprocess.Popen([cmd,"tunnel","--url",f"http://localhost:{port}"],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-    pat = re.compile(r"https://[a-z0-9\-]+\.trycloudflare\.com")
-    for line in iter(proc.stdout.readline,''):
-        print(f"[CF] {line.strip()}")
-        m = pat.search(line)
-        if m:
-            cloudflare_url = m.group(0)
-            print(f"[CF] ✓ {cloudflare_url}")
-            hub_event.set()
-            break
-    threading.Thread(target=lambda: [_ for _ in iter(proc.stdout.readline,'')], daemon=True).start()
+    # api.trycloudflare.com aparece na mensagem de erro quando o tunel nao abre:
+    # nao e o endereco do tunel e nao pode ir para o hub
+    pat = re.compile(r"https://(?!api\.)[a-z0-9\-]+\.trycloudflare\.com")
+    espera = 15
+    while True:
+        print(f"[CF] Iniciando tunnel → porta {port} (frontend)...")
+        proc = subprocess.Popen([cmd,"tunnel","--url",f"http://localhost:{port}"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in iter(proc.stdout.readline,''):
+            print(f"[CF] {line.strip()}")
+            m = pat.search(line)
+            if m:
+                cloudflare_url = m.group(0)
+                print(f"[CF] ✓ {cloudflare_url}")
+                hub_event.set()
+                threading.Thread(target=lambda: [_ for _ in iter(proc.stdout.readline,'')], daemon=True).start()
+                return
+        # cloudflared encerrou sem tunel (sem internet, por exemplo): tenta de novo
+        proc.wait()
+        print(f"[CF] Tunnel nao abriu; nova tentativa em {espera}s")
+        time.sleep(espera)
+        espera = min(espera * 2, 300)
 
 def _sys_metrics():
     m = {"cpu": psutil.cpu_percent(0.1), "ram_pct": psutil.virtual_memory().percent,

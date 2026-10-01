@@ -44,7 +44,7 @@ HUB_PADRAO = (os.environ.get('ARGOS_HUB_URL') or ENV.get('BACKEND_HUB_URL')
 # o hub exige chave para escrever (registro e heartbeat); so leitura e aberta
 CHAVE_PADRAO = (os.environ.get('HUB_API_KEY') or ENV.get('HUB_API_KEY') or '').strip()
 INTERVALO_S = 30            # o hub esquece um painel depois de 180 s sem noticias
-RE_TUNEL = re.compile(r'https://[a-z0-9\-]+\.trycloudflare\.com')
+RE_TUNEL = re.compile(r'https://(?!api\.)[a-z0-9\-]+\.trycloudflare\.com')
 
 
 def _log(msg):
