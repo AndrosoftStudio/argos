@@ -53,6 +53,20 @@ def test_padrao_e_o_modelo_que_detecta_melhor(tmp_path):
     assert epi_detector.melhor_modelo_argos(str(tmp_path)) == 'argos_epi_detr_v1.pt'
 
 
+def test_segunda_opiniao_so_com_detr_bom_o_bastante(tmp_path, detr):
+    import json
+    yolo = tmp_path / 'argos_epi_v1.pt'
+    yolo.write_bytes(b'x')
+    (tmp_path / 'argos_epi_v1.json').write_text(json.dumps({'map50_teste': 0.683}))
+    assert epi_detector.modelo_de_reforco(str(tmp_path), str(yolo), 'yolo') is None  # nenhum DETR ainda
+    detr.save(str(tmp_path / 'argos_epi_detr_v1.pt'))
+    (tmp_path / 'argos_epi_detr_v1.json').write_text(json.dumps({'map50_teste': 0.50}))
+    # abaixo de 80% da nota do YOLO: fraco demais para opinar
+    assert epi_detector.modelo_de_reforco(str(tmp_path), str(yolo), 'yolo') is None
+    (tmp_path / 'argos_epi_detr_v1.json').write_text(json.dumps({'map50_teste': 0.60}))
+    assert epi_detector.modelo_de_reforco(str(tmp_path), str(yolo), 'yolo').endswith('argos_epi_detr_v1.pt')
+
+
 def test_info_do_modelo_le_arquitetura_e_guarda(tmp_path, detr):
     caminho = str(tmp_path / 'argos_epi_detr_teste.pt')
     detr.save(caminho)

@@ -137,17 +137,28 @@ def main():
         if not os.path.exists(pesos):
             os.makedirs(comum.pastas(args.base)['pesos'], exist_ok=True)
             pesos = os.path.join(comum.pastas(args.base)['pesos'], os.path.basename(pesos))
-        modelo = YOLO(pesos)
-        modelo.train(
-            data=args.dados, epochs=args.epocas, imgsz=args.imgsz, batch=args.lote,
-            project=projeto, name=args.nome, exist_ok=True, patience=args.paciencia,
-            device=args.device, workers=args.workers,
-            cache=False if args.cache == 'nao' else args.cache,
-            cos_lr=True, close_mosaic=15, mixup=0.1, degrees=5.0,
-            fraction=0.02 if args.rapido else 1.0, seed=42, plots=not args.sem_graficos,
-            save_period=args.salvar_a_cada if args.salvar_a_cada > 0 else -1,
-            **padrao['extra'],
-        )
+        while True:
+            modelo = YOLO(pesos)
+            try:
+                modelo.train(
+                    data=args.dados, epochs=args.epocas, imgsz=args.imgsz, batch=args.lote,
+                    project=projeto, name=args.nome, exist_ok=True, patience=args.paciencia,
+                    device=args.device, workers=args.workers,
+                    cache=False if args.cache == 'nao' else args.cache,
+                    cos_lr=True, close_mosaic=15, mixup=0.1, degrees=5.0,
+                    fraction=0.02 if args.rapido else 1.0, seed=42, plots=not args.sem_graficos,
+                    save_period=args.salvar_a_cada if args.salvar_a_cada > 0 else -1,
+                    **padrao['extra'],
+                )
+                break
+            except Exception as e:
+                # o RT-DETR pesa mais que o YOLO: sem memoria na GPU, recomeca com metade do lote
+                if 'out of memory' not in str(e).lower() or not isinstance(args.lote, int) or args.lote <= 2:
+                    raise
+                args.lote //= 2
+                print(f"Faltou memoria na placa de video; recomecando com lote {args.lote}", flush=True)
+                import torch
+                torch.cuda.empty_cache()
         pasta_run = str(modelo.trainer.save_dir)
 
     melhor = os.path.join(pasta_run, 'weights', 'best.pt')
@@ -155,7 +166,8 @@ def main():
         sys.exit('best.pt nao foi gerado')
 
     final = YOLO(melhor)
-    metricas = final.val(data=args.dados, split='test', imgsz=args.imgsz, batch=padrao['lote'], device=args.device,
+    lote_val = args.lote if isinstance(args.lote, int) and args.lote > 0 else padrao['lote']
+    metricas = final.val(data=args.dados, split='test', imgsz=args.imgsz, batch=lote_val, device=args.device,
                          plots=False, verbose=False)
     resumo = {
         'nome': args.nome,
@@ -165,7 +177,7 @@ def main():
         'map50_95_teste': round(float(metricas.box.map), 4),
         'precisao_teste': round(float(metricas.box.mp), 4),
         'recall_teste': round(float(metricas.box.mr), 4),
-        'dados': args.dados, 'modelo_base': args.modelo, 'epocas': args.epocas, 'imgsz': args.imgsz,
+        'dados': args.dados, 'modelo_base': args.modelo, 'epocas': args.epocas, 'imgsz': args.imgsz, 'lote': args.lote,
         'run': pasta_run, 'treinado_em': time.strftime('%Y-%m-%d %H:%M:%S'),
     }
     comum.salvar_json(os.path.join(pasta_run, 'resumo.json'), resumo)

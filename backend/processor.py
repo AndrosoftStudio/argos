@@ -239,7 +239,7 @@ class VideoProcessor:
     def _detector_extra(self, model_path):
         """O modelo Argos da outra arquitetura (DETR x YOLO), para a segunda opiniao em quem esta
         encoberto. Sem um treinado em models/, o reforco usa so o recorte (ROI)."""
-        caminho = modelo_de_reforco(MODELS_DIR, self.detector.arquitetura)
+        caminho = modelo_de_reforco(MODELS_DIR, model_path, self.detector.arquitetura)
         if not caminho or os.path.abspath(caminho) == os.path.abspath(model_path):
             return None
         try:

@@ -101,27 +101,41 @@ def melhor_modelo_argos(pasta):
     return melhor_modelo_argos_entre(pasta, nomes)
 
 
+def nota_do_modelo(caminho):
+    """mAP50 no teste gravado pelo treino no <modelo>.json ao lado do .pt; None sem nota."""
+    try:
+        with open(caminho[:-3] + '.json', encoding='utf-8') as f:
+            m = json.load(f).get('map50_teste')
+    except (OSError, ValueError, AttributeError):
+        return None
+    return float(m) if isinstance(m, (int, float)) else None
+
+
 def melhor_modelo_argos_entre(pasta, nomes):
     """O de maior mAP50 no teste entre 'nomes' (arquivos de 'pasta'); sem nota, o mais recente."""
-    def nota(nome):
-        try:
-            with open(os.path.join(pasta, nome[:-3] + '.json'), encoding='utf-8') as f:
-                m = json.load(f).get('map50_teste')
-        except (OSError, ValueError, AttributeError):
-            m = None
-        return (float(m) if isinstance(m, (int, float)) else -1.0, os.path.getmtime(os.path.join(pasta, nome)))
+    def chave(nome):
+        caminho = os.path.join(pasta, nome)
+        n = nota_do_modelo(caminho)
+        return (n if n is not None else -1.0, os.path.getmtime(caminho))
 
-    return max(nomes, key=nota) if nomes else None
+    return max(nomes, key=chave) if nomes else None
 
 
-def modelo_de_reforco(pasta, arquitetura_principal):
+def modelo_de_reforco(pasta, principal, arquitetura_principal):
     """Caminho do melhor modelo Argos da OUTRA arquitetura (DETR se o principal e YOLO, e vice-versa),
-    usado como segunda opiniao em pessoas encobertas. None quando a equipe ainda nao treinou um."""
+    usado como segunda opiniao em pessoas encobertas. None quando a equipe ainda nao treinou um.
+
+    So entra quem detecta quase tao bem quanto o principal (80% da nota dele; 0,5 se o principal
+    nao tem nota): um detector fraco veria capacete onde nao ha e esconderia uma falta."""
     try:
         nomes = [f for f in os.listdir(pasta) if f.startswith('argos_epi') and f.endswith('.pt')]
     except OSError:
         return None
-    outros = [f for f in nomes if arquitetura_do_arquivo(os.path.join(pasta, f)) != arquitetura_principal]
+    base = nota_do_modelo(principal)
+    minimo = 0.8 * base if base is not None else 0.5
+    outros = [f for f in nomes
+              if (nota_do_modelo(os.path.join(pasta, f)) or 0.0) >= minimo
+              and arquitetura_do_arquivo(os.path.join(pasta, f)) != arquitetura_principal]
     if not outros:
         return None
     escolhido = melhor_modelo_argos_entre(pasta, outros)
