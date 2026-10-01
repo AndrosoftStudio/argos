@@ -185,6 +185,22 @@ PUBLIC_BACKEND_URL = os.environ.get('PUBLIC_BACKEND_URL', '').strip().rstrip('/'
 BACKEND_NODE_ID = os.environ.get('BACKEND_NODE_ID') or f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
 HUB_API_KEY = os.environ.get('HUB_API_KEY', '').strip()
 
+
+def _caminho_local(p: str) -> str:
+    """O banco guarda o caminho de quem gravou a foto: /app/dados/... no Docker,
+    C:/.../dados/... no Windows. Se ele nao existe nesta maquina, procura o
+    mesmo arquivo debaixo da pasta dados/ daqui (banco copiado do Docker para o
+    iniciar.bat, ou de uma versao antiga)."""
+    if not p or os.path.exists(p):
+        return p
+    partes = re.split(r'[\\/]+', p)
+    if 'dados' in partes:
+        i = len(partes) - 1 - partes[::-1].index('dados')
+        local = os.path.join(BASE_DIR, 'dados', *partes[i + 1:])
+        if os.path.exists(local):
+            return local
+    return p
+
 # ── Helpers ──────────────────────────────────────────────────────
 def _token():
     auth = request.headers.get('Authorization','')
@@ -318,7 +334,7 @@ def _carregar_epis(uid: str) -> list:
                 extra = json.loads(extra)
             except ValueError:
                 extra = {}
-        fotos = [{'id': f['id'], 'path': f['caminho']} for f in db.consultar(
+        fotos = [{'id': f['id'], 'path': _caminho_local(f['caminho'])} for f in db.consultar(
             'SELECT id, caminho FROM epi_fotos WHERE epi_id=%s ORDER BY id', (e['id'],))]
         epis.append({'id': e['id'], 'nome': e['nome'], 'descricao': e.get('descricao') or '',
                      'cor': e.get('cor') or '', 'fotos': fotos,
@@ -361,7 +377,7 @@ def _salvar_epis(uid: str, lista):
 def _carregar_funcs(uid: str) -> list:
     funcs = []
     for f in db.consultar('SELECT * FROM funcionarios WHERE uid=%s ORDER BY criado_em', (uid,)):
-        fotos = [{'id': r['id'], 'path': r['caminho'], 'tem_rosto': bool(r['embedding'])}
+        fotos = [{'id': r['id'], 'path': _caminho_local(r['caminho']), 'tem_rosto': bool(r['embedding'])}
                  for r in db.consultar(
                      'SELECT id, caminho, embedding FROM func_fotos WHERE func_id=%s ORDER BY id',
                      (f['id'],))]
@@ -2432,7 +2448,7 @@ def recalcular_rostos():
         ok = falhou = 0
         for f in alvo:
             try:
-                emb, motivo = face_id.embedding_de_foto(f['caminho'], _device_global)
+                emb, motivo = face_id.embedding_de_foto(_caminho_local(f['caminho']), _device_global)
                 if emb is None:
                     falhou += 1
                     print(f"[face] {os.path.basename(f['caminho'])}: {motivo}")

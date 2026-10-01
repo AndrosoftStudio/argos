@@ -131,10 +131,12 @@ class VideoProcessor:
                 continue
             func_id, func_nome = self._identificar(p)
             chave = func_id or f"track:{p.get('track_id')}"
+            # o t do pipeline e relogio de desempenho (perf_counter), nao data: gravado
+            # assim, o episodio saia em 1970, a faxina apagava e cada quadro abria outro
             comum = dict(stream_id=self.client_id, chave_pessoa=chave, func_id=func_id,
                          func_nome=func_nome, track_id=p.get('track_id'),
                          area_id=p.get('area_id'), area_nome=p.get('area'),
-                         img=img, box=p.get('bbox'), t=t)
+                         img=img, box=p.get('bbox'), t=time.time())
             for item in confirmados:
                 try:
                     auditoria.episodio(self.dados_dir, self.owner_uid, tipo='violacao',

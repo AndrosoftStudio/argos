@@ -85,12 +85,20 @@ imagem num notebook sem GPU, contra 0,07 s do `argos_epi_v1`.
 
 ## Rodando
 
-No Windows, o jeito mais fácil é dar dois cliques em **`instalar_docker.bat`**: ele liga o
-Docker Desktop, cria o `.env`, escolhe GPU ou CPU, constrói e sobe tudo, e espera o painel
-responder (`parar_docker.bat` desliga). Passo a passo, pasta `models` e instruções para IA
-em [`COMO_INSTALAR.md`](COMO_INSTALAR.md).
+Há dois jeitos de ligar o backend. Nos dois, o painel fica em `http://localhost:8088`.
+Passo a passo, pasta `models` e instruções para IA em [`COMO_INSTALAR.md`](COMO_INSTALAR.md).
 
-Ou, à mão, a partir da raiz do projeto:
+| | Com Docker | Sem Docker (Windows) |
+|---|---|---|
+| Quando usar | PC próprio, servidor | PC sem Docker ou sem administrador (ex.: laboratório da escola) |
+| Instalar | `instalar_docker.bat` | `configurar.bat` (uma vez) |
+| Ligar | sozinho, junto com o Docker Desktop | `iniciar.bat` |
+| Desligar | `parar_docker.bat` | Ctrl+C na janela do `iniciar.bat` |
+| Banco | container `argosepi-db` (porta 5432) | PostgreSQL portátil em `dados\pgdata` (porta 5433) |
+
+**Com Docker:** dois cliques em **`instalar_docker.bat`**. Ele liga o Docker Desktop, cria o
+`.env`, escolhe GPU ou CPU, constrói e sobe tudo, e espera o painel responder. À mão, a partir
+da raiz do projeto:
 
 ```bash
 cp .env.example .env      # ajuste antes de subir
@@ -98,9 +106,22 @@ docker compose --profile gpu up -d --build     # NVIDIA
 docker compose --profile cpu up -d --build     # sem GPU
 ```
 
-O painel fica em `http://localhost:8088`.
+**Sem Docker:** dois cliques em **`configurar.bat`** e depois em **`iniciar.bat`**. Não precisa
+de administrador nem de Python instalado: o `configurar.bat` baixa para dentro da pasta um
+Python 3.12 portátil (`python\`), o PyTorch (GPU NVIDIA ou CPU), as dependências, um
+PostgreSQL 16 portátil (`bin\pgsql`) e o `cloudflared`. São cerca de 1,5 GB na primeira vez.
+Depois de configurada, a pasta inteira pode ir num pendrive para outro PC Windows.
 
-O serviço `db` é um PostgreSQL 16 publicado só em `127.0.0.1:5432`. Nele ficam
+- `configurar.bat cpu` ou `configurar.bat gpu` força o modo.
+- `copiar_banco_do_docker.bat` copia contas, funcionários, rostos, áreas e auditoria do
+  banco do Docker para o banco portátil (as fotos já estão em `dados\`).
+- `atualizar.bat` reinstala as dependências depois de mudar o `requirements.txt`.
+
+**Linux e macOS:** `bash configurar.sh` e depois `bash iniciar.sh`. Esses scripts não trazem o
+banco: ligue só o PostgreSQL do Docker (`docker compose up -d db`) ou instale um PostgreSQL 16
+e defina `DATABASE_URL` no `.env`.
+
+O banco é um PostgreSQL 16 que só aceita conexão da própria máquina. Nele ficam
 contas, sessões, EPIs, funcionários, embeddings de rosto, modelos, áreas, zonas,
 câmeras e a auditoria. Em disco, sob `dados/`, ficam apenas os binários: fotos,
 pesos `.pt` e evidências.
@@ -159,6 +180,7 @@ O `.gitignore` bloqueia, e é para continuar assim:
 - **`models/`, `weights/`, `runs/`, `*.pt`** — pesados e recriáveis pelo
   `treinamento/`.
 - **`cloudflared.exe`** — baixado na construção da imagem (ver `Dockerfile`).
+- **`bin/`, `python/`** — Python, uv e PostgreSQL portáteis, baixados pelo `configurar.bat`.
 
 `POSTGRES_PASSWORD` no `docker-compose.yml` e no `.env.example` é um valor
 padrão de desenvolvimento (`argos`), não a senha real — o banco só escuta em

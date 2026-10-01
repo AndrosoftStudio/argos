@@ -29,7 +29,7 @@ VENV_PY="$(resolve_venv_python || true)"
 if [[ -z "$VENV_PY" ]]; then
   say ""
   say "${GREEN}${BOLD}=====================================================${RESET}"
-  say "${GREEN}${BOLD} ARGOS EPI v17 - AndrosoftStudio${RESET}"
+  say "${GREEN}${BOLD} ARGOS EPI v20 - AndrosoftStudio${RESET}"
   say "${GREEN}${BOLD}=====================================================${RESET}"
   say ""
   say "${RED}[ERRO] Ambiente virtual nao encontrado.${RESET}"
@@ -54,6 +54,10 @@ if ! command -v cloudflared >/dev/null 2>&1 && [[ ! -x ./cloudflared && ! -f ./c
   say "[INFO] O sistema funcionara apenas na rede local."
   say ""
 fi
+
+say "[INFO] Banco: ${DATABASE_URL:-postgresql://argos:argos@localhost:5432/argosepi (padrao)}"
+say "       Sem PostgreSQL, ligue so o banco do Docker: docker compose up -d db"
+say ""
 
 say "[*] Iniciando servidor..."
 say "[*] Acesse: http://localhost:8088"

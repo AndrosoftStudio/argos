@@ -4,6 +4,7 @@
 venv/
 .venv/
 bin/
+python/
 dados/
 models/
 uploads/

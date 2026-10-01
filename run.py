@@ -1,4 +1,4 @@
-"""run.py - Launcher backend Argos EPI v17."""
+"""run.py - Launcher backend Argos EPI v20."""
 import os
 import sys
 import threading
@@ -24,10 +24,10 @@ except Exception:
 
 if __name__ == "__main__":
     if print_banner:
-        print_banner("Servidor backend v17 - IA, cameras, hub e TensorRT", compact=True)
+        print_banner("Servidor backend v20 - IA, cameras, hub e TensorRT", compact=True)
     else:
         print("=" * 58)
-        print("  Argos EPI v17 - AndrosoftStudio")
+        print("  Argos EPI v20 - AndrosoftStudio")
         print("=" * 58)
 
     if torch.cuda.is_available():

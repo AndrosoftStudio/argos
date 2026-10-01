@@ -43,7 +43,7 @@ resolve_venv_python() {
 }
 
 say ""
-say "${GREEN}${BOLD}Argos EPI v17 - configuracao${RESET}"
+say "${GREEN}${BOLD}Argos EPI v20 - configuracao${RESET}"
 say "[bootstrap] Procurando Python e preparando estrutura do projeto..."
 say ""
 
@@ -103,7 +103,7 @@ case "$GPU_CHOICE" in
     ;;
   *)
     TORCH_LABEL="PyTorch CPU"
-    "$VENV_PY" -m pip install torch torchvision torchaudio
+    "$VENV_PY" -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
     ;;
 esac
 say "[OK] $TORCH_LABEL instalado."
@@ -144,7 +144,10 @@ say ""
 
 say ""
 say "====================================================="
-say " Tudo pronto. Para iniciar o sistema, execute:"
+say " Tudo pronto. O backend precisa de um PostgreSQL 16:"
+say "   docker compose up -d db          (so o banco, em localhost:5432)"
+say "   ou instale o postgresql e defina DATABASE_URL no .env"
+say " Para iniciar o sistema, execute:"
 say "   bash iniciar.sh"
 say " Frontend local: http://localhost:8088"
 say " Hub opcional  : configure BACKEND_HUB_URL no .env"

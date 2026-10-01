@@ -36,6 +36,10 @@ treinamento/weights/
 cloudflared
 cloudflared.exe
 
+# Instalacao sem Docker (configurar.bat): Python, uv e PostgreSQL portateis
+bin/
+/python/
+
 # Python
 __pycache__/
 *.py[cod]

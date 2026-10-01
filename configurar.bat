@@ -1,287 +1,250 @@
 @echo off
 chcp 65001 >nul
-title Argos EPI v17 - Configuracao
+title Argos EPI v20 - Configurar (sem Docker)
 color 0A
-setlocal EnableDelayedExpansion
+setlocal EnableExtensions
 cd /d "%~dp0"
 
+REM =====================================================================
+REM  Prepara o Argos para rodar SEM Docker e SEM administrador:
+REM  Python 3.12 portatil (pasta python\), PyTorch, dependencias,
+REM  PostgreSQL portatil (bin\pgsql, banco em dados\pgdata, porta 5433)
+REM  e o cloudflared. Tudo fica dentro desta pasta; depois de configurada,
+REM  ela pode ser copiada para um pendrive e levada para outro PC Windows.
+REM
+REM  Uso: configurar.bat          detecta GPU NVIDIA sozinho
+REM       configurar.bat cpu      forca o modo CPU
+REM       configurar.bat gpu      forca o modo GPU (NVIDIA)
+REM =====================================================================
+set "MODO=%~1"
+set "PG_VERSAO=16.14-1"
+set "PG_PORTA=5433"
+set "UV=%CD%\bin\uv.exe"
+set "PY=%CD%\python\python.exe"
+set "PGBIN=%CD%\bin\pgsql\bin"
+set "PGDATA=%CD%\dados\pgdata"
+set "TAR=%SystemRoot%\System32\tar.exe"
+set "UV_LINK_MODE=copy"
+set "UV_HTTP_TIMEOUT=600"
+set "UV_CONCURRENT_DOWNLOADS=16"
+
 echo.
-echo  [bootstrap] Iniciando configurador do Argos EPI v17...
-echo  [bootstrap] Assim que o Python for encontrado, o banner completo sera exibido.
-echo.
-
-mkdir bin        2>nul
-mkdir models     2>nul
-mkdir dados\users 2>nul
-
-REM =====================================================
-REM  [1/6] Detectar Python
-REM =====================================================
-echo  [1/6] Procurando Python 3.12 ou 3.11...
-
-set "PYEXE="
-
-py -3.12 --version >nul 2>&1
-if not errorlevel 1 ( set "PYEXE=py -3.12" & goto :found_py )
-
-py -3.11 --version >nul 2>&1
-if not errorlevel 1 ( set "PYEXE=py -3.11" & goto :found_py )
-
-for %%P in (
-    "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
-    "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
-    "C:\Python312\python.exe"
-    "C:\Python311\python.exe"
-    "C:\Program Files\Python312\python.exe"
-    "C:\Program Files\Python311\python.exe"
-) do (
-    if exist %%P ( set "PYEXE=%%P" & goto :found_py )
-)
-
-where python >nul 2>&1 && ( set "PYEXE=python" & goto :found_py )
-where py     >nul 2>&1 && ( set "PYEXE=py"     & goto :found_py )
-
-echo  [ERRO] Python 3.11 ou 3.12 nao encontrado.
-echo  [INFO] Instale em: https://python.org
-pause & exit /b 1
-
-:found_py
-cls
-%PYEXE% scripts\banner.py --subtitle "Configuracao do ambiente - uv, PyTorch, YOLO, Cloudflare e modelos"
-for /f "tokens=*" %%V in ('%PYEXE% --version 2^>^&1') do echo  [OK] %%V via: %PYEXE%
-echo  Pasta do projeto: %CD%
-echo  Modo: instalacao assistida para Windows
+echo  =====================================================
+echo   ARGOS EPI v20 - Configuracao sem Docker
+echo  =====================================================
+echo   Pasta: %CD%
+echo   Nao precisa de administrador. Precisa de internet
+echo   (cerca de 1,5 GB na primeira vez).
 echo.
 
-REM =====================================================
-REM  [2/6] Baixar uv.exe + aria2c.exe (bootstrap)
-REM =====================================================
-echo  [2/6] Verificando uv.exe e aria2c.exe...
+if not exist "backend\app.py" goto :pasta_errada
+if not exist "requirements.txt" goto :pasta_errada
+for %%D in (bin models dados dados\users) do if not exist "%%D" mkdir "%%D"
 
-set "NEED_BOOT="
-if not exist "bin\uv.exe"     set "NEED_BOOT=%NEED_BOOT% uv"
-if not exist "bin\aria2c.exe" set "NEED_BOOT=%NEED_BOOT% aria2c"
-
-if defined NEED_BOOT (
-    echo  Baixando:%NEED_BOOT%...
-    %PYEXE% downloader.py bin %NEED_BOOT%
-) else (
-    echo  [OK] uv.exe e aria2c.exe ja existem.
-)
-
-if not exist "bin\uv.exe" (
-    echo  [ERRO] Falha ao baixar uv.exe. Verifique a conexao.
-    pause & exit /b 1
-)
+REM ---------------------------------------------------------------------
+REM  [1/7] uv (instalador de Python e pacotes)
+REM ---------------------------------------------------------------------
+echo  [1/7] Ferramentas de download...
+where curl.exe >nul 2>&1
+if errorlevel 1 goto :sem_ferramentas
+if not exist "%TAR%" goto :sem_ferramentas
+if exist "%UV%" goto :uv_ok
+echo      baixando uv...
+curl.exe -L --fail --retry 3 -# -o "bin\uv.zip" https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip
+if errorlevel 1 goto :sem_internet
+"%TAR%" -xf "bin\uv.zip" -C bin uv.exe
+del /q "bin\uv.zip" >nul 2>&1
+if not exist "%UV%" goto :sem_internet
+:uv_ok
+echo  [OK] uv pronto.
 echo.
 
-REM =====================================================
-REM  [3/6] Criar ambiente virtual com uv
-REM =====================================================
-echo  [3/6] Criando ambiente virtual com uv...
-
-if exist venv ( rmdir /s /q venv >nul 2>&1 )
-
-bin\uv.exe venv venv --python 3.12 2>nul
-if not exist "venv\Scripts\python.exe" (
-    echo  Tentando Python 3.11...
-    bin\uv.exe venv venv --python 3.11 2>nul
-)
-if not exist "venv\Scripts\python.exe" (
-    echo  Tentando sem versao especifica...
-    bin\uv.exe venv venv
-)
-if not exist "venv\Scripts\python.exe" (
-    echo  [ERRO] Falha ao criar venv.
-    pause & exit /b 1
-)
-echo  [OK] venv criado.
+REM ---------------------------------------------------------------------
+REM  [2/7] Python 3.12 portatil em python\
+REM ---------------------------------------------------------------------
+echo  [2/7] Python 3.12 portatil...
+if exist "%PY%" goto :py_ok
+if exist "bin\uvpython" rmdir /s /q "bin\uvpython"
+"%UV%" python install 3.12 --install-dir "%CD%\bin\uvpython" --no-bin
+if errorlevel 1 goto :sem_internet
+REM o uv cria um atalho (junction) cpython-3.12-...; o /ad-l pega so a pasta de verdade
+set "PYDIR="
+for /f "delims=" %%D in ('dir /b /ad-l "bin\uvpython\cpython-3.12*" 2^>nul') do set "PYDIR=%%D"
+if not defined PYDIR goto :sem_python
+move "bin\uvpython\%PYDIR%" "python" >nul
+rmdir /s /q "bin\uvpython" >nul 2>&1
+REM sem a marca do uv, os pacotes entram direto nesse Python (e ele fica portatil)
+del /q "python\Lib\EXTERNALLY-MANAGED" >nul 2>&1
+if not exist "%PY%" goto :sem_python
+:py_ok
+"%PY%" --version
+echo  [OK] Python em python\
 echo.
 
-REM =====================================================
-REM  [4/6] Detectar GPU e instalar PyTorch via uv
-REM        uv baixa pacotes em PARALELO - muito mais
-REM        rapido que pip para PyTorch (1-2 GB)
-REM =====================================================
-echo  [4/6] Selecione o hardware:
-echo.
-echo    [1] NVIDIA  CUDA 12.1  - Melhor performance
-echo    [2] NVIDIA  CUDA 12.4  - Drivers mais recentes
-echo    [3] AMD / Intel DirectML - Boa performance
-echo    [4] CPU apenas          - Funciona em qualquer PC
-echo.
-set /p GPU_CHOICE="   Digite 1, 2, 3 ou 4: "
-echo.
-
-if "%GPU_CHOICE%"=="1" (
-    set "TORCH_PKGS=torch torchvision torchaudio"
-    set "TORCH_IDX=--index-url https://download.pytorch.org/whl/cu121"
-    set "TORCH_LABEL=PyTorch CUDA 12.1"
-    set "GPU_TYPE=NVIDIA CUDA 12.1"
-)
-if "%GPU_CHOICE%"=="2" (
-    set "TORCH_PKGS=torch torchvision torchaudio"
-    set "TORCH_IDX=--index-url https://download.pytorch.org/whl/cu124"
-    set "TORCH_LABEL=PyTorch CUDA 12.4"
-    set "GPU_TYPE=NVIDIA CUDA 12.4"
-)
-if "%GPU_CHOICE%"=="3" (
-    set "TORCH_PKGS=torch torchvision torchaudio torch-directml"
-    set "TORCH_IDX="
-    set "TORCH_LABEL=PyTorch + DirectML"
-    set "GPU_TYPE=AMD/Intel DirectML"
-)
-if "%GPU_CHOICE%"=="4" (
-    set "TORCH_PKGS=torch torchvision torchaudio"
-    set "TORCH_IDX="
-    set "TORCH_LABEL=PyTorch CPU"
-    set "GPU_TYPE=CPU"
-)
-if not defined TORCH_PKGS (
-    echo  [AVISO] Opcao invalida, usando CPU.
-    set "TORCH_PKGS=torch torchvision torchaudio"
-    set "TORCH_IDX="
-    set "TORCH_LABEL=PyTorch CPU"
-    set "GPU_TYPE=CPU padrao"
-)
-
-echo  [*] Instalando %TORCH_LABEL% via uv (paralelo)...
+REM ---------------------------------------------------------------------
+REM  [3/7] PyTorch: GPU NVIDIA ou CPU
+REM ---------------------------------------------------------------------
+echo  [3/7] PyTorch...
+if /i "%MODO%"=="gpu" goto :modo_ok
+if /i "%MODO%"=="cpu" goto :modo_ok
+set "MODO=cpu"
+nvidia-smi >nul 2>&1
+if not errorlevel 1 set "MODO=gpu"
+:modo_ok
+REM mesmo PyTorch do Docker (cu124 na GPU)
+if /i "%MODO%"=="gpu" (set "TORCH_IDX=https://download.pytorch.org/whl/cu124") else (set "TORCH_IDX=https://download.pytorch.org/whl/cpu")
+if /i "%MODO%"=="gpu" (echo      GPU NVIDIA: PyTorch com CUDA, cerca de 2,5 GB) else (echo      Sem GPU NVIDIA: PyTorch para CPU, cerca de 250 MB)
+"%UV%" pip install --python "%PY%" torch torchvision --index-url %TORCH_IDX% --reinstall-package torch --reinstall-package torchvision
+if not errorlevel 1 goto :torch_ok
+if /i "%MODO%"=="cpu" goto :sem_internet
+echo  [AVISO] Falhou com GPU. Tentando PyTorch para CPU...
+set "MODO=cpu"
+"%UV%" pip install --python "%PY%" torch torchvision --index-url https://download.pytorch.org/whl/cpu --reinstall-package torch --reinstall-package torchvision
+if errorlevel 1 goto :sem_internet
+:torch_ok
+echo  [OK] PyTorch instalado (modo %MODO%).
 echo.
 
-set UV_CONCURRENT_DOWNLOADS=16
-set UV_HTTP_TIMEOUT=600
-
-if defined TORCH_IDX (
-    bin\uv.exe pip install --python venv\Scripts\python.exe %TORCH_PKGS% %TORCH_IDX%
-) else (
-    bin\uv.exe pip install --python venv\Scripts\python.exe %TORCH_PKGS%
-)
-
-if errorlevel 1 (
-    echo.
-    echo  [AVISO] Falhou. Tentando PyTorch CPU como fallback...
-    bin\uv.exe pip install --python venv\Scripts\python.exe torch torchvision torchaudio
-    if errorlevel 1 (
-        echo  [ERRO] PyTorch nao instalado. Verifique a conexao.
-        pause & exit /b 1
-    )
-    set "GPU_TYPE=CPU fallback"
-)
-echo  [OK] %TORCH_LABEL% instalado.
-echo.
-
-REM =====================================================
-REM  [5/6] Dependencias do projeto via uv (paralelo)
-REM =====================================================
-echo  [5/6] Instalando dependencias do projeto...
-
-set UV_CONCURRENT_DOWNLOADS=16
-
-bin\uv.exe pip install --python venv\Scripts\python.exe ^
-    "flask>=3.0.0"           ^
-    "flask-cors>=4.0.0"      ^
-    "flask-sock>=0.7.0"      ^
-    "opencv-python>=4.8.0"   ^
-    "ultralytics>=8.4.0"     ^
-    "numpy>=1.24.0,<2.0"     ^
-    "requests>=2.31.0"       ^
-    "psutil>=5.9.0"          ^
-    "gevent"                 ^
-    "Pillow"                  ^
-    "pyfiglet>=1.0.2"
-
-if errorlevel 1 (
-    echo  [AVISO] Tentando via requirements.txt...
-    bin\uv.exe pip install --python venv\Scripts\python.exe -r requirements.txt
-    if errorlevel 1 (
-        echo  [ERRO] Falha nas dependencias.
-        pause & exit /b 1
-    )
-)
+REM ---------------------------------------------------------------------
+REM  [4/7] Dependencias do projeto
+REM ---------------------------------------------------------------------
+echo  [4/7] Dependencias (requirements.txt)...
+"%UV%" pip install --python "%PY%" -r requirements.txt
+if errorlevel 1 goto :sem_internet
 echo  [OK] Dependencias instaladas.
 echo.
 
-REM =====================================================
-REM  [6/6] Binarios externos + modelos YOLO
-REM =====================================================
-echo  [6/6] Verificando cloudflared e modelos YOLO...
+REM ---------------------------------------------------------------------
+REM  [5/7] PostgreSQL portatil (porta 5433, so nesta maquina)
+REM ---------------------------------------------------------------------
+echo  [5/7] Banco de dados (PostgreSQL portatil)...
+if exist "%PGBIN%\pg_ctl.exe" goto :pg_bin_ok
+echo      baixando PostgreSQL %PG_VERSAO% (cerca de 320 MB)...
+curl.exe -L --fail --retry 3 -# -o "bin\pgsql.zip" https://get.enterprisedb.com/postgresql/postgresql-%PG_VERSAO%-windows-x64-binaries.zip
+if errorlevel 1 goto :sem_internet
+echo      extraindo...
+"%TAR%" -xf "bin\pgsql.zip" -C bin pgsql/bin pgsql/lib pgsql/share
+del /q "bin\pgsql.zip" >nul 2>&1
+if not exist "%PGBIN%\pg_ctl.exe" goto :sem_postgres
+:pg_bin_ok
 
-REM -- cloudflared --
-if not exist "cloudflared.exe" (
-    if not exist "bin\cloudflared.exe" (
-        echo  Baixando cloudflared.exe...
-        %PYEXE% downloader.py bin cloudflared
-    )
-    if exist "bin\cloudflared.exe" (
-        copy /y "bin\cloudflared.exe" "cloudflared.exe" >nul
-        echo  [OK] cloudflared.exe
-    )
-) else (
-    echo  [OK] cloudflared.exe ja existe.
+if exist "%PGDATA%\PG_VERSION" goto :pg_dados_ok
+echo      criando o banco em dados\pgdata...
+> "%TEMP%\argos_pw.txt" echo argos
+"%PGBIN%\initdb.exe" -D "%PGDATA%" -U argos --pwfile="%TEMP%\argos_pw.txt" -E UTF8 --no-locale -A scram-sha-256 >nul
+set "ERRO_INITDB=%errorlevel%"
+del /q "%TEMP%\argos_pw.txt" >nul 2>&1
+if not "%ERRO_INITDB%"=="0" goto :sem_postgres
+>> "%PGDATA%\postgresql.conf" echo port = %PG_PORTA%
+>> "%PGDATA%\postgresql.conf" echo listen_addresses = '127.0.0.1'
+"%PGBIN%\pg_ctl.exe" -D "%PGDATA%" -l "%CD%\dados\postgres.log" -w -t 60 start >nul
+if errorlevel 1 goto :sem_postgres
+set "PGPASSWORD=argos"
+"%PGBIN%\createdb.exe" -h 127.0.0.1 -p %PG_PORTA% -U argos argosepi
+if exist "dados\banco.sql" (
+    echo      importando dados\banco.sql (copia do banco do Docker^)...
+    "%PGBIN%\psql.exe" -q -v ON_ERROR_STOP=1 -1 -h 127.0.0.1 -p %PG_PORTA% -U argos -d argosepi -f "dados\banco.sql" >nul 2>"dados\banco_import.log"
 )
-
-REM -- modelos YOLO --
-set "NEED_MODELS="
-if not exist "models\yolo26n.pt" set "NEED_MODELS=sim"
-if not exist "models\yolo26s.pt" set "NEED_MODELS=sim"
-
-if defined NEED_MODELS (
-    echo  Baixando modelos YOLO...
-    %PYEXE% downloader.py bin modelos
-) else (
-    echo  [OK] Modelos YOLO ja existem.
-)
-
-REM =====================================================
-REM  Resultado final
-REM =====================================================
-echo.
-%PYEXE% scripts\banner.py --subtitle "Configuracao concluida - verificacao final" --compact
-
-if exist "venv\Scripts\python.exe" (
-    echo    [OK]  venv criado
-) else (
-    echo    [!!]  venv NAO criado - PROBLEMA GRAVE
-)
-
-if exist "bin\uv.exe"      echo    [OK]  bin\uv.exe
-if exist "bin\aria2c.exe"  echo    [OK]  bin\aria2c.exe
-if exist "cloudflared.exe" echo    [OK]  cloudflared.exe
-
-if exist "models\yolo26n.pt" (
-    echo    [OK]  models\yolo26n.pt
-) else (
-    echo    [!!]  models\yolo26n.pt NAO baixado
-)
-
-if exist "models\yolo26s.pt" (
-    echo    [OK]  models\yolo26s.pt
-) else (
-    echo    [!!]  models\yolo26s.pt NAO baixado
-)
-
-echo.
-echo  GPU escolhida: %GPU_TYPE%
+"%PGBIN%\pg_ctl.exe" -D "%PGDATA%" -m fast -w stop >nul
+echo  [OK] Banco criado (usuario argos, porta %PG_PORTA%).
+goto :pg_fim
+:pg_dados_ok
+echo  [OK] PostgreSQL e banco ja existem (dados\pgdata).
+:pg_fim
 echo.
 
-venv\Scripts\python.exe -c "import torch; v=torch.__version__; c=torch.cuda.is_available(); print(f'  PyTorch     : v{v}  |  CUDA: {c}')" 2>nul
-if errorlevel 1 echo  [!!] PyTorch nao instalado
+REM ---------------------------------------------------------------------
+REM  [6/7] cloudflared (link publico) e modelos
+REM ---------------------------------------------------------------------
+echo  [6/7] cloudflared e modelos...
+if exist "cloudflared.exe" goto :cf_ok
+echo      baixando cloudflared...
+curl.exe -L --fail --retry 3 -# -o "cloudflared.exe" https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe
+if errorlevel 1 (
+    del /q "cloudflared.exe" >nul 2>&1
+    echo  [AVISO] cloudflared nao baixou: o sistema funciona so na rede local.
+)
+:cf_ok
+if exist "cloudflared.exe" echo  [OK] cloudflared.exe
+if not exist "models\argos_epi_v1.pt" (
+    echo  [AVISO] models\argos_epi_v1.pt nao encontrado.
+    echo          Sem ele o sistema nao detecta os EPIs. Copie a pasta models do pacote.
+)
+if not exist "models\insightface\models\buffalo_l\w600k_r50.onnx" (
+    echo  [AVISO] Modelos de rosto nao encontrados em models\insightface.
+    echo          O sistema liga, mas sem reconhecimento facial.
+)
+echo.
 
-venv\Scripts\python.exe -c "import ultralytics; print('  Ultralytics : v' + ultralytics.__version__)" 2>nul
-if errorlevel 1 echo  [!!] Ultralytics nao instalado
+REM ---------------------------------------------------------------------
+REM  [7/7] Configuracao (.env)
+REM ---------------------------------------------------------------------
+echo  [7/7] Configuracao (.env)...
+if exist ".env" goto :env_ok
+copy /y ".env.example" ".env" >nul
+REM Cada maquina se registra no hub com um nome proprio
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$n = 'argosepi-' + $env:COMPUTERNAME.ToLower(); (Get-Content .env) -replace '^BACKEND_NODE_ID=.*', ('BACKEND_NODE_ID=' + $n) | Set-Content -Encoding ascii .env" >nul 2>&1
+echo  [OK] .env criado a partir do .env.example.
+goto :env_fim
+:env_ok
+echo  [OK] .env ja existe, mantido como esta.
+:env_fim
+echo.
 
-venv\Scripts\python.exe -c "import flask; print('  Flask       : v' + flask.__version__)" 2>nul
-if errorlevel 1 echo  [!!] Flask nao instalado
-
-venv\Scripts\python.exe -c "import cv2; print('  OpenCV      : v' + cv2.__version__)" 2>nul
-if errorlevel 1 echo  [!!] OpenCV nao instalado
+echo  Conferindo a instalacao...
+"%PY%" -c "import torch, ultralytics, flask, cv2, psycopg, onnxruntime; print('  PyTorch', torch.__version__, '| CUDA:', torch.cuda.is_available()); print('  Ultralytics', ultralytics.__version__, '| OpenCV', cv2.__version__)"
+if errorlevel 1 goto :import_falhou
 
 echo.
 echo  =====================================================
-echo   Tudo pronto. Para iniciar o sistema, execute: iniciar.bat
-echo   Frontend local: http://localhost:8088
-echo   Hub opcional  : configure BACKEND_HUB_URL no .env
+echo   TUDO PRONTO! Para ligar o Argos: iniciar.bat
 echo  =====================================================
+echo   Painel local : http://localhost:8088
+echo   Site         : https://argosepi.vercel.app
+echo                  (precisa da HUB_API_KEY no .env)
 echo.
 pause
-endlocal
+exit /b 0
+
+REM ---------------------------------------------------------------------
+REM  Erros
+REM ---------------------------------------------------------------------
+:pasta_errada
+echo.
+echo  [ERRO] Arquivos do projeto nao encontrados nesta pasta.
+echo         Este .bat precisa ficar na pasta do Argos, junto do run.py.
+goto :fim_erro
+
+:sem_ferramentas
+echo.
+echo  [ERRO] curl.exe ou tar.exe nao encontrados (vem no Windows 10 e 11).
+goto :fim_erro
+
+:sem_internet
+echo.
+echo  [ERRO] Falha ao baixar ou instalar. Confira a internet e rode de novo:
+echo         o que ja foi baixado e aproveitado.
+goto :fim_erro
+
+:sem_python
+echo.
+echo  [ERRO] O Python portatil nao foi instalado. Rode de novo.
+goto :fim_erro
+
+:sem_postgres
+echo.
+echo  [ERRO] O PostgreSQL portatil nao funcionou. Veja dados\postgres.log.
+echo         Se a porta %PG_PORTA% estiver em uso, feche o programa que a usa.
+goto :fim_erro
+
+:import_falhou
+echo.
+echo  [ERRO] O Python nao conseguiu carregar as bibliotecas (mensagem acima).
+echo         Se falar em DLL ou "Visual C++", instale o Visual C++ Redistributable:
+echo         https://aka.ms/vs/17/release/vc_redist.x64.exe
+goto :fim_erro
+
+:fim_erro
+echo.
+pause
+exit /b 1
