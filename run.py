@@ -11,6 +11,43 @@ sys.path.insert(0, os.path.join(BASE, "scripts"))
 os.makedirs(os.path.join(BASE, "dados", "users"), exist_ok=True)
 os.makedirs(os.path.join(BASE, "models"), exist_ok=True)
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(BASE, ".env"))
+except Exception:
+    pass
+
+
+def _porta_livre(p):
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.3)
+        if s.connect_ex(("127.0.0.1", p)) == 0:      # outro programa ja responde nela
+            return False
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("0.0.0.0", p))
+        except OSError:
+            return False
+    return True
+
+
+def _escolher_porta():
+    """8088 ocupada por outro programa? Usa a proxima livre ate 8097 (o site
+    procura o servidor nessa faixa na hora de vincular). Com ARGOS_PORTA
+    definido, ou no Docker, usa exatamente a porta configurada."""
+    if os.environ.get("ARGOS_PORTA", "").strip() or os.path.exists("/.dockerenv"):
+        return
+    for p in range(8088, 8098):
+        if _porta_livre(p):
+            os.environ["ARGOS_PORTA"] = str(p)
+            if p != 8088:
+                print(f"  AVISO porta 8088 ocupada por outro programa - usando a porta {p}")
+            return
+
+
+_escolher_porta()
+
 from backend.app import (app, _start_cf, get_local_ip, start_hub_registration,
                          start_auditoria_manutencao, iniciar_banco, start_conta_e_malha, PORTA)
 import backend.app as AM
@@ -45,7 +82,8 @@ if __name__ == "__main__":
 
     AM.local_ip = os.environ.get("ARGOS_LOCAL_IP", "").strip() or get_local_ip()
     print(f"  URL local  : http://{AM.local_ip}:{PORTA}")
-    print(f"  Vinculo    : http://localhost:{PORTA}/parear (abre sozinho na primeira vez)")
+    print(f"  Painel     : http://localhost:{PORTA}")
+    print("  Vinculo    : https://argosepi.vercel.app/parear.html (abre sozinho na primeira vez)")
     print("  CORS       : " + ", ".join(sorted(AM.CORS_ORIGINS)))
     print(f"  Dados      : {os.path.join(BASE, 'dados', 'users')}")
     print(f"  Modelos    : {os.path.join(BASE, 'models')}")

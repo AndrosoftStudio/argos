@@ -27,8 +27,8 @@ echo.
 
 netstat -ano | findstr /r /c:"TCP *[^ ]*:8088 .*LISTENING" >nul
 if not errorlevel 1 (
-    echo  [AVISO] A porta 8088 ja esta em uso. Se o Argos do Docker estiver ligado,
-    echo          desligue com parar_docker.bat antes de usar o iniciar.bat.
+    echo  [INFO] A porta 8088 ja esta em uso ^(talvez pelo Argos do Docker^).
+    echo         Este servidor vai usar a proxima porta livre, mostrada logo abaixo.
     echo.
 )
 
@@ -69,7 +69,7 @@ if not exist "cloudflared.exe" (
 )
 
 echo  [*] Iniciando servidor...
-echo  [*] Acesse: http://localhost:8088
+echo  [*] O endereco do painel aparece logo abaixo ^(normalmente http://localhost:8088^).
 echo  [*] Para desligar: Ctrl+C ou feche esta janela.
 echo.
 

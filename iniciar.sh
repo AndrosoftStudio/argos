@@ -39,8 +39,7 @@ fi
 
 "$VENV_PY" scripts/banner.py --subtitle "Inicializacao do servidor local - dashboard, IA e Cloudflare" || true
 say "Projeto : $ROOT_DIR"
-say "Backend : http://localhost:8088"
-say "Frontend: http://localhost:8088"
+say "Painel  : http://localhost:8088 (ou a proxima porta livre, mostrada abaixo)"
 say ""
 
 if [[ ! -f models/yolo26n.pt ]]; then
@@ -91,7 +90,6 @@ fi
 say ""
 
 say "[*] Iniciando servidor..."
-say "[*] Acesse: http://localhost:8088"
 say "[*] Pressione Ctrl+C para encerrar."
 say ""
 

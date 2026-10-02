@@ -109,6 +109,8 @@ def _erro_interno(e):
 # Porta do servidor: 8088 por padrao. Para ligar dois servidores no mesmo computador
 # (teste da malha), o segundo usa ARGOS_PORTA=8089.
 PORTA = int(os.environ.get('ARGOS_PORTA', '8088') or '8088')
+# Porta que o navegador do computador usa. No Docker pode ser outra (ARGOS_PORTA_DOCKER).
+PORTA_PUBLICADA = int(os.environ.get('ARGOS_PORTA_PUBLICADA') or PORTA)
 DEFAULT_CORS_ORIGINS = (f'https://argosepi.vercel.app,http://localhost:{PORTA},http://127.0.0.1:{PORTA},'
                         'http://localhost:8088,http://127.0.0.1:8088')
 CORS_ORIGINS = {o.strip().rstrip('/') for o in os.environ.get('CORS_ORIGINS', DEFAULT_CORS_ORIGINS).split(',') if o.strip()}
@@ -130,11 +132,18 @@ def _allowed_origin(origin):
 @app.after_request
 def cors_h(r):
     origin = _allowed_origin(request.headers.get("Origin"))
+    # O codigo de vinculo so pode ser lido pelo site oficial e pelo proprio PC:
+    # qualquer um cria um projeto "argosepi-xyz" na Vercel, entao preview nao vale aqui.
+    if origin and request.path == '/pareamento' and origin not in CORS_ORIGINS:
+        origin = None
     if origin:
         r.headers["Access-Control-Allow-Origin"] = origin
         r.headers["Access-Control-Allow-Headers"] = CORS_ALLOW_HEADERS
         r.headers["Access-Control-Allow-Methods"] = CORS_ALLOW_METHODS
         r.headers["Access-Control-Max-Age"] = "600"
+        # o site (https) le /pareamento em http://127.0.0.1: o Chrome pede este aviso
+        if request.headers.get("Access-Control-Request-Private-Network"):
+            r.headers["Access-Control-Allow-Private-Network"] = "true"
     if origin != '*':
         r.vary.add("Origin")
     return r
@@ -1135,12 +1144,8 @@ def pagina_parear():
                                f"Este servidor já está vinculado à conta de {c.get('nome') or c.get('email') or 'você'}. "
                                'Pode fechar esta página e abrir o painel pelo site.',
                                link='https://argosepi.vercel.app')
-    if e['link'] and float(e['expira_em'] or 0) > time.time():
-        return Response('', status=302, headers={'Location': e['link']})
-    if e['erro']:
-        return _pagina_vinculo('Aguardando o site do Argos', e['erro'] + '. Tentando de novo...', recarregar=True)
-    return _pagina_vinculo('Preparando o código de vínculo...', 'Esta página continua sozinha em instantes.',
-                           recarregar=True)
+    # o vinculo e feito no site, que acha este servidor sozinho
+    return Response('', status=302, headers={'Location': conta.link_vincular(PORTA_PUBLICADA)})
 
 
 @app.route('/pareamento', methods=['GET'])
@@ -1149,7 +1154,7 @@ def estado_pareamento():
         return jsonify({'error':'Disponível só no próprio servidor.'}), 403
     if request.args.get('simples'):   # para o instalar_docker.bat decidir se abre o navegador
         return Response('vinculado' if conta.vinculado() else 'nao_vinculado', mimetype='text/plain')
-    return jsonify(conta.estado_publico())
+    return jsonify(dict(conta.estado_publico(), versao='v20', docker=EM_DOCKER))
 
 
 @app.route('/malha/mudancas', methods=['GET'])
@@ -1221,7 +1226,7 @@ def start_conta_e_malha(abrir_navegador=False):
     sincronizacao com os outros servidores da mesma conta."""
     conta.ao_mudar(_ao_mudar_conta)
     malha.ao_aplicar(_ao_aplicar_malha)
-    conta.iniciar(_info_servidor, abrir_navegador=abrir_navegador, porta=PORTA)
+    conta.iniciar(_info_servidor, abrir_navegador=abrir_navegador, porta=PORTA_PUBLICADA)
     _ao_mudar_conta()
     malha.iniciar()
 

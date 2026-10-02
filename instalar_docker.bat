@@ -99,8 +99,28 @@ REM ---------------------------------------------------------------
 echo  [5/6] Removendo containers antigos do Argos (o banco fica guardado no volume)...
 for %%C in (argosepi-backend argosepi-backend-cpu argosepi-db argosepi-adminer) do docker rm -f %%C >nul 2>&1
 
-netstat -ano | findstr /r /c:"TCP *[^ ]*:8088 " >nul
-if not errorlevel 1 echo  [AVISO] A porta 8088 esta em uso por outro programa. Feche-o se a instalacao falhar.
+REM Porta do painel: 8088, ou a proxima livre ate 8097 se outro programa usa a 8088.
+REM A escolha fica no .env (ARGOS_PORTA_DOCKER); o site procura o servidor nessa faixa.
+set "PORTA="
+if exist ".env" for /f "tokens=2 delims==" %%p in ('findstr /b /c:"ARGOS_PORTA_DOCKER=" .env') do set "PORTA=%%p"
+if defined PORTA goto :porta_ok
+set /a PORTA=8088
+:testa_porta
+netstat -ano | findstr /r /c:"TCP *[^ ]*:%PORTA% .*LISTENING" >nul
+if errorlevel 1 goto :porta_achada
+set /a PORTA+=1
+if %PORTA% LEQ 8097 goto :testa_porta
+set /a PORTA=8088
+echo  [AVISO] As portas 8088 a 8097 estao em uso. Feche algum programa se a instalacao falhar.
+goto :porta_ok
+:porta_achada
+if not "%PORTA%"=="8088" (
+    echo  [AVISO] A porta 8088 esta em uso por outro programa: o Argos vai usar a porta %PORTA%.
+    >> .env echo.
+    >> .env echo ARGOS_PORTA_DOCKER=%PORTA%
+)
+:porta_ok
+set "ARGOS_PORTA_DOCKER=%PORTA%"
 netstat -ano | findstr /r /c:"TCP *[^ ]*:5432 " >nul
 if not errorlevel 1 echo  [AVISO] A porta 5432 esta em uso, talvez por um PostgreSQL instalado. Pare-o se a instalacao falhar.
 echo  [OK] Pronto para subir.
@@ -129,7 +149,7 @@ echo.
 echo  [*] Esperando o servidor responder (ate 5 minutos)...
 set /a ESPERA=0
 :espera_backend
-curl -s -f -o nul http://localhost:8088/status >nul 2>&1
+curl -s -f -o nul http://localhost:%PORTA%/status >nul 2>&1
 if not errorlevel 1 goto :pronto
 set /a ESPERA+=5
 if %ESPERA% GEQ 300 goto :demorou
@@ -140,21 +160,22 @@ goto :espera_backend
 REM Primeira vez: o servidor precisa ser vinculado a uma conta do site.
 REM O container nao tem navegador, entao a pagina de vinculo abre por aqui.
 set "VINCULO="
-for /f "delims=" %%v in ('curl -s "http://localhost:8088/pareamento?simples=1" 2^>nul') do set "VINCULO=%%v"
+for /f "delims=" %%v in ('curl -s "http://localhost:%PORTA%/pareamento?simples=1" 2^>nul') do set "VINCULO=%%v"
 if /i "%VINCULO%"=="nao_vinculado" (
     echo.
-    echo  [*] Abrindo o navegador para vincular este servidor a sua conta...
-    echo      Se nao abrir, acesse: http://localhost:8088/parear
-    start "" "http://localhost:8088/parear"
+    echo  [*] Abrindo o site para vincular este servidor a sua conta...
+    echo      Se nao abrir, acesse: https://argosepi.vercel.app/parear.html
+    echo      ou no painel: Servidores, Adicionar este computador.
+    start "" "https://argosepi.vercel.app/parear.html?porta=%PORTA%"
 )
 echo.
 echo  =====================================================
 echo   TUDO PRONTO! Argos EPI rodando no Docker (modo %PERFIL%)
 echo  =====================================================
 echo.
-echo   Painel local : http://localhost:8088
-echo   Vincular     : http://localhost:8088/parear  (so na primeira vez)
-echo   Status       : http://localhost:8088/status
+echo   Painel local : http://localhost:%PORTA%
+echo   Vincular     : https://argosepi.vercel.app/parear.html  (so na primeira vez)
+echo   Status       : http://localhost:%PORTA%/status
 echo   Site         : https://argosepi.vercel.app
 echo.
 echo   Containers   : %CONT% e argosepi-db
@@ -199,7 +220,7 @@ echo  [AVISO] O servidor ainda nao respondeu. Ultimas linhas do log:
 echo.
 docker logs --tail 40 %CONT%
 echo.
-echo  Pode ser so demora para carregar os modelos. Tente abrir http://localhost:8088
+echo  Pode ser so demora para carregar os modelos. Tente abrir http://localhost:%PORTA%
 echo  daqui a pouco. Para acompanhar: docker logs -f %CONT%
 goto :fim_erro
 

@@ -89,9 +89,11 @@ Há dois jeitos de ligar o backend. Nos dois, o painel fica em `http://localhost
 Passo a passo, pasta `models` e instruções para IA em [`COMO_INSTALAR.md`](COMO_INSTALAR.md).
 
 **Na primeira vez, o servidor pede para ser vinculado a uma conta:** o navegador abre
-`http://localhost:8088/parear`, que leva ao site com um código. A pessoa entra na conta
-(senha ou Google), confere o código e clica em **Vincular**. No Docker quem abre o
-navegador é o `instalar_docker.bat`; no `iniciar.bat`/`iniciar.sh`, o próprio servidor.
+o site em `argosepi.vercel.app/parear.html` (ou, no painel, **Servidores → Adicionar este
+computador**). O site acha o servidor deste computador sozinho; a pessoa entra na conta
+(senha ou Google) e clica em **Vincular**. No Docker quem abre o navegador é o
+`instalar_docker.bat`; no `iniciar.bat`/`iniciar.sh`, o próprio servidor. Se a porta 8088
+estiver ocupada, o servidor usa a próxima livre (até 8097).
 
 | | Com Docker | Sem Docker (Windows) | Sem Docker (Linux/macOS) |
 |---|---|---|---|
@@ -150,9 +152,11 @@ chegam nela pelo `vercel.json`.
 - **Tokens**: a API assina o login com uma chave Ed25519. Os servidores conferem a
   assinatura com a chave pública (embutida em `backend/conta.py`), sem ir à internet a
   cada pedido. Um servidor só atende a conta a que foi vinculado.
-- **Vínculo do servidor**: na primeira vez o servidor pede um código à API, abre a
-  página `/parear` (só funciona na própria máquina, nunca pelo túnel) e espera a pessoa
-  aprovar no site. A credencial do servidor fica no banco local (tabela `servidor_local`).
+- **Vínculo do servidor**: na primeira vez o servidor pede um código à API e abre o
+  site em `parear.html`. A página lê o código em `http://127.0.0.1:<porta>/pareamento`
+  (portas 8088 a 8097). Essa rota só responde ao próprio computador (nunca pelo túnel)
+  e só libera a leitura para o site oficial, então nenhum outro site ou computador pega
+  o código. A pessoa aprova e o servidor recebe a credencial. A credencial do servidor fica no banco local (tabela `servidor_local`).
   Desvincular em **Servidores** faz ele pedir um vínculo novo.
 - **Página Servidores**: lista os servidores da conta (online, GPU/CPU, carga, câmeras,
   malha), renomeia e desvincula. O painel escolhe sozinho o servidor mais livre que
@@ -190,7 +194,8 @@ Ajustes no `.env` (todos têm padrão; veja `.env.example`):
 |---|---|---|
 | `ARGOS_API_URL` | `https://argosepi.vercel.app/api` | API de contas (vínculo do servidor e lista dos pares da malha) |
 | `ARGOS_SERVIDOR_NOME` | nome do PC | como o servidor aparece em **Servidores** |
-| `ARGOS_PORTA` | `8088` | porta do painel (para ligar dois servidores no mesmo PC) |
+| `ARGOS_PORTA` | 8088 ou a próxima livre | porta do painel fora do Docker (definida = usa exatamente essa) |
+| `ARGOS_PORTA_DOCKER` | `8088` | porta do computador para o painel do Docker (o `instalar_docker.bat` escolhe se a 8088 estiver ocupada) |
 | `ARGOS_ABRIR_NAVEGADOR` | `1` | `0` não abre o navegador para o vínculo (fora do Docker) |
 | `ARGOS_TUNEL` | `1` | `0` não abre o túnel do Cloudflare (só rede local) |
 | `ARGOS_FUSO` | `America/Bahia` | fuso dos gráficos de desempenho (dias) |

@@ -725,17 +725,23 @@ function melhorServidor(lista,alcance){
 const SITE_PAREAR=(ARGOS_API.replace(/\/api$/,'')||'https://argosepi.vercel.app')+'/parear.html';
 function ComoVincular({compacto}){
   const [codigo,setCodigo]=useState('');
+  const [copiado,setCopiado]=useState(false);
+  const copiar=()=>{try{navigator.clipboard.writeText(SITE_PAREAR);setCopiado(true);setTimeout(()=>setCopiado(false),2500);}catch{}};
   return(
     <div className="como-vincular">
       <Passos rotulo="Como vincular um servidor" itens={[
         {ic:'server',txt:'Ligue o Argos no computador: instalar_docker.bat, iniciar.bat ou iniciar.sh'},
-        {ic:'globe',txt:'O navegador abre sozinho a página de vínculo (ou acesse localhost:8088/parear)'},
-        {ic:'check',txt:'Entre nesta conta, confira o código e clique em Vincular'},
+        {ic:'globe',txt:'Nesse mesmo computador, toque em "Adicionar este computador": o site encontra o servidor sozinho'},
+        {ic:'check',txt:'Entre nesta conta e clique em Vincular'},
       ]}/>
+      <p className="acoes" style={{marginTop:12}}>
+        <a className="btn btn-primary" href={SITE_PAREAR}><Icon n="plus"/>Adicionar este computador</a>
+        <button type="button" className="btn btn-claro" onClick={copiar}><Icon n={copiado?'check':'link'}/>{copiado?'Link copiado':'Copiar link para outro computador'}</button>
+      </p>
       {!compacto&&(
         <form className="aj-linha" style={{marginTop:12}} onSubmit={enviar(()=>{const c=codigo.trim();if(c) window.location.href=SITE_PAREAR+'?codigo='+encodeURIComponent(c);})}>
-          <Campo ic="key" rotulo="Código do servidor"><input value={codigo} onChange={e=>setCodigo(e.target.value.toUpperCase())} placeholder="Já tem o código? (ex.: ABCD-2345)" maxLength={9}/></Campo>
-          <button type="submit" className="btn btn-primary btn-sm" disabled={codigo.trim().length<8}><Icon n="link"/>Vincular</button>
+          <Campo ic="key" rotulo="Código do servidor"><input value={codigo} onChange={e=>setCodigo(e.target.value.toUpperCase())} placeholder="O site não achou? Digite o código da janela do servidor" maxLength={9}/></Campo>
+          <button type="submit" className="btn btn-secondary btn-sm" disabled={codigo.trim().length<8}><Icon n="key"/>Vincular</button>
         </form>
       )}
     </div>

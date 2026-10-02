@@ -17,8 +17,10 @@ x-backend: &backend
     DATABASE_URL: postgresql://${POSTGRES_USER:-argos}:${POSTGRES_PASSWORD:-argos}@db:5432/${POSTGRES_DB:-argosepi}
     # nome com que o servidor aparece na pagina Servidores do site
     ARGOS_SERVIDOR_NOME: ${ARGOS_SERVIDOR_NOME:-${COMPUTERNAME:-Argos} (Docker)}
+    # porta do computador para o painel (o instalar_docker.bat troca se a 8088 estiver ocupada)
+    ARGOS_PORTA_PUBLICADA: ${ARGOS_PORTA_DOCKER:-8088}
   ports:
-    - "8088:8088"
+    - "${ARGOS_PORTA_DOCKER:-8088}:8088"
   volumes:
     - ./dados:/app/dados
     - ./models:/app/models

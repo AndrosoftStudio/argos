@@ -5,8 +5,9 @@ As contas vivem no Supabase, atras da API do site (argosepi.vercel.app/api).
 O servidor nao guarda senha de ninguem:
 
   1. Na primeira vez que liga, pede um codigo de vinculo para a API e abre o
-     navegador em http://localhost:8088/parear (que leva para o site). A pessoa
-     entra na conta dela, confere o codigo e aprova.
+     site (argosepi.vercel.app/parear.html). O site acha este servidor sozinho
+     (le o codigo em http://127.0.0.1:<porta>/pareamento, que so responde ao
+     proprio computador), a pessoa entra na conta dela e aprova.
   2. O servidor recebe uma credencial assinada pela API e guarda no proprio
      banco (tabela servidor_local). A partir dai processa so para essa conta.
   3. Quem abre o painel manda o token da conta (assinado pela API com Ed25519);
@@ -27,6 +28,7 @@ import requests
 import db
 
 API_URL = (os.environ.get('ARGOS_API_URL') or 'https://argosepi.vercel.app/api').strip().rstrip('/')
+SITE_URL = API_URL[:-4] if API_URL.endswith('/api') else 'https://argosepi.vercel.app'
 # Chave publica do site. A privada fica so na Vercel (ARGOS_CHAVE_PRIVADA).
 CHAVE_PUBLICA_PADRAO = """-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEABreI+YNNatkR9G2LibIHYt+4mXn3yfWLESloxDvHwc4=
@@ -176,13 +178,17 @@ def _post(caminho, corpo, token=None, timeout=15):
     return requests.post(API_URL + caminho, json=corpo, headers=h, timeout=timeout)
 
 
-def _anunciar(link, codigo, local):
+def link_vincular(porta) -> str:
+    return f'{SITE_URL}/parear.html?porta={porta}'
+
+
+def _anunciar(codigo, site):
     linha = '=' * 64
     print(f"\n{linha}\n  VINCULE ESTE SERVIDOR A SUA CONTA DO ARGOS EPI\n"
-          f"  Abra no navegador : {local}\n"
-          f"  (ou direto no site: {link})\n"
-          f"  Codigo            : {codigo}   (vale 15 minutos)\n"
-          f"  Entre na sua conta, confira o codigo e clique em Vincular.\n{linha}\n", flush=True)
+          f"  Neste computador, abra: {site}\n"
+          f"  (ou no painel: Servidores > Adicionar este computador)\n"
+          f"  O site encontra o servidor sozinho. Entre na conta e clique em Vincular.\n"
+          f"  Se o site nao achar, digite o codigo: {codigo}   (vale 15 minutos)\n{linha}\n", flush=True)
 
 
 def _parear(info, abrir_navegador, porta, ja_abriu):
@@ -191,13 +197,13 @@ def _parear(info, abrir_navegador, porta, ja_abriu):
     r = _post('/parear/iniciar', corpo)
     r.raise_for_status()
     p = r.json()
-    local = f'http://localhost:{porta}/parear'
+    site = link_vincular(porta)
     with _lock:
         _estado.update(codigo=p['codigo'], link=p['link'], expira_em=p['expira_em'], erro='')
-    _anunciar(p['link'], p['codigo'], local)
+    _anunciar(p['codigo'], site)
     if abrir_navegador and not ja_abriu:
         try:
-            webbrowser.open(local)
+            webbrowser.open(site)
         except Exception:
             pass
     while time.time() < float(p['expira_em']):
