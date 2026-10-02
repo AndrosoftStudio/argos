@@ -510,6 +510,16 @@ dialog.modal.largo{width:min(900px,calc(100vw - 32px));}
 .scan-empty .ic{width:40px;height:40px;}
 .inline-cred{background:var(--wn-bg);border:1px solid #f3d38a;border-radius:10px;padding:12px;display:grid;gap:10px;}
 .net-corpo{display:grid;gap:12px;min-width:0;}
+.scan-alvo{display:grid;grid-template-columns:minmax(0,1fr);}
+.scan-grupo{display:grid;gap:8px;min-width:0;}
+.scan-grupo+.scan-grupo{border-top:1px solid var(--bd);padding-top:12px;margin-top:4px;}
+.scan-grupo-titulo{display:flex;align-items:center;gap:8px;font-size:1rem;font-weight:700;color:var(--tx);}
+.scan-grupo-titulo .ic{width:18px;height:18px;color:var(--brand);}
+.scan-lista{display:grid;gap:10px;min-width:0;padding:0;margin:0;}
+.escolha-servidor{display:grid;gap:8px;padding:0;margin:12px 0 0;}
+.escolha-servidor .btn{width:100%;justify-content:flex-start;flex-wrap:wrap;text-align:left;gap:8px;}
+.escolha-servidor .escolha-nome{font-weight:700;}
+.escolha-servidor small{margin-left:auto;color:var(--mt);font-weight:600;}
 .event-corpo{display:block;min-width:0;}
 .event-meta{display:block;}
 .zona-area:has(input:focus-visible),.epi-opcao:has(input:focus-visible){outline:3px solid var(--gold);outline-offset:2px;}

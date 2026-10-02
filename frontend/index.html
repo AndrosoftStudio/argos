@@ -23,7 +23,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Outfit:wght@300;400;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="painel.css?v=20261001-contas">
+<link rel="stylesheet" href="painel.css?v=20261002-filiais">
 </head>
 <body><div id="root"></div>
 <script type="text/babel">
@@ -1579,74 +1579,77 @@ function ModelCard({model,token,backendUrl,onRefresh,onToast,onSetDefault,defaul
   );
 }
 
-function NetworkCameraModal({open,onClose,backendUrl,token,onUseStream,onToast}){
+// Busca câmeras na rede de cada servidor da conta (um servidor por filial, por exemplo).
+// Cada servidor só enxerga a rede em que está, então a câmera achada fica nele.
+function NetworkCameraModal({open,onClose,backendUrl,token,servidores,onUseStream,onToast}){
   const [username,setUsername]=useState(()=>localStorage.getItem('epi_scan_user')||'');
   const [password,setPassword]=useState('');
   const [subnet,setSubnet]=useState('');
-  const [jobId,setJobId]=useState('');
-  const [job,setJob]=useState(null);
-  const [result,setResult]=useState(null);
+  const [alvo,setAlvo]=useState('todos');
+  const [buscas,setBuscas]=useState({});        // id do servidor -> {jobId, job, result, erro}
   const [choices,setChoices]=useState({});
   const [credDevice,setCredDevice]=useState(null);
   const [addedUris,setAddedUris]=useState({});
-  const devices=result?.devices||[];
-  const streamTotal=devices.reduce((acc,d)=>acc+(d.streams?.length||0),0);
-  const loading=job&&job.status==='running';
+  const lista=(servidores&&servidores.length)?servidores:[{id:'_',nome:'',base:backendUrl}];
+  const varios=lista.length>1;
+  const loading=Object.values(buscas).some(b=>b.job&&b.job.status==='running');
+  const ativos=Object.entries(buscas).filter(([,b])=>b.jobId).map(([id,b])=>id+':'+b.jobId).join(',');
+  const nomeDe=(id)=>(lista.find(s=>s.id===id)||{}).nome||'';
 
-  const runScan=async(extra={})=>{
-    try{
-      localStorage.setItem('epi_scan_user',username||'');
-      setResult(null);
-      setChoices({});
-      setJob({status:'running',message:'Iniciando analise em segundo plano'});
-      const r=await authFetch(backendUrl+'/cameras/scan/start',token,{method:'POST',body:JSON.stringify({
-        username:(extra.username ?? username).trim(),
-        password:extra.password ?? password,
-        subnet:(extra.subnet ?? subnet).trim(),
-        timeout:0.35,
-        include_onvif:true
-      })});
-      const d=await r.json().catch(()=>({}));
-      if(!r.ok) throw new Error(d.error||'Erro ao iniciar analise');
-      setJobId(d.job_id);
-      setJob(d.job);
-    }catch(e){
-      onToast&&onToast(mensagemErro(e,'Erro ao analisar a rede'),'err');
-      setJob(null);
-    }
+  const runScan=async(extra={},soId)=>{
+    localStorage.setItem('epi_scan_user',username||'');
+    const ids=soId?[soId]:(alvo==='todos'?lista.map(s=>s.id):[alvo]);
+    if(!soId) setChoices({});
+    setBuscas(p=>{const n=soId?{...p}:{};for(const id of ids) n[id]={job:{status:'running'}};return n;});
+    await Promise.all(ids.map(async id=>{
+      const srv=lista.find(s=>s.id===id);
+      try{
+        const r=await authFetch(srv.base+'/cameras/scan/start',token,{method:'POST',body:JSON.stringify({
+          username:(extra.username ?? username).trim(),
+          password:extra.password ?? password,
+          subnet:(extra.subnet ?? subnet).trim(),
+          timeout:0.35,
+          include_onvif:true
+        })});
+        const d=await r.json().catch(()=>({}));
+        if(!r.ok) throw new Error(d.error||'Erro ao iniciar analise');
+        setBuscas(p=>({...p,[id]:{jobId:d.job_id,job:d.job}}));
+      }catch(e){
+        setBuscas(p=>({...p,[id]:{erro:mensagemErro(e,'Erro ao analisar a rede')}}));
+      }
+    }));
   };
 
   useEffect(()=>{
-    if(!open) return;
-    if(!jobId) return;
+    if(!open||!ativos) return;
     let alive=true;
+    const pendentes=ativos.split(',').map(x=>x.split(':'));
     const poll=async()=>{
-      try{
-        const r=await authFetch(backendUrl+'/cameras/scan/jobs/'+jobId,token,{method:'GET'});
-        const d=await r.json().catch(()=>({}));
-        if(!alive) return;
-        if(!r.ok) throw new Error(d.error||'Erro ao acompanhar analise');
-        setJob(d.job);
-        if(d.job.status==='done'){
-          setResult(d.job.result||{devices:[]});
-          setJobId('');
-          onToast&&onToast(`${d.job.result?.count||0} camera(s) encontradas`);
-        }else if(d.job.status==='error'){
-          setJobId('');
-          onToast&&onToast(d.job.error||'Erro ao analisar a rede','err');
+      await Promise.all(pendentes.map(async([id,jobId])=>{
+        const srv=lista.find(s=>s.id===id);
+        if(!srv) return;
+        try{
+          const r=await authFetch(srv.base+'/cameras/scan/jobs/'+jobId,token,{method:'GET'});
+          const d=await r.json().catch(()=>({}));
+          if(!alive) return;
+          if(!r.ok) throw new Error(d.error||'Erro ao acompanhar analise');
+          if(d.job.status==='done'){
+            setBuscas(p=>({...p,[id]:{job:d.job,result:d.job.result||{devices:[]}}}));
+            onToast&&onToast(`${d.job.result?.count||0} câmera(s) encontradas`+(varios?' em '+srv.nome:''));
+          }else if(d.job.status==='error'){
+            setBuscas(p=>({...p,[id]:{erro:d.job.error||'Erro ao analisar a rede'}}));
+          }else{
+            setBuscas(p=>p[id]&&p[id].jobId===jobId?{...p,[id]:{...p[id],job:d.job}}:p);
+          }
+        }catch(e){
+          if(alive) setBuscas(p=>({...p,[id]:{erro:mensagemErro(e,'Erro ao acompanhar analise')}}));
         }
-      }catch(e){
-        if(alive){
-          setJobId('');
-          setJob(null);
-          onToast&&onToast(mensagemErro(e,'Erro ao acompanhar analise'),'err');
-        }
-      }
+      }));
     };
     poll();
     const iv=setInterval(poll,900);
     return()=>{alive=false;clearInterval(iv);};
-  },[open,jobId,backendUrl,token]);
+  },[open,ativos,token]);
 
   const streamLabel=(st,i)=>{
     const bits=[st.label||('Stream '+(i+1))];
@@ -1654,36 +1657,105 @@ function NetworkCameraModal({open,onClose,backendUrl,token,onUseStream,onToast})
     bits.push(st.source==='onvif'?'ONVIF':'RTSP sugerido');
     return bits.join(' | ');
   };
-  const selectedStreamFor=(dev)=>{
+  const chave=(srv,dev)=>srv.id+'|'+dev.ip;
+  const selectedStreamFor=(srv,dev)=>{
     const streams=dev.streams||[];
     if(!streams.length) return null;
-    const idx=Number(choices[dev.ip]||0);
+    const idx=Number(choices[chave(srv,dev)]||0);
     return streams[Math.max(0,Math.min(idx,streams.length-1))]||streams[0];
   };
-  const addDevice=(dev,force=false)=>{
-    const st=selectedStreamFor(dev);
-    if(!st){
-      setCredDevice(dev);
+  const addDevice=(srv,dev,force=false)=>{
+    const st=selectedStreamFor(srv,dev);
+    if(!st || (!force && st.source!=='onvif' && !username.trim() && !String(st.uri||'').includes('@'))){
+      setCredDevice({srvId:srv.id,ip:dev.ip});
       return;
     }
-    if(!force && st.source!=='onvif' && !username.trim() && !String(st.uri||'').includes('@')){
-      setCredDevice(dev);
-      return;
-    }
-    onUseStream&&onUseStream({...st,device:dev});
-    setAddedUris(p=>({...p,[st.uri]:true}));
+    onUseStream&&onUseStream({...st,device:dev},srv.base);
+    setAddedUris(p=>({...p,[srv.id+'|'+st.uri]:true}));
   };
   const retryWithCredentials=()=>{
     if(!credDevice) return;
+    const {srvId,ip}=credDevice;
     setCredDevice(null);
-    runScan({subnet:credDevice.ip,username,password});
+    runScan({subnet:ip,username,password},srvId);
+  };
+
+  const Dispositivo=(srv,dev)=>{
+    const streams=dev.streams||[];
+    const selected=selectedStreamFor(srv,dev);
+    const selectedUri=selected?.uri||'';
+    const alreadyAdded=Boolean(selectedUri&&addedUris[srv.id+'|'+selectedUri]);
+    const showCred=credDevice&&credDevice.srvId===srv.id&&credDevice.ip===dev.ip;
+    const nomeDev=dev.display_name||('Câmera '+dev.ip);
+    return(
+      <li key={dev.ip}>
+        <article className={"scan-device"+(showCred?' credential-open':'')} aria-label={nomeDev}>
+          <header className="scan-device-top">
+            <span className="card-ico sm"><Icon n="camera"/></span>
+            <div className="scan-device-main">
+              <h3 className="scan-title" title={nomeDev}>{nomeDev}</h3>
+              <ul className="diag" style={{marginTop:4}}>
+                <li className="chip"><Icon n="globe"/>{dev.ip}</li>
+                {streams.length>1&&<li className="chip">{streams.length} faixas</li>}
+                {(dev.discovery||[]).includes('onvif')&&<li className="chip">ONVIF</li>}
+                {(dev.open_ports||[]).includes(554)&&<li className="chip">RTSP</li>}
+                {alreadyAdded&&<li className="chip bom"><Icon n="check"/>adicionada</li>}
+              </ul>
+            </div>
+          </header>
+          <div className="scan-device-controls">
+            <div style={{minWidth:0}}>
+              {streams.length>0?(
+                <>
+                  <select className="scan-select largo" value={choices[chave(srv,dev)]||0} onChange={e=>setChoices(p=>({...p,[chave(srv,dev)]:e.target.value}))} aria-label={'Stream de '+nomeDev}>
+                    {streams.slice(0,24).map((st,i)=><option key={(st.uri||'')+i} value={i}>{streamLabel(st,i)}</option>)}
+                  </select>
+                  <p className="scan-uri" title={maskCameraUrl(selected?.masked_uri||selected?.uri)}><code>{maskCameraUrl(selected?.masked_uri||selected?.uri)}</code></p>
+                </>
+              ):(
+                <p className="scan-meta"><Icon n="lock"/>Precisa de usuário e senha</p>
+              )}
+            </div>
+            <button type="button" className={alreadyAdded?'btn btn-secondary btn-sm':'btn btn-primary btn-sm'} onClick={()=>addDevice(srv,dev)} disabled={alreadyAdded}>
+              <Icon n={alreadyAdded?'check':streams.length?'plus':'lock'}/>{streams.length?(alreadyAdded?'Adicionada':'Adicionar'):'Senha'}
+            </button>
+          </div>
+          {showCred&&(
+            <form className="inline-cred" onSubmit={enviar(retryWithCredentials)} aria-label={'Usuário e senha de '+dev.ip}>
+              <p className="scan-meta" style={{fontWeight:700}}><Icon n="lock"/>{dev.ip}{varios?' · '+srv.nome:''}</p>
+              <div className="scan-form">
+                <Campo ic="user" rotulo="Usuário da câmera"><input value={username} onChange={e=>setUsername(e.target.value)} placeholder="Usuário" autoComplete="off"/></Campo>
+                <Campo ic="lock" rotulo="Senha da câmera"><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Senha" autoComplete="off"/></Campo>
+                <button type="submit" className="btn btn-primary" disabled={!username.trim()||loading}><Icon n="search"/>Buscar</button>
+                {streams.length>0&&<button type="button" className="btn btn-secondary" onClick={()=>{setCredDevice(null);addDevice(srv,dev,true);}}>Adicionar assim</button>}
+              </div>
+            </form>
+          )}
+        </article>
+      </li>
+    );
   };
 
   if(!open) return null;
 
+  const grupos=lista.filter(s=>buscas[s.id]);
+  const totalCams=grupos.reduce((n,s)=>n+((buscas[s.id].result?.devices||[]).length),0);
+  const terminou=grupos.length>0&&!loading;
+
   return(
     <Janela titulo="Câmeras na rede" ic="wifi" onClose={onClose} tamanho="medio" fecharFora={false}>
       <div className="net-corpo">
+        {varios&&<p className="dica-linha"><Icon n="server"/>Cada servidor procura na rede em que está (por exemplo, na própria filial). A câmera encontrada fica no servidor que a encontrou.</p>}
+        {varios&&(
+          <div className="scan-alvo">
+            <Campo ic="server" rotulo="Buscar na rede de">
+              <select value={alvo} onChange={e=>setAlvo(e.target.value)}>
+                <option value="todos">Todos os servidores ({lista.length})</option>
+                {lista.map(s=><option key={s.id} value={s.id}>{s.nome}</option>)}
+              </select>
+            </Campo>
+          </div>
+        )}
         <form className="scan-form" onSubmit={enviar(()=>runScan())} aria-label="Buscar câmeras">
           <Campo ic="user" rotulo="Usuário da câmera"><input value={username} onChange={e=>setUsername(e.target.value)} placeholder="Usuário" autoComplete="off" data-foco/></Campo>
           <Campo ic="lock" rotulo="Senha da câmera"><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Senha" autoComplete="off"/></Campo>
@@ -1691,73 +1763,31 @@ function NetworkCameraModal({open,onClose,backendUrl,token,onUseStream,onToast})
           <button type="submit" className="btn btn-primary" disabled={loading}><Icon n="search"/>{loading?'Buscando...':'Buscar'}</button>
         </form>
         {loading&&<div className="scan-bar" role="progressbar" aria-label="Buscando câmeras"><span/></div>}
-        {result&&(
-          <ul className="diag" aria-label="Resultado">
-            <li className="chip"><Icon n="camera"/>{devices.length} câmera(s)</li>
-            <li className="chip"><Icon n="video"/>{streamTotal} stream(s)</li>
-            <li className="chip"><Icon n="globe"/>{(result.networks||[]).join(', ')||'auto'}</li>
-          </ul>
-        )}
-        {!result&&!loading&&<p className="scan-empty"><Icon n="wifi"/>Toque em Buscar</p>}
-        {result&&devices.length===0&&<p className="scan-empty"><Icon n="video-off"/>Nenhuma câmera encontrada</p>}
-        {devices.length>0&&(
-          <ul className="scan-results" aria-label="Câmeras encontradas">
-            {devices.map(dev=>{
-              const streams=dev.streams||[];
-              const selected=selectedStreamFor(dev);
-              const selectedUri=selected?.uri||'';
-              const alreadyAdded=Boolean(selectedUri&&addedUris[selectedUri]);
-              const showCred=credDevice&&credDevice.ip===dev.ip;
-              const nomeDev=dev.display_name||('Câmera '+dev.ip);
+        {!grupos.length&&<p className="scan-empty"><Icon n="wifi"/>Toque em Buscar</p>}
+        {terminou&&totalCams===0&&grupos.every(s=>!buscas[s.id].erro)&&<p className="scan-empty"><Icon n="video-off"/>Nenhuma câmera encontrada</p>}
+        {grupos.length>0&&(
+          <div className="scan-results">
+            {grupos.map(srv=>{
+              const b=buscas[srv.id];
+              const devices=b.result?.devices||[];
+              const streamTotal=devices.reduce((acc,d)=>acc+(d.streams?.length||0),0);
               return(
-                <li key={dev.ip}>
-                  <article className={"scan-device"+(showCred?' credential-open':'')} aria-label={nomeDev}>
-                    <header className="scan-device-top">
-                      <span className="card-ico sm"><Icon n="camera"/></span>
-                      <div className="scan-device-main">
-                        <h3 className="scan-title" title={nomeDev}>{nomeDev}</h3>
-                        <ul className="diag" style={{marginTop:4}}>
-                          <li className="chip"><Icon n="globe"/>{dev.ip}</li>
-                          {streams.length>1&&<li className="chip">{streams.length} faixas</li>}
-                          {(dev.discovery||[]).includes('onvif')&&<li className="chip">ONVIF</li>}
-                          {(dev.open_ports||[]).includes(554)&&<li className="chip">RTSP</li>}
-                          {alreadyAdded&&<li className="chip bom"><Icon n="check"/>adicionada</li>}
-                        </ul>
-                      </div>
-                    </header>
-                    <div className="scan-device-controls">
-                      <div style={{minWidth:0}}>
-                        {streams.length>0?(
-                          <>
-                            <select className="scan-select largo" value={choices[dev.ip]||0} onChange={e=>setChoices(p=>({...p,[dev.ip]:e.target.value}))} aria-label={'Stream de '+nomeDev}>
-                              {streams.slice(0,24).map((st,i)=><option key={(st.uri||'')+i} value={i}>{streamLabel(st,i)}</option>)}
-                            </select>
-                            <p className="scan-uri" title={maskCameraUrl(selected?.masked_uri||selected?.uri)}><code>{maskCameraUrl(selected?.masked_uri||selected?.uri)}</code></p>
-                          </>
-                        ):(
-                          <p className="scan-meta"><Icon n="lock"/>Precisa de usuário e senha</p>
-                        )}
-                      </div>
-                      <button type="button" className={alreadyAdded?'btn btn-secondary btn-sm':'btn btn-primary btn-sm'} onClick={()=>addDevice(dev)} disabled={alreadyAdded}>
-                        <Icon n={alreadyAdded?'check':streams.length?'plus':'lock'}/>{streams.length?(alreadyAdded?'Adicionada':'Adicionar'):'Senha'}
-                      </button>
-                    </div>
-                    {showCred&&(
-                      <form className="inline-cred" onSubmit={enviar(retryWithCredentials)} aria-label={'Usuário e senha de '+dev.ip}>
-                        <p className="scan-meta" style={{fontWeight:700}}><Icon n="lock"/>{dev.ip}</p>
-                        <div className="scan-form">
-                          <Campo ic="user" rotulo="Usuário da câmera"><input value={username} onChange={e=>setUsername(e.target.value)} placeholder="Usuário" autoComplete="off"/></Campo>
-                          <Campo ic="lock" rotulo="Senha da câmera"><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Senha" autoComplete="off"/></Campo>
-                          <button type="submit" className="btn btn-primary" disabled={!username.trim()||loading}><Icon n="search"/>Buscar</button>
-                          {streams.length>0&&<button type="button" className="btn btn-secondary" onClick={()=>{setCredDevice(null);addDevice(dev,true);}}>Adicionar assim</button>}
-                        </div>
-                      </form>
-                    )}
-                  </article>
-                </li>
+                <section key={srv.id} className="scan-grupo" aria-label={varios?'Câmeras na rede de '+srv.nome:'Câmeras encontradas'}>
+                  {varios&&<h3 className="scan-grupo-titulo"><Icon n="server"/>{srv.nome}</h3>}
+                  {b.erro&&<p className="dica-linha alerta"><Icon n="alert"/>{b.erro}</p>}
+                  {b.job&&b.job.status==='running'&&varios&&<p className="dica-linha"><span className="giro"/>Procurando na rede deste servidor...</p>}
+                  {b.result&&(
+                    <ul className="diag" aria-label="Resultado">
+                      <li className="chip"><Icon n="camera"/>{devices.length} câmera(s)</li>
+                      <li className="chip"><Icon n="video"/>{streamTotal} stream(s)</li>
+                      <li className="chip"><Icon n="globe"/>{(b.result.networks||[]).join(', ')||'auto'}</li>
+                    </ul>
+                  )}
+                  {devices.length>0&&<ul className="scan-lista" aria-label={'Câmeras encontradas'+(varios?' em '+srv.nome:'')}>{devices.map(dev=>Dispositivo(srv,dev))}</ul>}
+                </section>
               );
             })}
-          </ul>
+          </div>
         )}
       </div>
     </Janela>
@@ -2602,14 +2632,17 @@ function App(){
     const s=servidores.find(x=>alcance[x.id]&&alcance[x.id].base===base);
     return s?s.nome:'';
   };
+  // servidores da conta que respondem daqui, do mais livre para o mais ocupado
+  const servidoresVivos=()=>servidores.filter(s=>alcance[s.id])
+    .map(s=>({id:s.id,nome:s.nome,base:alcance[s.id].base,status:alcance[s.id].status||{}}))
+    .sort((a,b)=>(Number(b.status.availability||0)-Number(a.status.availability||0))
+      ||(Number(a.status.active_streams||0)-Number(b.status.active_streams||0)));
   // nova câmera vai para o servidor mais livre da conta
   const servidorParaCamera=()=>{
-    const vivos=servidores.filter(s=>alcance[s.id]);
-    if(!vivos.length) return backendUrl;
-    vivos.sort((a,b)=>(Number(alcance[b.id].status.availability||0)-Number(alcance[a.id].status.availability||0))
-      ||(Number(alcance[a.id].status.active_streams||0)-Number(alcance[b.id].status.active_streams||0)));
-    return alcance[vivos[0].id].base;
+    const vivos=servidoresVivos();
+    return vivos.length?vivos[0].base:backendUrl;
   };
+  const [escolherServ,setEscolherServ]=useState(false);
   const novoSid=()=>user.id+'_'+Math.random().toString(36).slice(2,8);
 
   useEffect(()=>{
@@ -2731,14 +2764,21 @@ function App(){
     if(token&&page==='servidores') carregarServidores();
   },[page,token,backendUrl]);
 
-  const addStream=()=>{
+  const criarCamera=(base)=>{
     const idx=nextIndex.current++;
     const sid=novoSid();
     managedStreams.current.add(sid);
-    setStreamsList(p=>[...p,{streamId:sid,index:idx,base:servidorParaCamera()}]);
+    setStreamsList(p=>[...p,{streamId:sid,index:idx,base}]);
+  };
+  // Com vários servidores (ex.: um por filial) pergunta onde: câmera IP só
+  // funciona no servidor que está na mesma rede que ela.
+  const addStream=()=>{
+    if(servidoresVivos().length>1){setEscolherServ(true);return;}
+    criarCamera(servidorParaCamera());
   };
 
-  const addDiscoveredStream=async(stream)=>{
+  const addDiscoveredStream=async(stream,baseServidor)=>{
+    const base=baseServidor||backendUrl;
     const url=String(stream?.uri||'').trim();
     if(!url){showToast('Stream sem URL','err');return;}
     const idx=nextIndex.current++;
@@ -2748,11 +2788,11 @@ function App(){
     localStorage.setItem('epi_source_'+sid,source);
     localStorage.setItem('epi_camurl_'+sid,url);
     localStorage.setItem('epi_sm_'+sid,defaultModel);
-    // a busca na rede roda no servidor principal: a câmera achada fica nele
-    setStreamsList(p=>[...p,{streamId:sid,index:idx,base:backendUrl}]);
+    // a câmera achada fica no servidor que a encontrou: só ele está na rede dela
+    setStreamsList(p=>[...p,{streamId:sid,index:idx,base}]);
     try{
       const modelCfg=getModelRequiredItems(findModelByValue(availableModels,defaultModel));
-      const r=await authFetch(backendUrl+'/streams/add',token,{method:'POST',body:JSON.stringify({
+      const r=await authFetch(base+'/streams/add',token,{method:'POST',body:JSON.stringify({
         model:defaultModel,
         device,
         camera:url,
@@ -3160,7 +3200,22 @@ function App(){
         </Janela>
       )}
       <Perguntas/>
-      <NetworkCameraModal open={showNetCam} onClose={()=>setShowNetCam(false)} backendUrl={backendUrl} token={token} onUseStream={addDiscoveredStream} onToast={showToast}/>
+      <NetworkCameraModal open={showNetCam} onClose={()=>setShowNetCam(false)} backendUrl={backendUrl} token={token} servidores={showNetCam?servidoresVivos():[]} onUseStream={addDiscoveredStream} onToast={showToast}/>
+      {escolherServ&&(
+        <Janela titulo="Em qual servidor?" ic="server" onClose={()=>setEscolherServ(false)}>
+          <p className="dica-linha">Câmera IP (RTSP) precisa ficar no servidor que está na mesma rede que ela, por exemplo o da mesma filial. Câmera de celular ou link funciona em qualquer um.</p>
+          <ul className="escolha-servidor" aria-label="Servidores">
+            {servidoresVivos().map((v,i)=>(
+              <li key={v.id}>
+                <button type="button" className="btn btn-claro" onClick={()=>{setEscolherServ(false);criarCamera(v.base);}} data-foco={i===0?'':undefined}>
+                  <Icon n="server"/><span className="escolha-nome">{v.nome}</span>
+                  <small>{i===0?'mais livre · ':''}livre {v.status.availability??'?'}% · {v.status.active_streams??0} câmera(s)</small>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </Janela>
+      )}
       {aviso}
     </div>
   );
