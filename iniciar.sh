@@ -55,8 +55,39 @@ if ! command -v cloudflared >/dev/null 2>&1 && [[ ! -x ./cloudflared && ! -f ./c
   say ""
 fi
 
-say "[INFO] Banco: ${DATABASE_URL:-postgresql://argos:argos@127.0.0.1:5432/argosepi (padrao)}"
-say "       Sem PostgreSQL, ligue so o banco do Docker: docker compose up -d db"
+# Banco: PostgreSQL portatil do configurar.sh (dados/pgdata, porta 5433).
+# Sem ele, usa DATABASE_URL do ambiente/.env ou o banco do Docker em 127.0.0.1:5432.
+# shellcheck source=scripts/pg_portatil.sh
+source "$ROOT_DIR/scripts/pg_portatil.sh"
+PG_LIGUEI=""
+PGBIN=""
+desligar_banco() {
+  if [[ -n "$PG_LIGUEI" ]]; then
+    say "[*] Desligando o banco..."
+    pg_desligar "$PGBIN"
+    PG_LIGUEI=""
+  fi
+}
+trap desligar_banco EXIT INT TERM
+
+if [[ -z "${DATABASE_URL:-}" && -f "$PGDATA/PG_VERSION" ]] && PGBIN="$(pg_bin)"; then
+  if ! pg_ligado "$PGBIN"; then
+    say "[*] Ligando o banco (PostgreSQL portatil, porta $PG_PORTA)..."
+    if ! pg_ligar "$PGBIN"; then
+      say "${RED}[ERRO] O banco nao ligou. Veja dados/postgres.log${RESET}"
+      say "       Se a porta $PG_PORTA estiver em uso, feche o programa que a usa."
+      exit 1
+    fi
+    PG_LIGUEI=1
+  fi
+  export DATABASE_URL="$PG_URL"
+  say "[OK] Banco ligado: dados/pgdata (porta $PG_PORTA)"
+elif [[ -n "${DATABASE_URL:-}" ]]; then
+  say "[INFO] Banco: DATABASE_URL definido no ambiente."
+else
+  say "[INFO] Sem banco portatil (rode bash configurar.sh): usando DATABASE_URL do .env"
+  say "       ou o PostgreSQL em 127.0.0.1:5432."
+fi
 say ""
 
 say "[*] Iniciando servidor..."
@@ -64,6 +95,7 @@ say "[*] Acesse: http://localhost:8088"
 say "[*] Pressione Ctrl+C para encerrar."
 say ""
 
-"$VENV_PY" run.py
+"$VENV_PY" run.py || true
 say ""
 say "[!] Servidor encerrado."
+desligar_banco

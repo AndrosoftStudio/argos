@@ -93,13 +93,13 @@ Passo a passo, pasta `models` e instruções para IA em [`COMO_INSTALAR.md`](COM
 (senha ou Google), confere o código e clica em **Vincular**. No Docker quem abre o
 navegador é o `instalar_docker.bat`; no `iniciar.bat`/`iniciar.sh`, o próprio servidor.
 
-| | Com Docker | Sem Docker (Windows) |
-|---|---|---|
-| Quando usar | PC próprio, servidor | PC sem Docker ou sem administrador (ex.: laboratório da escola) |
-| Instalar | `instalar_docker.bat` | `configurar.bat` (uma vez) |
-| Ligar | sozinho, junto com o Docker Desktop | `iniciar.bat` |
-| Desligar | `parar_docker.bat` | Ctrl+C na janela do `iniciar.bat` |
-| Banco | container `argosepi-db` (porta 5432) | PostgreSQL portátil em `dados\pgdata` (porta 5433) |
+| | Com Docker | Sem Docker (Windows) | Sem Docker (Linux/macOS) |
+|---|---|---|---|
+| Quando usar | PC próprio, servidor | PC sem Docker ou sem administrador (ex.: laboratório da escola) | idem, em Linux ou macOS |
+| Instalar | `instalar_docker.bat` | `configurar.bat` (uma vez) | `bash configurar.sh` (uma vez) |
+| Ligar | sozinho, junto com o Docker Desktop | `iniciar.bat` | `bash iniciar.sh` |
+| Desligar | `parar_docker.bat` | Ctrl+C na janela do `iniciar.bat` | Ctrl+C no terminal |
+| Banco | container `argosepi-db` (porta 5432) | PostgreSQL portátil em `dados\pgdata` (porta 5433) | PostgreSQL portátil em `dados/pgdata` (porta 5433) |
 
 **Com Docker:** dois cliques em **`instalar_docker.bat`**. Ele liga o Docker Desktop, cria o
 `.env`, escolhe GPU ou CPU, constrói e sobe tudo, e espera o painel responder. À mão, a partir
@@ -122,9 +122,11 @@ Depois de configurada, a pasta inteira pode ir num pendrive para outro PC Window
   banco do Docker para o banco portátil (as fotos já estão em `dados\`).
 - `atualizar.bat` reinstala as dependências depois de mudar o `requirements.txt`.
 
-**Linux e macOS:** `bash configurar.sh` e depois `bash iniciar.sh`. Esses scripts não trazem o
-banco: ligue só o PostgreSQL do Docker (`docker compose up -d db`) ou instale um PostgreSQL 16
-e defina `DATABASE_URL` no `.env`.
+**Linux e macOS:** `bash configurar.sh` e depois `bash iniciar.sh`, com um usuário comum (o
+PostgreSQL não roda como root). Também não precisam de Docker: o `configurar.sh` baixa um
+PostgreSQL 16 portátil (~15 MB, em `bin/pgsql`) e cria o banco em `dados/pgdata` (porta 5433);
+o `iniciar.sh` liga e desliga esse banco junto com o servidor. Precisa só de Python 3.11+.
+Para usar outro PostgreSQL, defina `DATABASE_URL` antes de rodar o `iniciar.sh`.
 
 O banco é um PostgreSQL 16 que só aceita conexão da própria máquina. Nele ficam
 contas, sessões, EPIs, funcionários, embeddings de rosto, modelos, áreas, zonas,
@@ -162,6 +164,11 @@ chegam nela pelo `vercel.json`.
 - **Variáveis da Vercel** (Settings → Environment Variables): `SUPABASE_URL`,
   `SUPABASE_SECRET_KEY` e `ARGOS_CHAVE_PRIVADA`. Nenhuma delas vai para o GitHub nem
   para os servidores. Depois de mudar, faça um Redeploy.
+- **Configuração do Firebase** (`frontend/config.js`): não é segredo. A `apiKey` do
+  Firebase só identifica o projeto e vai para todo navegador que abre o site, então
+  esconder não adianta. O que protege é: o Firebase só faz login nos domínios
+  autorizados, e a API da Vercel confere a assinatura do token do Google (projeto
+  `argos-epi`) antes de entrar na conta.
 - **Contas antigas** (do banco local): `scripts/migrar_contas_supabase.py` copia para o
   Supabase mantendo o mesmo id e a mesma senha.
 

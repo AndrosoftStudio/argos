@@ -46,6 +46,11 @@ Serve para o PC do laboratório, onde não dá para instalar o Docker nem o Pyth
 4. Use o painel em **https://argosepi.vercel.app** (ou **http://localhost:8088**).
 5. Para desligar, Ctrl+C ou feche a janela.
 
+**Linux e macOS (sem Docker):** com um usuário comum (não root), rode `bash configurar.sh`
+e depois `bash iniciar.sh`. O `configurar.sh` baixa um PostgreSQL 16 portátil (~15 MB, em
+`bin/pgsql`) e cria o banco em `dados/pgdata`, porta 5433. O `iniciar.sh` liga o banco, o
+servidor e, ao sair, desliga o banco. Só precisa de Python 3.11+ instalado.
+
 O banco portátil e o do Docker são servidores diferentes: cada um é vinculado uma vez.
 Vinculados à mesma conta, eles se sincronizam sozinhos (veja "Vários servidores").
 

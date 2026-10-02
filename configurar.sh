@@ -55,6 +55,8 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 
 mkdir -p bin models dados/users dados/epis dados/faces
+# shellcheck source=scripts/pg_portatil.sh
+source "$ROOT_DIR/scripts/pg_portatil.sh"
 
 "$PYTHON_BIN" scripts/banner.py --subtitle "Configuracao do ambiente - Linux/macOS, PyTorch, YOLO e modelos" || true
 say "Projeto : $ROOT_DIR"
@@ -62,7 +64,7 @@ say "Python  : $("$PYTHON_BIN" --version 2>&1)"
 say "Modo    : instalacao assistida para shell"
 say ""
 
-say "[1/5] Criando ambiente virtual..."
+say "[1/6] Criando ambiente virtual..."
 if [[ ! -d venv ]]; then
   "$PYTHON_BIN" -m venv venv
 fi
@@ -75,11 +77,11 @@ fi
 say "[OK] venv pronto."
 say ""
 
-say "[2/5] Atualizando pip..."
+say "[2/6] Atualizando pip..."
 "$VENV_PY" -m pip install --upgrade pip
 say ""
 
-say "[3/5] Selecione o hardware para PyTorch:"
+say "[3/6] Selecione o hardware para PyTorch:"
 say "  [1] NVIDIA CUDA 12.1 - melhor performance em GPUs compativeis"
 say "  [2] NVIDIA CUDA 12.4 - drivers mais recentes"
 say "  [3] CPU apenas       - maior compatibilidade"
@@ -109,12 +111,45 @@ esac
 say "[OK] $TORCH_LABEL instalado."
 say ""
 
-say "[4/5] Instalando dependencias do projeto..."
+say "[4/6] Instalando dependencias do projeto..."
 "$VENV_PY" -m pip install -r requirements.txt
 say "[OK] Dependencias instaladas."
 say ""
 
-say "[5/5] Verificando modelos e utilitarios..."
+say "[5/6] Banco de dados (PostgreSQL portatil, porta $PG_PORTA)..."
+BANCO_OK=""
+if [[ "$(id -u)" == "0" ]]; then
+  say "${YELLOW}[AVISO] O PostgreSQL nao roda como root. Rode este script com um usuario comum${RESET}"
+  say "        ou defina DATABASE_URL no .env apontando para um PostgreSQL 16."
+elif [[ -f "$PGDATA/PG_VERSION" ]] && PGBIN="$(pg_bin)"; then
+  BANCO_OK=1
+  say "[OK] PostgreSQL e banco ja existem (dados/pgdata)."
+else
+  PGBIN="$(pg_bin || true)"
+  if [[ "$PGBIN" != "$PG_DIR/bin" ]]; then
+    say "     baixando PostgreSQL $PG_VERSAO (cerca de 15 MB)..."
+    if pg_baixar "$VENV_PY"; then
+      PGBIN="$PG_DIR/bin"
+    elif [[ -n "$PGBIN" ]]; then
+      say "     sem binario pronto para esta maquina; usando o PostgreSQL instalado em $PGBIN"
+    fi
+  fi
+  if [[ -z "$PGBIN" ]]; then
+    say "${YELLOW}[AVISO] Nao foi possivel obter o PostgreSQL. Instale o postgresql pelo gerenciador${RESET}"
+    say "        do sistema e rode este script de novo, ou defina DATABASE_URL no .env."
+  else
+    say "     criando o banco em dados/pgdata..."
+    if pg_criar "$PGBIN" "$VENV_PY"; then
+      BANCO_OK=1
+      say "[OK] Banco criado (usuario argos, porta $PG_PORTA, so nesta maquina)."
+    else
+      say "${YELLOW}[AVISO] O PostgreSQL portatil nao funcionou. Veja dados/postgres.log${RESET}"
+    fi
+  fi
+fi
+say ""
+
+say "[6/6] Verificando modelos e utilitarios..."
 if [[ ! -f models/yolo26n.pt || ! -f models/yolo26s.pt ]]; then
   say "Baixando modelos YOLO..."
   "$VENV_PY" downloader.py bin modelos || say "${YELLOW}[AVISO] Nao foi possivel baixar os modelos agora.${RESET}"
@@ -144,9 +179,12 @@ say ""
 
 say ""
 say "====================================================="
-say " Tudo pronto. O backend precisa de um PostgreSQL 16:"
-say "   docker compose up -d db          (so o banco, em localhost:5432)"
-say "   ou instale o postgresql e defina DATABASE_URL no .env"
+if [[ -n "$BANCO_OK" ]]; then
+  say " Tudo pronto. Banco: dados/pgdata (PostgreSQL portatil, porta $PG_PORTA)."
+else
+  say " Falta o banco: rode de novo como usuario comum, ou defina DATABASE_URL"
+  say " no .env apontando para um PostgreSQL 16."
+fi
 say " Para iniciar o sistema, execute:"
 say "   bash iniciar.sh"
 say " Frontend local: http://localhost:8088"
