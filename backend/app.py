@@ -46,6 +46,8 @@ import areas as areas_mod
 import auditoria
 import conta
 import malha
+import dependencias
+dependencias.preparar_caminho()   # TensorRT instalado pelo painel (volume do Docker)
 from camera_discovery import discover_cameras, list_local_webcams
 from analysis_jobs import MODES as ANALYSIS_MODES, JobManager, valid_job_id
 import ppe_taxonomy as tax
@@ -501,10 +503,7 @@ def _engine_path_for_model(model_path: str) -> str:
 def _tensorrt_dependency_error() -> str | None:
     if not _is_cuda_backend():
         return 'TensorRT requer GPU NVIDIA/CUDA neste backend.'
-    missing = []
-    for module_name in ('onnx', 'tensorrt'):
-        if importlib.util.find_spec(module_name) is None:
-            missing.append(module_name)
+    missing = dependencias.faltando()
     if missing:
         return 'Dependencias ausentes para TensorRT: ' + ', '.join(missing) + '.'
     return None
@@ -557,6 +556,8 @@ def _tensorrt_status_for_path(model_path: str, uid=None, model_name=None) -> dic
         'available': _is_cuda_backend() and not dep_error,
         'enabled': os.environ.get('EPI_USE_TENSORRT', '1').strip().lower() not in ('0', 'false', 'no', 'off'),
         'dependency_error': dep_error,
+        # com GPU e so faltando pacote, o painel mostra o botao de instalar
+        'pode_instalar': bool(dep_error) and _is_cuda_backend() and bool(dependencias.faltando()),
         'engine_exists': engine_exists,
         'engine_name': os.path.basename(engine_path),
         'engine_path': engine_path if engine_exists else None,
@@ -1421,6 +1422,23 @@ def convert_model_tensorrt(name):
     result = _export_tensorrt_async(u['id'], safe_name, model_path, reason='manual')
     status_code = 202 if result.get('started') or result.get('status') == 'running' else 400
     return jsonify({'model': safe_name, 'tensorrt': result}), status_code
+
+
+@app.route('/tensorrt/dependencias', methods=['GET', 'POST'])
+def tensorrt_dependencias():
+    """Instala pelo painel o onnx e o TensorRT (~2 GB). So faz sentido com GPU NVIDIA."""
+    u, err = _auth()
+    if err: return err
+    if '_cam_session' in u: return jsonify({'error': 'Câmeras não podem instalar dependências.'}), 403
+    gpu = _is_cuda_backend()
+    if request.method == 'POST':
+        if not gpu:
+            return jsonify({'error': 'TensorRT precisa de GPU NVIDIA com CUDA neste servidor.'}), 400
+        if not dependencias.faltando():
+            return jsonify({'iniciado': False, 'status': 'pronto', **dependencias.estado(), 'gpu': gpu})
+        r = dependencias.instalar()
+        return jsonify({**dependencias.estado(), **r, 'gpu': gpu}), 202
+    return jsonify({**dependencias.estado(), 'gpu': gpu})
 
 
 @app.route('/hardware', methods=['GET'])

@@ -143,6 +143,15 @@ pesos `.pt` e evidências.
 API de contas (`frontend/api/argos.js`, uma função da Vercel): todas as rotas `/api/...`
 chegam nela pelo `vercel.json`.
 
+### TensorRT pelo painel
+
+`onnx` e `tensorrt-cu12` (~2 GB) não estão no `requirements.txt`. Num servidor com GPU
+NVIDIA, o card do modelo mostra **Instalar dependências do TensorRT**
+(`POST /tensorrt/dependencias`, `backend/dependencias.py`). O `numpy` fica travado na
+versão instalada (o onnx puxaria o numpy 2). No Docker a instalação vai para o volume
+`argosepi-pylibs` (`/app/pylibs`, no fim do `sys.path`), então sobrevive à troca de
+imagem; fora do Docker vai para o Python do Argos (pip, ou `bin/uv.exe` no portátil).
+
 ### Contas, servidores e malha
 
 - **Contas** ficam no Supabase (`supabase/esquema.sql`, rodado uma vez no SQL Editor).

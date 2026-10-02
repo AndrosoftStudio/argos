@@ -106,6 +106,18 @@ a **uma** conta e só processa para ela. Depois do vínculo, ele aparece no site
   clique em **Permitir**. Sem isso o site não acha o servidor (dá para digitar o código
   que aparece na janela do servidor).
 
+## TensorRT (mais velocidade com GPU NVIDIA)
+
+O TensorRT deixa a detecção bem mais rápida em placa NVIDIA, mas é grande (~2 GB) e
+por isso não vem instalado. No painel, em **Ajustes → Modelos**, o card do modelo mostra
+"Dependências ausentes para TensorRT" e o botão **Instalar dependências do TensorRT**.
+Toque nele e espere (5 a 20 minutos, conforme a internet); as câmeras seguem
+funcionando. Quando terminar, toque no raio (⚡) do card para converter o modelo.
+
+- No Docker ele fica no volume `argosepi-pylibs` e continua lá quando o container é
+  recriado. No `iniciar.bat`/`iniciar.sh` vai para o Python da própria pasta.
+- Sem GPU NVIDIA o botão não aparece: o TensorRT só funciona com ela.
+
 ## Vários servidores (malha)
 
 Vincule mais de um servidor à mesma conta (outro PC, o Docker e o `iniciar.bat`, etc.).

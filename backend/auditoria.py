@@ -214,9 +214,22 @@ def contar(uid: str, **filtros) -> int:
     return int(l['n']) if l else 0
 
 
+def _inicio_do_periodo(dias: int) -> float:
+    """Meia-noite (no fuso do servidor) de dias-1 atras: "7 dias" = hoje e os 6
+    dias anteriores inteiros, igual aos pontos do grafico."""
+    try:
+        import datetime
+        from zoneinfo import ZoneInfo
+        agora = datetime.datetime.now(ZoneInfo(FUSO))
+        inicio = (agora - datetime.timedelta(days=max(int(dias), 1) - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return inicio.timestamp()
+    except Exception:          # sem a base de fusos (tzdata): janela corrida
+        return time.time() - dias * 86400
+
+
 def desempenho(uid: str, func_id=None, dias=30) -> dict:
     """Dados dos graficos de performance do funcionario."""
-    desde = time.time() - dias * 86400
+    desde = _inicio_do_periodo(dias)
     onde, args = ["uid = %s", "tipo = 'violacao'", 'ts >= %s'], [uid, desde]
     if func_id:
         onde.append('func_id = %s'); args.append(func_id)
@@ -231,11 +244,16 @@ def desempenho(uid: str, func_id=None, dias=30) -> dict:
                 'segundos': round(float(l['s'] or 0), 1)}
                for l in db.consultar(
                    'SELECT epi, epi_label, COUNT(*) AS n, SUM(duracao) AS s FROM auditoria' + filtro +
-                   ' GROUP BY epi, epi_label ORDER BY n DESC', args)]
+                   ' GROUP BY epi, epi_label ORDER BY n DESC, epi', args)]
     por_area = [{'area_id': l['area_id'], 'area': l['area_nome'] or 'Sem área', 'violacoes': int(l['n'])}
                 for l in db.consultar(
                     'SELECT area_id, area_nome, COUNT(*) AS n FROM auditoria' + filtro +
-                    ' GROUP BY area_id, area_nome ORDER BY n DESC', args)]
+                    ' GROUP BY area_id, area_nome ORDER BY n DESC, area_nome', args)]
+    # a que horas do dia as faltas acontecem (0 a 23h, no fuso do servidor)
+    por_hora = [0] * 24
+    for l in db.consultar('SELECT EXTRACT(HOUR FROM to_timestamp(ts) AT TIME ZONE %s)::int AS h,'
+                          ' COUNT(*) AS n FROM auditoria' + filtro + ' GROUP BY h', [FUSO] + args):
+        por_hora[int(l['h']) % 24] = int(l['n'])
     tot = db.consultar_um('SELECT COUNT(*) AS n, SUM(duracao) AS s FROM auditoria' + filtro, args)
     total = int(tot['n']) if tot else 0
     seg = float(tot['s'] or 0.0) if tot else 0.0
@@ -259,7 +277,8 @@ def desempenho(uid: str, func_id=None, dias=30) -> dict:
             'media_por_dia': round(media, 2), 'indice_conformidade': conformidade,
             'dias_observados': len(por_dia), 'sem_registros': total == 0,
             'nao_atribuidas': nao_atribuidas, 'violacoes_no_periodo': violacoes_no_periodo,
-            'por_dia': por_dia, 'por_epi': por_epi, 'por_area': por_area}
+            'por_dia': por_dia, 'por_epi': por_epi, 'por_area': por_area,
+            'por_hora': [{'hora': h, 'violacoes': n} for h, n in enumerate(por_hora)]}
 
 
 def ranking(uid: str, dias=30, limite=20) -> list:

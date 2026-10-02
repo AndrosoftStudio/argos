@@ -23,7 +23,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Outfit:wght@300;400;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="painel.css?v=20261002-filiais">
+<link rel="stylesheet" href="painel.css?v=20261002-graficos">
 </head>
 <body><div id="root"></div>
 <script type="text/babel">
@@ -1491,6 +1491,53 @@ function ModalNovoFunc({onClose,onSave}){
 }
 
 
+/* Instala o onnx e o TensorRT no servidor (só com GPU NVIDIA). Vários cards podem
+   mostrar o botão: todos leem o mesmo estado do servidor. */
+function InstalarTensorRT({token,backendUrl,onPronto,onToast}){
+  const [st,setSt]=useState(null);
+  const [pedindo,setPedindo]=useState(false);
+  const ler=async()=>{
+    try{const r=await authFetch(backendUrl+'/tensorrt/dependencias',token);const d=await r.json();if(r.ok) setSt(d);return d;}catch{return null;}
+  };
+  useEffect(()=>{ler();},[backendUrl,token]);
+  const instalando=st&&st.status==='instalando';
+  useEffect(()=>{
+    if(!instalando) return;
+    const iv=setInterval(async()=>{
+      const d=await ler();
+      if(d&&d.status==='pronto'){onToast&&onToast('TensorRT instalado! Já dá para converter o modelo.');onPronto&&onPronto();}
+      if(d&&d.status==='erro') onToast&&onToast('Não deu para instalar o TensorRT: '+(d.erro||'erro'),'err');
+    },3000);
+    return()=>clearInterval(iv);
+  },[instalando]);
+  const instalar=async()=>{
+    if(!await confirmar({titulo:'Instalar o TensorRT neste servidor?',texto:`Baixa o onnx e o TensorRT da NVIDIA (${(st&&st.tamanho)||'~2 GB'}). Pode levar de 5 a 20 minutos, dependendo da internet. As câmeras continuam funcionando enquanto isso.`,botao:'Instalar'})) return;
+    setPedindo(true);
+    try{
+      const r=await authFetch(backendUrl+'/tensorrt/dependencias',token,{method:'POST'});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(d.error||'Erro ao instalar');
+      setSt(d);
+      if(d.status==='pronto'){onToast&&onToast('O TensorRT já está instalado.');onPronto&&onPronto();}
+    }catch(e){onToast&&onToast(mensagemErro(e,'Erro ao instalar'),'err');}
+    setPedindo(false);
+  };
+  if(instalando) return(
+    <div className="instalar-trt" role="status">
+      <p className="dica-linha"><span className="giro"/>{st.etapa||'Instalando'}... (pode levar alguns minutos)</p>
+      {(st.log||[]).length>0&&<pre className="instalar-log">{st.log.slice(-4).join('\n')}</pre>}
+    </div>
+  );
+  return(
+    <div className="instalar-trt">
+      {st&&st.status==='erro'&&<p className="err-msg" style={{margin:0}}><Icon n="alert"/>{st.erro}</p>}
+      <button type="button" className="btn btn-secondary btn-sm" onClick={instalar} disabled={pedindo}>
+        <Icon n="zap"/>{pedindo?'Começando...':(st&&st.status==='erro'?'Tentar instalar de novo':'Instalar dependências do TensorRT')}
+      </button>
+    </div>
+  );
+}
+
 function ModelCard({model,token,backendUrl,onRefresh,onToast,onSetDefault,defaultModel,nivel=4}){
   const [saving,setSaving]=useState(false);
   const [converting,setConverting]=useState(false);
@@ -1564,6 +1611,7 @@ function ModelCard({model,token,backendUrl,onRefresh,onToast,onSetDefault,defaul
         <li className="chip" style={{color:trtStatusColor}}><Icon n="zap"/>TensorRT: {trtStatusText}</li>
       </ul>
       {trtError&&!trtRunning&&<p className="err-msg" style={{margin:0}}><Icon n="alert"/>{trtError}</p>}
+      {trt.pode_instalar&&canConfig&&<InstalarTensorRT token={token} backendUrl={backendUrl} onPronto={onRefresh} onToast={onToast}/>}
       <form className="field" style={{margin:0}} onSubmit={enviar(saveConfig)}>
         <label htmlFor={idTitulo+'-epis'}><Icon n="helmet"/>{model.tipo==='base'?'Minha regra (EPIs)':'EPIs obrigatórios'}</label>
         <input id={idTitulo+'-epis'} value={requiredText} onChange={e=>setRequiredText(e.target.value)} disabled={!canConfig} placeholder="capacete, colete"/>
@@ -1870,26 +1918,6 @@ function BarrasCategoria({dados,rotulo,valor,vazio,icone}){
   );
 }
 
-function ColunasPorDia({dados}){
-  if(!dados||!dados.length) return <p className="graf-vazio">Nenhuma violação no período</p>;
-  const max=Math.max(...dados.map(d=>d.violacoes),1);
-  const dia=(s)=>{const p=String(s||'').split('-');return p.length===3?p[2]+'/'+p[1]:s;};
-  return(
-    <div>
-      <ol className="colunas">
-        {dados.map(d=>(
-          <li key={d.dia} className="coluna" title={dia(d.dia)+': '+d.violacoes+' violação(ões) · '+Math.round(d.segundos)+'s'}>
-            <span className="sr"><time dateTime={d.dia}>{dia(d.dia)}</time>: {d.violacoes} violação(ões)</span>
-            {d.violacoes>0&&<span className="coluna-val" aria-hidden="true">{d.violacoes}</span>}
-            <span className="coluna-preenche" aria-hidden="true" style={{display:'block',height:Math.max(d.violacoes/max*100,1.5)+'%'}}/>
-          </li>
-        ))}
-      </ol>
-      <div className="colunas-eixo" aria-hidden="true">{dados.map(d=><span key={d.dia}>{dia(d.dia)}</span>)}</div>
-    </div>
-  );
-}
-
 function IndiceConformidade({valor,media,semRegistros,dias}){
   // Sem nenhum registro no periodo o indice nao e 100: e desconhecido. Marcar como
   // "boa conformidade" quem o sistema nunca identificou diz o contrario da verdade.
@@ -1920,11 +1948,334 @@ function IndiceConformidade({valor,media,semRegistros,dias}){
   );
 }
 
+/* ═══ GRÁFICOS DO DESEMPENHO (SVG, sem biblioteca) ═════════════
+   Cores em painel.css (--viz-*): paleta categórica validada nos temas claro e
+   escuro. Marcas finas, grade discreta, rótulo só no pico, dica ao passar o
+   mouse ou navegar com as setas do teclado, e uma tabela com os mesmos números. */
+const VIZ_CORES=['var(--viz-1)','var(--viz-2)','var(--viz-3)','var(--viz-4)','var(--viz-5)'];
+
+function useLargura(){
+  const ref=useRef(null);
+  const [w,setW]=useState(0);
+  useEffect(()=>{
+    const el=ref.current;
+    if(!el) return;
+    const ro=new ResizeObserver(([e])=>setW(Math.round(e.contentRect.width)));
+    ro.observe(el);
+    return()=>ro.disconnect();
+  },[]);
+  return [ref,w];
+}
+
+// teto "redondo" do eixo Y e de 3 a 5 marcas (1, 2 ou 5 vezes uma potência de 10)
+function escalaY(max){
+  if(!(max>0)) return {max:1,marcas:[0,1]};
+  let mag=Math.pow(10,Math.floor(Math.log10(max)));
+  for(let volta=0;volta<4;volta++,mag*=10){
+    for(const p of [1,2,5]){
+      const passo=p*mag;
+      if(max/passo<=4){
+        const topo=Math.ceil(max/passo-1e-9)*passo;
+        const marcas=[];
+        for(let v=0;v<=topo+passo/2;v+=passo) marcas.push(Number(v.toFixed(6)));
+        return {max:topo,marcas};
+      }
+    }
+  }
+  return {max,marcas:[0,max]};
+}
+
+// navegação por teclado comum aos gráficos: setas, Home, End e Esc
+const navegarTeclas=(n,setAtivo)=>(e)=>{
+  const mover={ArrowRight:1,ArrowUp:1,ArrowLeft:-1,ArrowDown:-1}[e.key];
+  if(mover){e.preventDefault();setAtivo(a=>a==null?(mover>0?0:n-1):Math.max(0,Math.min(n-1,a+mover)));}
+  else if(e.key==='Home'){e.preventDefault();setAtivo(0);}
+  else if(e.key==='End'){e.preventDefault();setAtivo(n-1);}
+  else if(e.key==='Escape') setAtivo(null);
+};
+
+function VizDica({x,largura,cor,valor,rotulo}){
+  // ao lado da mira; perto da borda direita, vai para a esquerda dela
+  const esquerda=x>largura*0.62;
+  return(
+    <div className={"viz-dica"+(esquerda?' esq':'')} style={{left:esquerda?x-10:x+10}} role="status">
+      <span className="viz-chave" style={{background:cor}} aria-hidden="true"/>
+      <strong>{valor}</strong><span>{rotulo}</span>
+    </div>
+  );
+}
+
+/* Linha no tempo: um ponto por dia do período (dias sem registro valem 0). */
+function GraficoLinha({pontos,nome,cor='var(--viz-1)',formatar=String,eixo=String}){
+  const [ref,w]=useLargura();
+  const [ativo,setAtivo]=useState(null);
+  const n=pontos.length;
+  const H=176,M={t:22,r:18,b:24,l:40};
+  const iw=Math.max(w-M.l-M.r,10),ih=H-M.t-M.b;
+  const esc=escalaY(Math.max(0,...pontos.map(p=>p.valor)));
+  const x=i=>M.l+(n<=1?iw/2:i*iw/(n-1));
+  const y=v=>M.t+ih-(v/esc.max)*ih;
+  const linha=pontos.map((p,i)=>(i?'L':'M')+x(i).toFixed(1)+','+y(p.valor).toFixed(1)).join('');
+  const area=linha+'L'+x(n-1).toFixed(1)+','+(M.t+ih)+'L'+x(0).toFixed(1)+','+(M.t+ih)+'Z';
+  const pico=pontos.reduce((b,p,i)=>p.valor>pontos[b].valor?i:b,0);
+  const temPico=n>0&&pontos[pico].valor>0;
+  const marcasX=[...new Set([0,Math.floor((n-1)/2),n-1])].filter(i=>i>=0);
+  const mover=(e)=>{
+    const r=e.currentTarget.getBoundingClientRect();
+    const i=Math.round((e.clientX-r.left-M.l)/(n<=1?1:iw/(n-1)));
+    setAtivo(Math.max(0,Math.min(n-1,i)));
+  };
+  const resumo=nome+': '+n+' dias'+(temPico?', pico de '+formatar(pontos[pico].valor)+' em '+pontos[pico].rotulo:', sem registros')+'. Use as setas para ler cada dia.';
+  return(
+    <figure className="viz" ref={ref}>
+      {w>0&&n>0&&(
+        <svg width={w} height={H} className="viz-svg" role="img" aria-label={resumo} tabIndex={0}
+          onPointerMove={mover} onPointerLeave={()=>setAtivo(null)} onKeyDown={navegarTeclas(n,setAtivo)} onBlur={()=>setAtivo(null)}>
+          {esc.marcas.map(t=>(
+            <g key={t}>
+              <line x1={M.l} x2={w-M.r} y1={y(t)} y2={y(t)} className={t===0?'viz-base':'viz-grade'}/>
+              <text x={M.l-8} y={y(t)} className="viz-eixo-y">{eixo(t)}</text>
+            </g>
+          ))}
+          {marcasX.map(i=>(
+            <text key={i} x={x(i)} y={H-6} className="viz-eixo-x" textAnchor={n<=1?'middle':i===0?'start':i===n-1?'end':'middle'}>{pontos[i].rotulo}</text>
+          ))}
+          <path d={area} className="viz-area" style={{fill:cor}}/>
+          <path d={linha} className="viz-linha" style={{stroke:cor}}/>
+          {temPico&&ativo==null&&(
+            <g>
+              <circle cx={x(pico)} cy={y(pontos[pico].valor)} r={4} className="viz-ponto" style={{fill:cor}}/>
+              <text x={x(pico)} y={y(pontos[pico].valor)-10} className="viz-rotulo"
+                textAnchor={x(pico)>w-70?'end':x(pico)<M.l+40?'start':'middle'}>pico {formatar(pontos[pico].valor)}</text>
+            </g>
+          )}
+          {ativo!=null&&(
+            <g>
+              <line x1={x(ativo)} x2={x(ativo)} y1={M.t} y2={M.t+ih} className="viz-mira"/>
+              <circle cx={x(ativo)} cy={y(pontos[ativo].valor)} r={4.5} className="viz-ponto" style={{fill:cor}}/>
+            </g>
+          )}
+        </svg>
+      )}
+      {ativo!=null&&pontos[ativo]&&<VizDica x={x(ativo)} largura={w} cor={cor} valor={formatar(pontos[ativo].valor)} rotulo={pontos[ativo].rotulo}/>}
+    </figure>
+  );
+}
+
+/* Colunas com rótulo no eixo X (ex.: as 24 horas do dia). */
+function GraficoColunas({pontos,nome,cor='var(--viz-1)',formatar=String,rotuloEixo}){
+  const [ref,w]=useLargura();
+  const [ativo,setAtivo]=useState(null);
+  const n=pontos.length;
+  const H=176,M={t:22,r:8,b:24,l:32};
+  const iw=Math.max(w-M.l-M.r,10),ih=H-M.t-M.b;
+  const esc=escalaY(Math.max(0,...pontos.map(p=>p.valor)));
+  const banda=iw/Math.max(n,1);
+  const bw=Math.max(2,Math.min(24,banda-2));
+  const x0=i=>M.l+i*banda+(banda-bw)/2;
+  const y=v=>M.t+ih-(v/esc.max)*ih;
+  // topo arredondado (4px), base reta
+  const barra=(i,v)=>{
+    const h=Math.max(0,(v/esc.max)*ih),bx=x0(i),by=M.t+ih-h,r=Math.min(4,bw/2,h);
+    return `M${bx},${by+h}V${by+r}Q${bx},${by} ${bx+r},${by}H${bx+bw-r}Q${bx+bw},${by} ${bx+bw},${by+r}V${by+h}Z`;
+  };
+  const pico=pontos.reduce((b,p,i)=>p.valor>pontos[b].valor?i:b,0);
+  const temPico=n>0&&pontos[pico].valor>0;
+  const resumo=nome+(temPico?': mais registros às '+pontos[pico].rotulo+' ('+formatar(pontos[pico].valor)+')':': sem registros')+'. Use as setas para ler cada coluna.';
+  return(
+    <figure className="viz" ref={ref}>
+      {w>0&&n>0&&(
+        <svg width={w} height={H} className="viz-svg" role="img" aria-label={resumo} tabIndex={0}
+          onPointerLeave={()=>setAtivo(null)} onKeyDown={navegarTeclas(n,setAtivo)} onBlur={()=>setAtivo(null)}>
+          {esc.marcas.map(t=>(
+            <g key={t}>
+              <line x1={M.l} x2={w-M.r} y1={y(t)} y2={y(t)} className={t===0?'viz-base':'viz-grade'}/>
+              <text x={M.l-8} y={y(t)} className="viz-eixo-y">{formatar(t)}</text>
+            </g>
+          ))}
+          {pontos.map((p,i)=>(
+            <g key={i} onPointerEnter={()=>setAtivo(i)}>
+              <rect x={M.l+i*banda} y={M.t} width={banda} height={ih} className="viz-alvo"/>
+              {p.valor>0&&<path d={barra(i,p.valor)} className={"viz-coluna"+(ativo!=null&&ativo!==i?' apagada':'')} style={{fill:cor}}/>}
+              {rotuloEixo(p,i)&&<text x={M.l+i*banda+banda/2} y={H-6} className="viz-eixo-x" textAnchor="middle">{rotuloEixo(p,i)}</text>}
+            </g>
+          ))}
+          {temPico&&ativo==null&&(
+            <text x={x0(pico)+bw/2} y={y(pontos[pico].valor)-7} className="viz-rotulo"
+              textAnchor={x0(pico)>w-50?'end':x0(pico)<M.l+30?'start':'middle'}>{formatar(pontos[pico].valor)}</text>
+          )}
+          {ativo!=null&&<rect x={M.l+ativo*banda} y={M.t} width={banda} height={ih} className="viz-foco"/>}
+        </svg>
+      )}
+      {ativo!=null&&pontos[ativo]&&<VizDica x={x0(ativo)+bw/2} largura={w} cor={cor} valor={formatar(pontos[ativo].valor)} rotulo={pontos[ativo].rotulo}/>}
+    </figure>
+  );
+}
+
+/* Rosca (parte do todo): até 5 fatias + "Outros". A legenda ao lado mostra
+   quantidade e porcentagem de cada fatia, então nada depende só da cor. */
+function GraficoRosca({fatias,total,rotuloTotal,formatar=String}){
+  const [ativo,setAtivo]=useState(null);
+  const R=62,ESP=22,C=2*Math.PI*R,TAM=2*R+ESP+4;
+  const soma=fatias.reduce((a,f)=>a+f.valor,0)||1;
+  let acumulado=0;
+  const arcos=fatias.map((f,i)=>{
+    const tam=f.valor/soma*C;
+    const a={...f,i,inicio:acumulado,tam:Math.max(tam-(fatias.length>1?2:0),0.5)};
+    acumulado+=tam;
+    return a;
+  });
+  const sel=ativo!=null?fatias[ativo]:null;
+  const pct=(v)=>Math.round(v/soma*100)+'%';
+  return(
+    <div className="rosca">
+      <svg width={TAM} height={TAM} viewBox={`0 0 ${TAM} ${TAM}`} className="rosca-svg" role="img"
+        aria-label={fatias.map(f=>f.rotulo+': '+formatar(f.valor)+' ('+pct(f.valor)+')').join('; ')}>
+        <g transform={`rotate(-90 ${TAM/2} ${TAM/2})`}>
+          {arcos.map(a=>(
+            <circle key={a.chave} cx={TAM/2} cy={TAM/2} r={R} fill="none" strokeWidth={ESP}
+              className={"rosca-fatia"+(ativo!=null&&ativo!==a.i?' apagada':'')} style={{stroke:a.cor}}
+              strokeDasharray={`${a.tam} ${C}`} strokeDashoffset={-a.inicio}
+              onPointerEnter={()=>setAtivo(a.i)} onPointerLeave={()=>setAtivo(null)}/>
+          ))}
+        </g>
+        <text x="50%" y="47%" className="rosca-num" textAnchor="middle">{sel?formatar(sel.valor):formatar(total)}</text>
+        <text x="50%" y="61%" className="rosca-sub" textAnchor="middle">{sel?pct(sel.valor):rotuloTotal}</text>
+      </svg>
+      <ul className="rosca-legenda" aria-label="Legenda">
+        {fatias.map((f,i)=>(
+          <li key={f.chave} className={(ativo===i?'ativa ':'')+(f.icone?'':'sem-icone')} tabIndex={0} title={f.detalhe||f.rotulo}
+            onPointerEnter={()=>setAtivo(i)} onPointerLeave={()=>setAtivo(null)} onFocus={()=>setAtivo(i)} onBlur={()=>setAtivo(null)}>
+            <span className="rosca-cor" style={{background:f.cor}} aria-hidden="true"/>
+            {f.icone}
+            <span className="rosca-nome">{f.rotulo}</span>
+            <data className="rosca-val" value={f.valor}>{formatar(f.valor)}</data>
+            <span className="rosca-pct">{pct(f.valor)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+const dataLocal=(d)=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+// um ponto por dia do período, do mais antigo para hoje (dias sem registro = 0)
+function diasDoPeriodo(porDia,dias){
+  const mapa=Object.fromEntries((porDia||[]).map(d=>[d.dia,d]));
+  const hoje=new Date();
+  const lista=[];
+  for(let i=dias-1;i>=0;i--){
+    const d=new Date(hoje.getFullYear(),hoje.getMonth(),hoje.getDate()-i);
+    const k=dataLocal(d);
+    const r=mapa[k]||{};
+    lista.push({chave:k,rotulo:String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0'),
+      violacoes:r.violacoes||0,minutos:Math.round((r.segundos||0)/6)/10});
+  }
+  return lista;
+}
+
+const minutosTxt=(m)=>!m?'0':m<1?Math.round(m*60)+'s':(Number.isInteger(m)?m:m.toFixed(1))+' min';
+const minutosEixo=(m)=>!m?'0':m<1?Math.round(m*60)+'s':m+'m';
+
+// A cor segue o EPI, não a posição: ao trocar o período, quem continua na rosca
+// mantém a cor (só quem entra pega uma cor livre). memoria = {epi: índice da cor}
+function coresPorEpi(epis,memoria){
+  const usadas=new Set();
+  const cor={};
+  for(const e of epis){
+    const k=memoria[e];
+    if(k!=null&&!usadas.has(k)){cor[e]=k;usadas.add(k);}
+  }
+  for(const e of epis){
+    if(cor[e]!=null) continue;
+    const ocupadas=new Set(Object.values(memoria));
+    let k=VIZ_CORES.findIndex((_,i)=>!usadas.has(i)&&!ocupadas.has(i));
+    if(k<0) k=VIZ_CORES.findIndex((_,i)=>!usadas.has(i));
+    cor[e]=k;usadas.add(k);
+    for(const [outro,i] of Object.entries(memoria)) if(i===k) delete memoria[outro];
+    memoria[e]=k;
+  }
+  return cor;
+}
+
+function DashboardDesempenho({dados,memoriaCores}){
+  const dias=diasDoPeriodo(dados.por_dia,dados.dias);
+  const porEpi=dados.por_epi||[];
+  const top=porEpi.slice(0,5);
+  const resto=porEpi.slice(5);
+  const cores=coresPorEpi(top.map((e,i)=>e.epi||String(i)),memoriaCores||{});
+  const fatias=top.map((e,i)=>({chave:e.epi||String(i),rotulo:e.label||e.epi,valor:e.violacoes,cor:VIZ_CORES[cores[e.epi||String(i)]],
+    icone:<EpiSelo item={e.epi} sm rotulo={e.label}/>}));
+  if(resto.length) fatias.push({chave:'_outros',rotulo:'Outros ('+resto.length+')',valor:resto.reduce((a,e)=>a+e.violacoes,0),
+    cor:'var(--viz-outros)',detalhe:resto.map(e=>(e.label||e.epi)+': '+e.violacoes).join(', ')});
+  const horas=(dados.por_hora||[]).map(h=>({rotulo:String(h.hora).padStart(2,'0')+'h',valor:h.violacoes}));
+  const comRegistro=dias.filter(d=>d.violacoes||d.minutos);
+  const horasCom=horas.filter(h=>h.valor);
+  return(
+    <div className="dash">
+      <section className="graf" aria-labelledby="g-viol">
+        <h3 className="graf-titulo" id="g-viol"><Icon n="chart"/>Violações por dia</h3>
+        <GraficoLinha nome="Violações por dia" pontos={dias.map(d=>({rotulo:d.rotulo,valor:d.violacoes}))} cor="var(--viz-1)"
+          formatar={v=>v+(v===1?' violação':' violações')} eixo={String}/>
+      </section>
+      <section className="graf" aria-labelledby="g-tempo">
+        <h3 className="graf-titulo" id="g-tempo"><Icon n="clock"/>Tempo sem EPI por dia</h3>
+        <GraficoLinha nome="Tempo sem EPI por dia" pontos={dias.map(d=>({rotulo:d.rotulo,valor:d.minutos}))} cor="var(--viz-1)"
+          formatar={minutosTxt} eixo={minutosEixo}/>
+      </section>
+      <section className="graf" aria-labelledby="g-epis">
+        <h3 className="graf-titulo" id="g-epis"><Icon n="helmet"/>Quais EPIs faltaram</h3>
+        {fatias.length
+          ? <GraficoRosca fatias={fatias} total={dados.total_violacoes} rotuloTotal="violações"/>
+          : <p className="graf-vazio">Nenhuma violação de EPI</p>}
+        {resto.length>0&&(
+          <details className="viz-mais">
+            <summary>Ver todos os {porEpi.length} EPIs</summary>
+            <BarrasCategoria dados={porEpi} rotulo={d=>d.label||d.epi} valor={d=>d.violacoes}
+              icone={d=><EpiSelo item={d.epi} sm rotulo={d.label}/>} vazio=""/>
+          </details>
+        )}
+      </section>
+      {dados.por_hora&&(
+        <section className="graf" aria-labelledby="g-hora">
+          <h3 className="graf-titulo" id="g-hora"><Icon n="clock"/>Horário das violações</h3>
+          {horasCom.length
+            ? <GraficoColunas nome="Violações por horário" pontos={horas} cor="var(--viz-1)" formatar={String}
+                rotuloEixo={(p,i)=>i%6===0||i===23?p.rotulo:''}/>
+            : <p className="graf-vazio">Nenhuma violação no período</p>}
+        </section>
+      )}
+      {(comRegistro.length>0||horasCom.length>0)&&(
+        <details className="viz-tabela largo">
+          <summary><Icon n="chart"/>Ver os números em tabela</summary>
+          <div className="viz-tabelas">
+            {comRegistro.length>0&&(
+              <table>
+                <caption>Dias com registro</caption>
+                <thead><tr><th scope="col">Dia</th><th scope="col">Violações</th><th scope="col">Tempo sem EPI</th></tr></thead>
+                <tbody>{comRegistro.map(d=><tr key={d.chave}><th scope="row">{d.rotulo}</th><td>{d.violacoes}</td><td>{minutosTxt(d.minutos)}</td></tr>)}</tbody>
+              </table>
+            )}
+            {horasCom.length>0&&(
+              <table>
+                <caption>Horários com registro</caption>
+                <thead><tr><th scope="col">Hora</th><th scope="col">Violações</th></tr></thead>
+                <tbody>{horasCom.map(h=><tr key={h.rotulo}><th scope="row">{h.rotulo}</th><td>{h.valor}</td></tr>)}</tbody>
+              </table>
+            )}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
 /* ═══ FICHA DE DESEMPENHO DO FUNCIONÁRIO ════════════════════ */
 function FuncDesempenho({func,token,backendUrl,onClose}){
   const [dados,setDados]=useState(null);
   const [erro,setErro]=useState('');
   const [dias,setDias]=useState(30);
+  const memoriaCores=useRef({});      // cor de cada EPI na rosca, mantida ao trocar o período
 
   useEffect(()=>{
     let vivo=true;
@@ -1965,17 +2316,7 @@ function FuncDesempenho({func,token,backendUrl,onClose}){
           <Stat ic="calendar" label="Média por dia" value={dados.media_por_dia}/>
         </dl>
 
-        <section className="graf">
-          <h3 className="graf-titulo"><Icon n="chart"/>Por dia</h3>
-          <ColunasPorDia dados={dados.por_dia}/>
-        </section>
-
-        <section className="graf">
-          <h3 className="graf-titulo"><Icon n="helmet"/>EPI mais esquecido</h3>
-          <BarrasCategoria dados={dados.por_epi} rotulo={d=>d.label||d.epi} valor={d=>d.violacoes}
-            icone={d=><EpiSelo item={d.epi} sm rotulo={d.label}/>}
-            vazio="Nenhuma violação de EPI"/>
-        </section>
+        <DashboardDesempenho dados={dados} memoriaCores={memoriaCores.current}/>
 
         <section className="graf">
           <h3 className="graf-titulo"><Icon n="map"/>Por área</h3>

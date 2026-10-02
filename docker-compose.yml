@@ -25,6 +25,8 @@ x-backend: &backend
     - ./dados:/app/dados
     - ./models:/app/models
     - ./frontend:/app/frontend:ro
+    # TensorRT/onnx instalados pelo painel (Modelos > Instalar dependências)
+    - pylibs:/app/pylibs
   depends_on:
     db:
       condition: service_healthy
@@ -121,3 +123,5 @@ services:
 volumes:
   pgdata:
     name: argosepi-pgdata
+  pylibs:
+    name: argosepi-pylibs
