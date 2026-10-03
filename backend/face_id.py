@@ -55,8 +55,12 @@ def _caminho(nome) -> str:
     return os.path.join(_raiz_modelos(), 'models', 'buffalo_l', nome)
 
 
+_provedores_cache = {}
+
+
 def _provedores(device: str):
-    """Espelha a escolha de hardware do resto do sistema (so pede o que este onnxruntime tem)."""
+    """Espelha a escolha de hardware do resto do sistema (so pede o que este onnxruntime tem).
+    Decidido uma vez por tipo: e chamado a cada quadro e o preload_dlls custa ~1 s."""
     d = str(device or 'cpu').lower()
     if d in ('0', 'cuda', 'gpu') or d.isdigit() or d.startswith('cuda'):
         quer = 'CUDAExecutionProvider'
@@ -64,6 +68,12 @@ def _provedores(device: str):
         quer = 'DmlExecutionProvider'
     else:
         return ['CPUExecutionProvider']
+    if quer not in _provedores_cache:
+        _provedores_cache[quer] = _provedores_de(quer)
+    return list(_provedores_cache[quer])
+
+
+def _provedores_de(quer):
     try:
         import onnxruntime as ort
         if quer not in ort.get_available_providers():

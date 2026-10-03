@@ -121,7 +121,7 @@
     <p class="grande">✅</p>
     <h1>Servidor vinculado!</h1>
     <p id="pronto-txt"></p>
-    <p id="pronto-espera">Em alguns segundos ele aparece em <b>Servidores</b> no painel. Pode fechar esta página.</p>
+    <p id="pronto-espera">Em alguns segundos ele aparece em <b>Ajustes › Servidores</b> no painel. Pode fechar esta página.</p>
     <button class="prim" type="button" onclick="location.href='/#servidores'">Abrir o painel</button>
     <button class="sec" type="button" id="btn-outro" hidden>Vincular outro servidor deste computador</button>
   </section>
@@ -200,7 +200,7 @@ async function procurar(){
         const nomes = [...new Set(achados.map((s) => s.conta && (s.conta.nome || s.conta.email)).filter(Boolean))];
         $('ja-txt').textContent = `O servidor deste computador (porta ${achados.map((s) => s.porta).join(', ')}) já está vinculado`
           + (nomes.length ? ' à conta de ' + nomes.join(', ') + '.' : '.')
-          + ' Para trocar de conta, desvincule ele na página Servidores do painel.';
+          + ' Para trocar de conta, desvincule ele em Ajustes › Servidores, no painel.';
         mostrar('passo-ja');
         return;
       }
@@ -266,13 +266,13 @@ async function pronto(nome){
     await dormir(1500);
     const s = await sondar(porta, 3000);
     if (s && s.vinculado) {
-      $('pronto-espera').textContent = 'Pronto! O servidor já está conectado e aparece em Servidores no painel.';
+      $('pronto-espera').textContent = 'Pronto! O servidor já está conectado e aparece em Ajustes › Servidores no painel.';
       const outros = (await Promise.all(PORTAS.filter((p) => p !== porta).map((p) => sondar(p, 3000)))).filter((x) => x && !x.vinculado);
       $('btn-outro').hidden = !outros.length;
       return;
     }
   }
-  $('pronto-espera').textContent = 'Em alguns segundos ele aparece em Servidores no painel. Pode fechar esta página.';
+  $('pronto-espera').textContent = 'Em alguns segundos ele aparece em Ajustes › Servidores no painel. Pode fechar esta página.';
 }
 
 $('form-codigo').addEventListener('submit', (e) => {

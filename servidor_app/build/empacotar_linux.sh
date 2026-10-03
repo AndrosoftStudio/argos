@@ -2,10 +2,13 @@
 # Gera o Argos EPI Servidor para Linux x64 (janela Electron + Python + PostgreSQL), um .tar.gz por placa:
 #   $SAIDA/linux/argos-epi-servidor-<versao>-<placa>.tar.gz   (placa: nvidia | cpu)
 #   $SAIDA/linux/linux.json                                   (url, tamanho e sha256: vai para o latest.json)
-# Roda dentro de um container Ubuntu (do Windows, com o Docker Desktop). O trabalho pesado fica num
-# disco ext4 (arquivo em D:), para nao inchar o disco do WSL no C: e para os links simbolicos do Python:
-#   docker run --rm --privileged -v D:\argos-build\linux:/d -v "<pasta v20>:/fonte:ro" -v D:\argos-build\saida:/saida \
+# Roda dentro de um container Ubuntu (do Windows, com o Docker Desktop). O trabalho fica no disco do
+# container (ext4: os links simbolicos do Python funcionam), uma placa por vez e sem cache do uv, e o
+# .tar.gz sai direto na pasta de saida (D:), para o disco do Docker no C: quase nao crescer:
+#   docker run --rm -v "<pasta v20>:/fonte:ro" -v D:\argos-build\saida:/saida \
 #     -e VERSAO=20.1.0 -e PLACAS="cpu nvidia" ubuntu:22.04 bash /fonte/servidor_app/build/empacotar_linux.sh
+# (ARGOS_DISCO=/caminho/disco.img usa um ext4 em arquivo, se o container for --privileged)
+# -e SO_PROGRAMA=1: so troca o programa nos .tar.gz que ja existem (o Python com o PyTorch e reaproveitado).
 set -euo pipefail
 VERSAO="${VERSAO:-20.1.0}"
 PLACAS="${PLACAS:-cpu nvidia}"
@@ -18,19 +21,20 @@ passo() { printf '\n== %s\n' "$*"; }
 passo "Ferramentas"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null
-apt-get install -y -qq --no-install-recommends curl ca-certificates unzip xz-utils pigz e2fsprogs >/dev/null
+# libgl1/libglib2.0: o OpenCV pede (os Linux com interface grafica ja tem); so para conferir os imports aqui
+apt-get install -y -qq --no-install-recommends curl ca-certificates unzip xz-utils pigz e2fsprogs libgl1 libglib2.0-0 >/dev/null
 
 # disco de trabalho: ext4 dentro de um arquivo no D: (se /d existir); senao, /tmp do container
 W=/tmp/argos-trabalho
-if [ -d /d ]; then
-  [ -f /d/disco.img ] || { truncate -s 60G /d/disco.img; mkfs.ext4 -q -F /d/disco.img; }
+if [ -n "${ARGOS_DISCO:-}" ]; then
+  [ -f "$ARGOS_DISCO" ] || { truncate -s 60G "$ARGOS_DISCO"; mkfs.ext4 -q -F "$ARGOS_DISCO"; }
   mkdir -p /mnt/w
-  mountpoint -q /mnt/w || mount -o loop /d/disco.img /mnt/w
+  mountpoint -q /mnt/w || mount -o loop "$ARGOS_DISCO" /mnt/w
   W=/mnt/w
 fi
 CACHE="$W/cache"; PALCO="$W/palco"
 mkdir -p "$CACHE" "$PALCO" "$SAIDA/linux"
-export UV_CACHE_DIR="$W/uv-cache" UV_LINK_MODE=copy UV_HTTP_TIMEOUT=900 UV_PYTHON_INSTALL_DIR="$W/uv-python"
+export UV_NO_CACHE=1 UV_LINK_MODE=copy UV_HTTP_TIMEOUT=900 UV_PYTHON_INSTALL_DIR="$W/uv-python"
 baixar() { [ -s "$2" ] || { echo "   baixando $1"; curl -fL --retry 3 -s -o "$2.tmp" "$1"; mv "$2.tmp" "$2"; }; }
 
 UV="$CACHE/uv"
@@ -96,6 +100,15 @@ test -x "$APP/bin/pgsql/bin/initdb"
 LINUX_JSON="$SAIDA/linux/linux.json"
 [ -f "$LINUX_JSON" ] || echo '{}' > "$LINUX_JSON"
 for PLACA in $PLACAS; do
+  # SO_PROGRAMA=1: reaproveita o Python do .tar.gz que ja existe e so troca o programa (bem mais rapido)
+  ANTIGO="$(ls "$SAIDA/linux/argos-epi-servidor-"*"-$PLACA.tar.gz" 2>/dev/null | head -1 || true)"
+  if [ "${SO_PROGRAMA:-0}" = "1" ] && [ -n "$ANTIGO" ]; then
+    passo "Python $PLACA reaproveitado de $(basename "$ANTIGO")"
+    BASE="$PALCO/py-$PLACA"
+    rm -rf "$BASE"; mkdir -p "$BASE"
+    pigz -dc "$ANTIGO" | tar -C "$BASE" -xf - argos-epi-servidor/python
+    mv "$BASE/argos-epi-servidor/python" "$BASE/python"; rm -rf "$BASE/argos-epi-servidor"
+  else
   passo "Python 3.12 para $PLACA"
   case "$PLACA" in
     nvidia) INDICE=https://download.pytorch.org/whl/cu126; ONNX="$ONNX_NVIDIA" ;;
@@ -120,6 +133,7 @@ for PLACA in $PLACAS; do
   rm -rf "$BASE/python/lib/python3.12/site-packages/torch/include"
   find "$BASE/python" -name __pycache__ -type d -prune -exec rm -rf {} +
   echo "$PLACA" > "$BASE/python/argos-variante.txt"
+  fi
 
   passo "Pacote $PLACA"
   PKG="$PALCO/pkg-$PLACA/argos-epi-servidor"
@@ -128,18 +142,18 @@ for PLACA in $PLACAS; do
   mv "$BASE/python" "$PKG/python"; rm -rf "$BASE"
   NOME="argos-epi-servidor-$VERSAO-$PLACA.tar.gz"
   rm -f "$SAIDA/linux/argos-epi-servidor-"*"-$PLACA.tar.gz"
-  tar -C "$PALCO/pkg-$PLACA" --owner=0 --group=0 -cf - argos-epi-servidor | pigz -6 > "$W/$NOME"
-  mv "$W/$NOME" "$SAIDA/linux/$NOME"
-  rm -rf "$PALCO/pkg-$PLACA"
+  tar -C "$PALCO/pkg-$PLACA" --owner=0 --group=0 -cf - argos-epi-servidor | pigz -6 > "$SAIDA/linux/$NOME.tmp"
+  mv "$SAIDA/linux/$NOME.tmp" "$SAIDA/linux/$NOME"
   TAM="$(stat -c %s "$SAIDA/linux/$NOME")"
   SHA="$(sha256sum "$SAIDA/linux/$NOME" | cut -d' ' -f1)"
-  "$UV" run --no-project --python 3.12 python - "$LINUX_JSON" "$PLACA" "linux/$NOME" "$TAM" "$SHA" <<'EOF'
+  "$PKG/python/bin/python3" - "$LINUX_JSON" "$PLACA" "linux/$NOME" "$TAM" "$SHA" <<'EOF'
 import json, sys
 arq, placa, url, tam, sha = sys.argv[1:]
 d = json.load(open(arq))
 d[placa] = {'url': url, 'tamanho': int(tam), 'sha256': sha}
 json.dump(d, open(arq, 'w'), indent=2)
 EOF
+  rm -rf "$PALCO/pkg-$PLACA"
   echo "   $NOME: $((TAM / 1048576)) MB"
 done
 

@@ -242,7 +242,9 @@ class Banco:
             with os.fdopen(fd, 'w') as f:
                 f.write('argos\n')
             cmd = [self.initdb, '-D', self.dados, '-U', 'argos', f'--pwfile={pw}', '-E', 'UTF8',
-                   '--no-locale', '-A', 'scram-sha-256', '-L', share]
+                   '--no-locale', '-A', 'scram-sha-256']
+            if temp_share:   # no resto o initdb acha o share sozinho (no Linux fica em share/postgresql)
+                cmd += ['-L', share]
             r = _rodar(cmd, timeout=600)
             saida = (r.stdout + r.stderr).decode('utf-8', 'replace')
             if r.returncode != 0:
@@ -744,6 +746,8 @@ def _servidor_http(sup):
                 except Exception as e:
                     return self._json({'erro': f'O servidor nao respondeu: {e}'}, 502)
                 log(f"Processar cameras com: {hw.get('dispositivo')}", 'servidor')
+                if isinstance(sup.backend.resumo, dict):   # a tela nao volta para a escolha antiga
+                    sup.backend.resumo['hardware'] = hw
                 return self._json(hw)
             return self._json({'erro': 'rota desconhecida'}, 404)
 

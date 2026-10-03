@@ -186,7 +186,7 @@ def _anunciar(codigo, site):
     linha = '=' * 64
     print(f"\n{linha}\n  VINCULE ESTE SERVIDOR A SUA CONTA DO ARGOS EPI\n"
           f"  Neste computador, abra: {site}\n"
-          f"  (ou no painel: Servidores > Adicionar este computador)\n"
+          f"  (ou no painel: Ajustes > Servidores > Adicionar este computador)\n"
           f"  O site encontra o servidor sozinho. Entre na conta e clique em Vincular.\n"
           f"  Se o site nao achar, digite o codigo: {codigo}   (vale 15 minutos)\n{linha}\n", flush=True)
 

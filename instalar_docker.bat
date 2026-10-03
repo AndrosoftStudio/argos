@@ -165,7 +165,7 @@ if /i "%VINCULO%"=="nao_vinculado" (
     echo.
     echo  [*] Abrindo o site para vincular este servidor a sua conta...
     echo      Se nao abrir, acesse: https://argosepi.vercel.app/parear.html
-    echo      ou no painel: Servidores, Adicionar este computador.
+    echo      ou no painel: Ajustes, Servidores, Adicionar este computador.
     start "" "https://argosepi.vercel.app/parear.html?porta=%PORTA%"
 )
 echo.
