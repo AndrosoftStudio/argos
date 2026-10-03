@@ -1,0 +1,53 @@
+{
+    "versao":  "20.1.0",
+    "data":  "2026-10-02",
+    "notas":  "",
+    "windows":  {
+                    "setup":  {
+                                  "url":  "ArgosEPI-Servidor-Setup.exe",
+                                  "tamanho":  120320,
+                                  "sha256":  "20d1f1a851b073a7152387618ce63d104bf781fc88e91268f74ed51526e1bf23"
+                              },
+                    "app":  {
+                                "url":  "win/argos-app-20.1.0.zip",
+                                "tamanho":  195441278,
+                                "sha256":  "b6dd2df8f06e4c28e07ff569f3dbcec18665b1c2d3c5a9e0bb0286c77635651e",
+                                "descompactado":  332243865
+                            },
+                    "python":  {
+                                   "nvidia":  {
+                                                  "id":  "py312-nvidia-1adc0844",
+                                                  "url":  "win/python-nvidia-py312-nvidia-1adc0844.zip",
+                                                  "tamanho":  3011948316,
+                                                  "sha256":  "542805df701912900038dc947136276aa023b1c86c2d8d5439a4cf6f77e0f44c",
+                                                  "descompactado":  5086883443
+                                              },
+                                   "dml":  {
+                                               "id":  "py312-dml-b3116fcd",
+                                               "url":  "win/python-dml-py312-dml-b3116fcd.zip",
+                                               "tamanho":  300092063,
+                                               "sha256":  "09a1c9036d4dcad66480d7d5a30699b046496c3fdad50f0141151ae2f90dbf25",
+                                               "descompactado":  959086462
+                                           },
+                                   "cpu":  {
+                                               "id":  "py312-cpu-1e483ced",
+                                               "url":  "win/python-cpu-py312-cpu-1e483ced.zip",
+                                               "tamanho":  298183355,
+                                               "sha256":  "2bc1d8bd8f1386432cdc261edf4159fe1abca40c797608a285273d1c5a3ac107",
+                                               "descompactado":  995463412
+                                           }
+                               }
+                },
+    "linux":  {
+                  "cpu":  {
+                              "url":  "linux/argos-epi-servidor-20.1.0-cpu.tar.gz",
+                              "tamanho":  731814500,
+                              "sha256":  "bf9c78033061d328895a3e4ac13a7244f4d355f14ff9f6f4ce7a53d186711bad"
+                          },
+                  "nvidia":  {
+                                 "url":  "linux/argos-epi-servidor-20.1.0-nvidia.tar.gz",
+                                 "tamanho":  4463288741,
+                                 "sha256":  "e38af9828a1f8b6a6ee488ad15d2741ce9183c5089403643cf02f0f4371e00a9"
+                             }
+              }
+}
