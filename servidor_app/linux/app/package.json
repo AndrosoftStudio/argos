@@ -1,0 +1,8 @@
+{
+  "name": "argos-epi-servidor",
+  "productName": "Argos EPI Servidor",
+  "version": "20.1.0",
+  "description": "Servidor de cameras com IA para EPIs (TCC SENAI Lauro de Freitas/BA)",
+  "main": "main.js",
+  "license": "UNLICENSED"
+}

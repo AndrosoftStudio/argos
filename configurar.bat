@@ -111,6 +111,8 @@ REM ---------------------------------------------------------------------
 echo  [4/7] Dependencias (requirements.txt)...
 "%UV%" pip install --python "%PY%" -r requirements.txt
 if errorlevel 1 goto :sem_internet
+"%PY%" -c "import cv2, ultralytics, flask, psycopg, onnxruntime, cryptography" >nul 2>&1
+if errorlevel 1 goto :requirements_incompleto
 echo  [OK] Dependencias instaladas.
 echo.
 
@@ -130,11 +132,27 @@ if not exist "%PGBIN%\pg_ctl.exe" goto :sem_postgres
 
 if exist "%PGDATA%\PG_VERSION" goto :pg_dados_ok
 echo      criando o banco em dados\pgdata...
+REM O initdb manda para o banco um comando com o caminho da pasta share.
+REM Com acento no caminho (ex.: "André") o banco recusa ("invalid byte
+REM sequence for encoding UTF8"). Nesse caso a share vai para uma pasta
+REM temporaria sem acento so durante o initdb.
+set "PGSHARE=%CD%\bin\pgsql\share"
+set "PGSHARE_TEMP="
+powershell -NoProfile -ExecutionPolicy Bypass -Command "if ((Get-Location).Path -match '[^\x20-\x7E]') { exit 1 }" >nul 2>&1
+if not errorlevel 1 goto :pg_share_ok
+set "PGSHARE_TEMP=%PUBLIC%\ArgosEPI-pgshare"
+if exist "%PGSHARE_TEMP%" rmdir /s /q "%PGSHARE_TEMP%"
+echo      (a pasta tem acento: usando %PGSHARE_TEMP% so para criar o banco)
+xcopy "%PGSHARE%" "%PGSHARE_TEMP%\" /e /i /q /y >nul
+if errorlevel 1 goto :sem_postgres
+set "PGSHARE=%PGSHARE_TEMP%"
+:pg_share_ok
 > "%TEMP%\argos_pw.txt" echo argos
-"%PGBIN%\initdb.exe" -D "%PGDATA%" -U argos --pwfile="%TEMP%\argos_pw.txt" -E UTF8 --no-locale -A scram-sha-256 >nul
+"%PGBIN%\initdb.exe" -D "%PGDATA%" -U argos --pwfile="%TEMP%\argos_pw.txt" -E UTF8 --no-locale -A scram-sha-256 -L "%PGSHARE%" >"%CD%\dados\initdb.log" 2>&1
 set "ERRO_INITDB=%errorlevel%"
 del /q "%TEMP%\argos_pw.txt" >nul 2>&1
-if not "%ERRO_INITDB%"=="0" goto :sem_postgres
+if defined PGSHARE_TEMP rmdir /s /q "%PGSHARE_TEMP%" >nul 2>&1
+if not "%ERRO_INITDB%"=="0" goto :sem_initdb
 >> "%PGDATA%\postgresql.conf" echo port = %PG_PORTA%
 >> "%PGDATA%\postgresql.conf" echo listen_addresses = '127.0.0.1'
 "%PGBIN%\pg_ctl.exe" -D "%PGDATA%" -l "%CD%\dados\postgres.log" -w -t 60 start >nul
@@ -194,6 +212,7 @@ echo.
 echo  Conferindo a instalacao...
 "%PY%" -c "import torch, ultralytics, flask, cv2, psycopg, onnxruntime; print('  PyTorch', torch.__version__, '| CUDA:', torch.cuda.is_available()); print('  Ultralytics', ultralytics.__version__, '| OpenCV', cv2.__version__)"
 if errorlevel 1 goto :import_falhou
+> "dados\configurado.txt" echo %MODO%
 
 echo.
 echo  =====================================================
@@ -229,6 +248,20 @@ goto :fim_erro
 :sem_python
 echo.
 echo  [ERRO] O Python portatil nao foi instalado. Rode de novo.
+goto :fim_erro
+
+:requirements_incompleto
+echo.
+echo  [ERRO] O requirements.txt desta pasta nao tem as bibliotecas do Argos
+echo         (OpenCV, Ultralytics, psycopg...). Baixe o projeto de novo em
+echo         https://github.com/AndrosoftStudio/argos (Code ^> Download ZIP)
+echo         e rode este configurar.bat na pasta nova.
+goto :fim_erro
+
+:sem_initdb
+echo.
+echo  [ERRO] Nao foi possivel criar o banco. Ultimas linhas de dados\initdb.log:
+powershell -NoProfile -Command "Get-Content 'dados\initdb.log' -Tail 6" 2>nul
 goto :fim_erro
 
 :sem_postgres

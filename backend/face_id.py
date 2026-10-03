@@ -42,7 +42,7 @@ _GABARITO = np.array([[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 71.7366]
                       [41.5493, 92.3655], [70.7299, 92.2041]], dtype=np.float32)
 
 _lock = threading.RLock()
-_sessoes = None          # (detector, reconhecedor, tamanho_entrada)
+_sessoes = {}            # provedores -> (detector, reconhecedor, tamanho_entrada)
 _erro_carga = None
 
 
@@ -56,13 +56,29 @@ def _caminho(nome) -> str:
 
 
 def _provedores(device: str):
-    """Espelha a escolha de hardware do resto do sistema."""
+    """Espelha a escolha de hardware do resto do sistema (so pede o que este onnxruntime tem)."""
     d = str(device or 'cpu').lower()
-    if d in ('0', 'cuda', 'gpu') or d.isdigit():
-        return ['CUDAExecutionProvider', 'CPUExecutionProvider']
-    if d == 'dml':
-        return ['DmlExecutionProvider', 'CPUExecutionProvider']
-    return ['CPUExecutionProvider']
+    if d in ('0', 'cuda', 'gpu') or d.isdigit() or d.startswith('cuda'):
+        quer = 'CUDAExecutionProvider'
+    elif d == 'dml' or d.startswith('privateuseone'):     # torch_directml.device() vira privateuseone:0
+        quer = 'DmlExecutionProvider'
+    else:
+        return ['CPUExecutionProvider']
+    try:
+        import onnxruntime as ort
+        if quer not in ort.get_available_providers():
+            print(f'[face_id] {quer} indisponivel neste onnxruntime: rostos na CPU '
+                  f'(GPU NVIDIA pede onnxruntime-gpu; AMD/Intel, onnxruntime-directml)')
+            return ['CPUExecutionProvider']
+        if quer == 'CUDAExecutionProvider' and hasattr(ort, 'preload_dlls'):
+            # usa as DLLs/.so do CUDA e do cuDNN que vieram com o PyTorch (ja importado)
+            try:
+                ort.preload_dlls()   # Windows: procura primeiro em torch\lib
+            except Exception:
+                pass
+    except Exception:
+        return ['CPUExecutionProvider']
+    return [quer, 'CPUExecutionProvider']
 
 
 def disponivel() -> bool:
@@ -85,31 +101,36 @@ def erro() -> str:
 
 
 def carregar(device='cpu'):
-    """Carrega os dois ONNX uma vez por processo. None se nao der."""
-    global _sessoes, _erro_carga
-    if _sessoes is not None:
-        return _sessoes
+    """Carrega os dois ONNX uma vez por tipo de hardware (GPU/CPU). None se nao der."""
+    global _erro_carga
+    prov = tuple(_provedores(device))
+    s = _sessoes.get(prov)
+    if s is not None:
+        return s
     with _lock:
-        if _sessoes is not None:
-            return _sessoes
+        s = _sessoes.get(prov)
+        if s is not None:
+            return s
         try:
             import onnxruntime as ort
-            prov = _provedores(device)
             op = ort.SessionOptions()
             op.log_severity_level = 3
-            det = ort.InferenceSession(_caminho('det_10g.onnx'), sess_options=op, providers=prov)
-            rec = ort.InferenceSession(_caminho('w600k_r50.onnx'), sess_options=op, providers=prov)
+            det = ort.InferenceSession(_caminho('det_10g.onnx'), sess_options=op, providers=list(prov))
+            rec = ort.InferenceSession(_caminho('w600k_r50.onnx'), sess_options=op, providers=list(prov))
             forma = rec.get_inputs()[0].shape          # [1,3,112,112]
             lado = int(forma[2]) if isinstance(forma[2], int) else 112
-            _sessoes = (det, rec, lado)
+            s = (det, rec, lado)
+            _sessoes[prov] = s
             _erro_carga = None
             print(f'[face_id] SCRFD + ArcFace prontos ({det.get_providers()[0]})')
         except Exception as e:
+            if prov != ('CPUExecutionProvider',):
+                print(f'[face_id] {prov[0]} falhou ({e}); tentando na CPU')
+                return carregar('cpu')
             _erro_carga = str(e)
             print(f'[face_id] indisponivel: {e}')
             return None
-    return _sessoes
-
+    return s
 
 def normalizar(v) -> np.ndarray:
     v = np.asarray(v, dtype=np.float32).ravel()

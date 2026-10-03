@@ -37,7 +37,8 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(__file__))
 from processor import VideoProcessor
-from epi_detector import melhor_modelo_argos
+from epi_detector import melhor_modelo_argos, resolve_device, gpu_disponivel
+from epi_detector import preferencia as preferencia_dispositivo, definir_preferencia as _definir_dispositivo
 import db
 import face_id
 import seguranca
@@ -1158,6 +1159,132 @@ def estado_pareamento():
     return jsonify(dict(conta.estado_publico(), versao='v20', docker=EM_DOCKER))
 
 
+def _sem_senha(fonte) -> str:
+    """rtsp://usuario:senha@ip/... vira rtsp://ip/...: a janela do servidor mostra a fonte sem a senha."""
+    return re.sub(r'(?<=://)[^/@\s]+@', '', str(fonte or ''))
+
+
+@app.route('/local/resumo', methods=['GET'])
+def resumo_local():
+    """O que a janela do programa do servidor mostra: conta, maquina e cameras."""
+    if not _pedido_local():
+        return jsonify({'error':'Disponível só no próprio servidor.'}), 403
+    metrics = _sys_metrics()
+    with streams_lock:
+        procs = list(streams.items())
+    with removed_streams_lock:
+        removidos = set(removed_streams)
+    cameras = []
+    for sid, p in procs:
+        if sid in removidos:
+            continue
+        try:
+            st = p.get_status()
+        except Exception:
+            continue
+        cameras.append({'id': sid, 'ativa': bool(st.get('active')), 'status': st.get('status'),
+                        'fonte': _sem_senha(st.get('camera')), 'modelo': st.get('model'),
+                        'motor': st.get('runtime_backend'), 'fps': st.get('fps'),
+                        'pessoas': len(st.get('persons') or []), 'faltando': st.get('missing') or [],
+                        'atraso_ms': st.get('atraso_ms')})
+    return jsonify(dict(conta.estado_publico(), versao='v20', docker=EM_DOCKER, porta=PORTA,
+                        link_vincular=conta.link_vincular(PORTA_PUBLICADA), tipo=_server_kind(),
+                        url_local=f'http://{local_ip}:{PORTA}' if local_ip else '',
+                        cloudflare_url=cloudflare_url, disponivel=_availability_score(metrics),
+                        maquina={'cpu': metrics.get('cpu'), 'ram_pct': metrics.get('ram_pct'),
+                                 'ram_total': metrics.get('ram_total'), 'gpu_name': metrics.get('gpu_name'),
+                                 'gpu_pct': metrics.get('gpu_pct'), 'cpu_count': psutil.cpu_count(logical=True)},
+                        hardware=_hardware_servidor(), cameras=cameras))
+
+
+def _hardware_servidor() -> dict:
+    """Placa de video ou CPU deste servidor: o que tem e o que foi escolhido."""
+    gpu = gpu_disponivel()
+    nome = ''
+    if gpu == 'nvidia':
+        try:
+            nome = torch.cuda.get_device_name(0)
+        except Exception:
+            nome = 'GPU NVIDIA'
+    elif gpu == 'dml':
+        nome = _sys_metrics().get('gpu_name') or 'GPU AMD/Intel (DirectML)'
+    try:
+        import onnxruntime as _ort
+        prov_rosto = _ort.get_available_providers()
+    except Exception:
+        prov_rosto = []
+    rosto_gpu = ('CUDAExecutionProvider' in prov_rosto) if gpu == 'nvidia' else \
+                ('DmlExecutionProvider' in prov_rosto) if gpu == 'dml' else False
+    with streams_lock:
+        usando = sorted({str(p.device) for p in streams.values() if getattr(p, 'running', False)})
+    return {'dispositivo': preferencia_dispositivo(), 'gpu': gpu, 'gpu_nome': nome,
+            'em_uso': 'cpu' if _device_global == 'cpu' else 'gpu', 'rosto_na_gpu': rosto_gpu,
+            'cameras_em': ['cpu' if d == 'cpu' else 'gpu' for d in usando], 'docker': EM_DOCKER}
+
+
+def _trocar_dispositivo(valor):
+    """Grava a escolha e recarrega as cameras ligadas no hardware novo (em segundo plano)."""
+    global _device_global
+    valor = _definir_dispositivo(valor)
+    d = resolve_device('auto')
+    _device_global = 'cpu' if d == 'cpu' else ('0' if str(d) == '0' else 'dml')
+    with streams_lock:
+        procs = [p for p in streams.values() if getattr(p, 'running', False) and getattr(p, 'model_path', None)]
+
+    def recarregar():
+        for p in procs:
+            if str(p.device) == str(resolve_device('auto')):
+                continue
+            try:
+                p.update_settings(p.model_path, 'auto', required_items=list(p.required_items or []) or None)
+            except Exception as e:
+                print(f'[hardware] nao recarregou {p.client_id}: {e}')
+    if procs:
+        threading.Thread(target=recarregar, daemon=True, name='troca-hardware').start()
+    print(f'[hardware] processar com: {valor} ({_device_global}); {len(procs)} camera(s) recarregando')
+    return valor
+
+
+@app.route('/servidor/hardware', methods=['GET', 'POST'])
+def servidor_hardware():
+    """Ajustes > Servidores no site: GPU ou CPU por servidor."""
+    u, err = _auth()
+    if err: return err
+    if '_cam_session' in u: return jsonify({'error': 'Câmeras não mudam o hardware.'}), 403
+    if request.method == 'POST':
+        try:
+            _trocar_dispositivo((request.get_json(force=True) or {}).get('dispositivo'))
+        except ValueError:
+            return jsonify({'error': 'Escolha auto, gpu ou cpu.'}), 400
+    return jsonify(_hardware_servidor())
+
+
+@app.route('/local/hardware', methods=['GET', 'POST'])
+def local_hardware():
+    """O mesmo, pela janela do programa do servidor (so na propria maquina)."""
+    if not _pedido_local():
+        return jsonify({'error':'Disponível só no próprio servidor.'}), 403
+    if request.method == 'POST':
+        try:
+            _trocar_dispositivo((request.get_json(force=True) or {}).get('dispositivo'))
+        except ValueError:
+            return jsonify({'error': 'Escolha auto, gpu ou cpu.'}), 400
+    return jsonify(_hardware_servidor())
+
+@app.route('/local/quadro/<sid>', methods=['GET'])
+def quadro_local(sid):
+    """Miniatura da camera para a janela do programa do servidor."""
+    if not _pedido_local():
+        return jsonify({'error':'Disponível só no próprio servidor.'}), 403
+    with streams_lock:
+        p = streams.get(sid)
+    fb = p.get_frame_b64() if p else None
+    if not fb:
+        return Response(status=204)
+    return Response(base64.b64decode(fb.split(',', 1)[-1]), mimetype='image/jpeg',
+                    headers={'Cache-Control': 'no-store'})
+
+
 @app.route('/malha/mudancas', methods=['GET'])
 def malha_mudancas():
     if not malha.par_autorizado(_token()):
@@ -1193,7 +1320,8 @@ def _info_servidor():
         'versao': 'v20',
         'node_id': BACKEND_NODE_ID,
         'hardware': {'cpu_count': psutil.cpu_count(logical=True), 'gpu_name': metrics.get('gpu_name'),
-                     'ram_total': metrics.get('ram_total'), 'docker': EM_DOCKER},
+                     'ram_total': metrics.get('ram_total'), 'docker': EM_DOCKER,
+                     'dispositivo': preferencia_dispositivo(), 'gpu': gpu_disponivel()},
         'estado': {'availability': _availability_score(metrics), 'active_streams': ativos,
                    'cpu': metrics.get('cpu'), 'ram_pct': metrics.get('ram_pct'),
                    'malha': malha.estado()},
@@ -1449,6 +1577,7 @@ def hardware_status():
     return jsonify({
         'server_kind': _server_kind(),
         'device_default': _device_global,
+        'dispositivo': preferencia_dispositivo(),
         'tensorrt_available': _tensorrt_export_available(),
         'tensorrt_error': _tensorrt_dependency_error(),
         'tensorrt_enabled': os.environ.get('EPI_USE_TENSORRT', '1').strip().lower() not in ('0', 'false', 'no', 'off'),

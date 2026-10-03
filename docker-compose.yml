@@ -69,6 +69,7 @@ services:
       args:
         TORCH_INDEX_URL: https://download.pytorch.org/whl/cu124
         INSTALL_TENSORRT: "0"
+        ONNX_PACOTE: onnxruntime-gpu==1.23.2
     gpus: all
 
   backend-cpu:

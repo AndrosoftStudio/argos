@@ -1,0 +1,7 @@
+#!/bin/sh
+# Abre o Argos EPI Servidor (janela + servidor). Use --minimizado para ligar em segundo plano.
+RAIZ="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+export ARGOS_RAIZ="$RAIZ"
+# --no-sandbox: a janela so mostra a interface local (127.0.0.1) e o sandbox do Chromium
+# exigiria instalar um arquivo como root. O servidor em si nunca roda como root.
+exec "$RAIZ/janela/argos-epi-servidor" --no-sandbox "$@"

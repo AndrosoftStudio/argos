@@ -79,6 +79,9 @@ if __name__ == "__main__":
         except Exception:
             AM._device_global = "cpu"
             print("  AVISO GPU nao detectada - usando CPU")
+    if AM._device_global != "cpu" and AM.preferencia_dispositivo() == "cpu":
+        AM._device_global = "cpu"
+        print("  Escolhido nos Ajustes: processar so na CPU")
 
     AM.local_ip = os.environ.get("ARGOS_LOCAL_IP", "").strip() or get_local_ip()
     print(f"  URL local  : http://{AM.local_ip}:{PORTA}")

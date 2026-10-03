@@ -25,6 +25,19 @@ if not defined PY (
 echo  Projeto : %CD%
 echo.
 
+REM Bibliotecas: se o configurar.bat parou no meio, completa aqui
+"%PY%" -c "import cv2, ultralytics, flask, psycopg, onnxruntime, cryptography" >nul 2>&1
+if not errorlevel 1 goto :libs_ok
+if not exist "bin\uv.exe" goto :libs_faltando
+echo  [*] Faltam bibliotecas do Argos. Instalando (requirements.txt)...
+set "UV_LINK_MODE=copy"
+"bin\uv.exe" pip install --python "%PY%" -r requirements.txt
+"%PY%" -c "import cv2, ultralytics, flask, psycopg, onnxruntime, cryptography" >nul 2>&1
+if errorlevel 1 goto :libs_faltando
+echo  [OK] Bibliotecas instaladas.
+echo.
+:libs_ok
+
 netstat -ano | findstr /r /c:"TCP *[^ ]*:8088 .*LISTENING" >nul
 if not errorlevel 1 (
     echo  [INFO] A porta 8088 ja esta em uso ^(talvez pelo Argos do Docker^).
@@ -54,7 +67,16 @@ set "DATABASE_URL=postgresql://argos:argos@127.0.0.1:%PG_PORTA%/argosepi"
 echo  [OK] Banco ligado: dados\pgdata (porta %PG_PORTA%)
 goto :banco_fim
 :banco_docker
-echo  [INFO] Sem banco portatil (rode configurar.bat): usando o do Docker em localhost:5432.
+REM Sem banco portatil: so segue se houver outro banco (DATABASE_URL no .env
+REM ou o do Docker em localhost:5432)
+if exist ".env" findstr /r /b /c:"DATABASE_URL=..*" ".env" >nul 2>&1
+if exist ".env" if not errorlevel 1 (
+    echo  [INFO] Usando o banco do DATABASE_URL do .env.
+    goto :banco_fim
+)
+netstat -ano | findstr /r /c:"TCP *[^ ]*:5432 .*LISTENING" >nul
+if errorlevel 1 goto :sem_banco
+echo  [INFO] Sem banco portatil: usando o do Docker em localhost:5432.
 :banco_fim
 echo.
 
@@ -83,3 +105,19 @@ if defined PG_LIGUEI (
 )
 pause
 endlocal
+exit /b 0
+
+:libs_faltando
+echo.
+echo  [ERRO] Faltam bibliotecas do Argos (OpenCV, Ultralytics...).
+echo         Rode configurar.bat e espere ate aparecer "TUDO PRONTO".
+echo.
+pause & exit /b 1
+
+:sem_banco
+echo.
+echo  [ERRO] Banco de dados nao encontrado.
+echo         O configurar.bat cria o banco (PostgreSQL portatil): rode-o
+echo         e espere ate aparecer "TUDO PRONTO". Depois abra este de novo.
+echo.
+pause & exit /b 1

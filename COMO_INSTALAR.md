@@ -1,7 +1,10 @@
 # Argos EPI v20 — como instalar o backend
 
-Dois jeitos, escolha um:
+Três jeitos, escolha um:
 
+- **Programa Argos EPI Servidor** (o mais fácil): no site, **Ajustes → Servidores → Baixar o
+  programa do servidor**. Escolha o sistema (Windows ou Linux) e a placa de vídeo (NVIDIA,
+  AMD/Intel ou só o processador). Vem tudo já compilado; não precisa de administrador.
 - **Com Docker** (PC próprio): `instalar_docker.bat`. Liga sozinho junto com o Docker Desktop.
 - **Sem Docker** (PC da escola, sem administrador): `configurar.bat` uma vez e depois
   `iniciar.bat` sempre que for usar.
@@ -9,6 +12,39 @@ Dois jeitos, escolha um:
 Os dois usam a mesma pasta `models` e o mesmo `.env`, e o painel fica em **http://localhost:8088**.
 Se a porta 8088 já estiver ocupada (por outro programa ou pelo outro modo do Argos), o
 servidor usa a próxima livre, até a 8097, e mostra o endereço na janela.
+
+## Programa Argos EPI Servidor (instalador)
+
+**Windows 10/11:** baixe `ArgosEPI-Servidor-Setup-<placa>.exe` pelo site e abra. O instalador
+(pequeno) mostra a placa detectada, a pasta (padrão `%LOCALAPPDATA%\Programs\Argos EPI Servidor`),
+"Iniciar junto com o Windows" e o atalho na área de trabalho; depois baixa o programa e um Python
+com o PyTorch já pronto para a placa (NVIDIA ~2,6 GB, AMD/Intel ~0,7 GB, CPU ~0,4 GB).
+
+**Linux x64:** baixe o `.tar.gz` (NVIDIA ou CPU) e, no terminal, sem sudo:
+
+```bash
+tar -xzf argos-epi-servidor-*.tar.gz
+cd argos-epi-servidor && ./instalar.sh
+```
+
+Fica em `~/.local/share/argos-epi-servidor`, com atalho no menu de aplicativos.
+
+O programa abre numa janela (sem console), com o ícone perto do relógio. Mostra a conta
+vinculada, o computador (CPU, RAM, GPU), as câmeras que este servidor está processando (com
+miniaturas) e o registro. Em **Ajustes**: iniciar com o sistema (em segundo plano ou com a
+janela), o que o **X** faz (perguntar, segundo plano ou fechar o servidor), tema e **Processar
+câmeras com** (automático, placa de vídeo ou processador). Ele mesmo liga o PostgreSQL
+portátil, baixa o modelo de rosto na primeira vez, escolhe portas livres e se atualiza.
+Os dados ficam em `dados\` dentro da pasta do programa e nunca são apagados ao atualizar.
+
+## Placa de vídeo ou processador
+
+Cada servidor escolhe onde a IA roda: **site → Ajustes → Servidores**, no cartão do
+servidor, ou no programa do servidor em **Ajustes**. **Automático** usa a placa de vídeo se
+houver; **Processador** deixa a placa livre. A escolha fica no próprio servidor
+(`dados/hardware.json`) e as câmeras ligadas recarregam sozinhas. O reconhecimento de rosto
+também vai para a placa: no Docker com GPU e no programa NVIDIA entra o `onnxruntime-gpu`
+(CUDA 12); no programa AMD/Intel, o `onnxruntime-directml`.
 
 ## Com Docker (1 clique)
 
@@ -20,7 +56,7 @@ servidor usa a próxima livre, até a 8097, e mostra o endereço na janela.
 5. Na primeira vez abre sozinho o site na página **Vincular servidor**. Ele encontra o
    servidor deste computador sozinho: entre na sua conta do Argos (senha ou Google) e
    clique em **Vincular**. Se não abrir, entre em **https://argosepi.vercel.app** →
-   **Servidores** → **Adicionar este computador**.
+   **Ajustes** → **Servidores** → **Adicionar este computador**.
 6. Use o painel em **https://argosepi.vercel.app** (ou **http://localhost:8088**).
 
 O `.bat` faz tudo sozinho:
@@ -143,7 +179,7 @@ Cloudflare ligado (padrão).
 - **Erro de GPU**: atualize o driver da NVIDIA ou use `instalar_docker.bat cpu`.
 - **Ver o que está acontecendo**: `docker logs -f argosepi-backend` (ou `argosepi-backend-cpu`).
 - **A página de vínculo não abriu ou não achou o servidor**: no próprio PC, abra
-  **https://argosepi.vercel.app** → **Servidores** → **Adicionar este computador**, e
+  **https://argosepi.vercel.app** → **Ajustes** → **Servidores** → **Adicionar este computador**, e
   permita o acesso se o navegador perguntar. Ainda não achou? Digite o código que aparece
   na janela do servidor (ou em `docker logs argosepi-backend`).
 - **"Este servidor pertence a outra conta"**: ele foi vinculado a outra pessoa. Quem é

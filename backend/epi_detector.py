@@ -18,8 +18,57 @@ MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 POSE_MODELS = {'tempo_real': 'yolo26n-pose.pt', 'detalhado': 'yolo26s-pose.pt', 'super': 'yolo26m-pose.pt'}
 
 
+PREFERENCIA_ARQ = os.path.join(os.path.dirname(MODELS_DIR), 'dados', 'hardware.json')
+PREFERENCIAS = ('auto', 'gpu', 'cpu')
+_preferencia = None
+
+
+def preferencia():
+    """Placa de video ou processador, escolhido por servidor (Ajustes > Servidores no site ou o programa)."""
+    global _preferencia
+    if _preferencia is None:
+        try:
+            with open(PREFERENCIA_ARQ, encoding='utf-8') as f:
+                v = str(json.load(f).get('dispositivo') or 'auto')
+        except Exception:
+            v = os.environ.get('ARGOS_DISPOSITIVO', 'auto').strip().lower()
+        _preferencia = v if v in PREFERENCIAS else 'auto'
+    return _preferencia
+
+
+def definir_preferencia(valor):
+    global _preferencia
+    valor = str(valor or 'auto').lower()
+    if valor not in PREFERENCIAS:
+        raise ValueError('dispositivo invalido')
+    os.makedirs(os.path.dirname(PREFERENCIA_ARQ), exist_ok=True)
+    tmp = PREFERENCIA_ARQ + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump({'dispositivo': valor}, f)
+    os.replace(tmp, PREFERENCIA_ARQ)
+    _preferencia = valor
+    return valor
+
+
+def gpu_disponivel():
+    """'nvidia', 'dml' ou '' (so CPU)."""
+    if torch.cuda.is_available():
+        return 'nvidia'
+    try:
+        import torch_directml  # noqa: F401
+        return 'dml'
+    except Exception:
+        return ''
+
+
 def resolve_device(req):
     req = str(req or 'auto').lower()
+    # a escolha do servidor vale mais que a da camera: "CPU" aqui desliga a placa para todas
+    pref = preferencia()
+    if pref == 'cpu':
+        return 'cpu'
+    if pref == 'gpu' and req == 'cpu':
+        req = 'auto'
     if req == 'cpu':
         return 'cpu'
     if req in ('auto', '0', 'cuda', 'gpu') and torch.cuda.is_available():

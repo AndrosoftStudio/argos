@@ -89,19 +89,33 @@ Há dois jeitos de ligar o backend. Nos dois, o painel fica em `http://localhost
 Passo a passo, pasta `models` e instruções para IA em [`COMO_INSTALAR.md`](COMO_INSTALAR.md).
 
 **Na primeira vez, o servidor pede para ser vinculado a uma conta:** o navegador abre
-o site em `argosepi.vercel.app/parear.html` (ou, no painel, **Servidores → Adicionar este
+o site em `argosepi.vercel.app/parear.html` (ou, no painel, **Ajustes → Servidores → Adicionar este
 computador**). O site acha o servidor deste computador sozinho; a pessoa entra na conta
 (senha ou Google) e clica em **Vincular**. No Docker quem abre o navegador é o
 `instalar_docker.bat`; no `iniciar.bat`/`iniciar.sh`, o próprio servidor. Se a porta 8088
 estiver ocupada, o servidor usa a próxima livre (até 8097).
 
-| | Com Docker | Sem Docker (Windows) | Sem Docker (Linux/macOS) |
-|---|---|---|---|
-| Quando usar | PC próprio, servidor | PC sem Docker ou sem administrador (ex.: laboratório da escola) | idem, em Linux ou macOS |
-| Instalar | `instalar_docker.bat` | `configurar.bat` (uma vez) | `bash configurar.sh` (uma vez) |
-| Ligar | sozinho, junto com o Docker Desktop | `iniciar.bat` | `bash iniciar.sh` |
-| Desligar | `parar_docker.bat` | Ctrl+C na janela do `iniciar.bat` | Ctrl+C no terminal |
-| Banco | container `argosepi-db` (porta 5432) | PostgreSQL portátil em `dados\pgdata` (porta 5433) | PostgreSQL portátil em `dados/pgdata` (porta 5433) |
+| | Programa (instalador) | Com Docker | Sem Docker (Windows) | Sem Docker (Linux/macOS) |
+|---|---|---|---|---|
+| Quando usar | qualquer PC, o mais fácil | PC próprio, servidor | PC sem Docker ou sem administrador (ex.: laboratório da escola) | idem, em Linux ou macOS |
+| Instalar | site → Ajustes → Servidores → Baixar | `instalar_docker.bat` | `configurar.bat` (uma vez) | `bash configurar.sh` (uma vez) |
+| Ligar | atalho, ou junto com o sistema | sozinho, junto com o Docker Desktop | `iniciar.bat` | `bash iniciar.sh` |
+| Desligar | ícone perto do relógio → Sair | `parar_docker.bat` | Ctrl+C na janela do `iniciar.bat` | Ctrl+C no terminal |
+| Banco | PostgreSQL portátil em `dados/pgdata` (porta livre a partir da 5433) | container `argosepi-db` (porta 5432) | PostgreSQL portátil em `dados\pgdata` (porta 5433) | PostgreSQL portátil em `dados/pgdata` (porta 5433) |
+
+**Programa Argos EPI Servidor** (`servidor_app/`): uma janela com a mesma cara do site, sem
+console, que liga o banco, o backend e o túnel, mostra a conta, a máquina e as câmeras em
+processamento, e fica no ícone perto do relógio. No Windows é um `.exe` (WinForms + WebView2,
+`servidor_app/windows/`); no Linux, Electron (`servidor_app/linux/`). Os dois só mostram a
+interface servida pelo `servidor_app/supervisor.py`. Para gerar: `servidor_app/build/empacotar_windows.ps1`
+(instalador + programa + um Python por placa: NVIDIA cu126, DirectML, CPU) e
+`servidor_app/build/empacotar_linux.sh` (em container); `publicar_r2.py` sobe para a pasta
+`argosepi-discovery` do Cloudflare R2, de onde o site baixa.
+
+**GPU ou CPU por servidor:** site → Ajustes → Servidores (ou Ajustes no programa).
+`GET/POST /servidor/hardware` (conta) e `/local/hardware` (só na máquina) gravam
+`dados/hardware.json`; `resolve_device('auto')` segue essa escolha e as câmeras ligadas
+recarregam. O rosto (SCRFD + ArcFace, onnxruntime) usa `onnxruntime-gpu` na imagem GPU.
 
 **Com Docker:** dois cliques em **`instalar_docker.bat`**. Ele liga o Docker Desktop, cria o
 `.env`, escolhe GPU ou CPU, constrói e sobe tudo, e espera o painel responder. À mão, a partir

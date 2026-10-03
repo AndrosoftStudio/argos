@@ -4,6 +4,9 @@ FROM python:3.12-slim
 # cu124 = GPU NVIDIA | cpu = https://download.pytorch.org/whl/cpu
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
 ARG INSTALL_TENSORRT=0
+# rostos (SCRFD + ArcFace) na placa: onnxruntime-gpu 1.23 = CUDA 12 + cuDNN 9, os mesmos do PyTorch cu124
+# (a 1.24+ ja e CUDA 13 e cai para a CPU). Na imagem so CPU fica o onnxruntime comum.
+ARG ONNX_PACOTE=onnxruntime
 ARG TARGETARCH
 
 ENV PYTHONUNBUFFERED=1 \
@@ -23,6 +26,7 @@ RUN pip install torch torchvision --index-url ${TORCH_INDEX_URL}
 
 COPY requirements.txt .
 RUN pip install -r requirements.txt \
+ && if [ "$ONNX_PACOTE" != "onnxruntime" ]; then pip uninstall -y onnxruntime && pip install "$ONNX_PACOTE"; fi \
  && if [ "$INSTALL_TENSORRT" = "1" ]; then pip install onnx onnxslim tensorrt; fi
 
 COPY backend/ backend/

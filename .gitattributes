@@ -1,3 +1,6 @@
 # .bat precisa de CRLF no Windows; .sh precisa de LF no Linux/macOS
 *.bat text eol=crlf
 *.sh  text eol=lf
+servidor_app/linux/argos-epi-servidor text eol=lf
+*.cs text eol=crlf
+*.ps1 text eol=crlf

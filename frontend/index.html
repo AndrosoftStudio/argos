@@ -23,11 +23,11 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Outfit:wght@300;400;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="painel.css?v=20261002-graficos">
+<link rel="stylesheet" href="painel.css?v=20261002-servidores">
 </head>
 <body><div id="root"></div>
 <script type="text/babel">
-const {useState,useEffect,useRef,useCallback,useId} = React;
+const {useState,useEffect,useRef,useCallback,useId,useMemo} = React;
 
 const cleanUrl = (v)=>String(v||'').trim().replace(/\/+$/,'');
 const DEFAULT_HUB_URL = 'https://backend-hub-vigilanciaepi.onrender.com';
@@ -70,7 +70,6 @@ const LOGO_URL = String(window.ARGOS_LOGO_URL || '').trim();
 // O id tambem e o endereco (#cameras, #epis...): o "voltar" do navegador funciona.
 const NAV_ITEMS = [
   {id:'cameras',label:'Câmeras',icon:'camera'},
-  {id:'servidores',label:'Servidores',icon:'server'},
   {id:'epis',label:'EPIs',icon:'helmet'},
   {id:'funcionarios',label:'Equipe',icon:'users'},
   {id:'devices',label:'Dispositivos',icon:'phone'},
@@ -106,11 +105,14 @@ const ICONES={
   maximize:<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>,
   link:<><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/></>,
   upload:<><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></>,
+  download:<><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></>,
+  terminal:<><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="m7 10 3 2.5L7 15M12.5 15H17"/></>,
   chart:<><path d="M3 20h18"/><rect x="5" y="11" width="3" height="6.5" rx="1"/><rect x="10.5" y="5" width="3" height="12.5" rx="1"/><rect x="16" y="8.5" width="3" height="9" rx="1"/></>,
   map:<><path d="M3.5 7.5 9 4.5l6 3 5.5-3v12L15 19.5l-6-3-5.5 3z"/><path d="M9 4.5v12M15 7.5v12"/></>,
   check:<path d="m5 12.5 4.5 4.5L19 7.5"/>,
   shield:<><path d="M12 3 4.5 6v5.5c0 4.5 3.2 8.2 7.5 9.5 4.3-1.3 7.5-5 7.5-9.5V6z"/><path d="m8.5 12 2.5 2.5 4.5-5"/></>,
   alert:<><path d="M10.3 4.2 2.6 17.5a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4.5M12 17.2v.3"/></>,
+  info:<><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.7v.3"/></>,
   hourglass:<path d="M6.5 3h11M6.5 21h11M7.5 3v3.5a4.5 4.5 0 0 0 9 0V3M7.5 21v-3.5a4.5 4.5 0 0 1 9 0V21"/>,
   search:<><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></>,
   wifi:<><path d="M2 9a14.5 14.5 0 0 1 20 0"/><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.3" r="1.1" fill="currentColor"/></>,
@@ -273,8 +275,8 @@ function Opcoes({rotulo,valor,opcoes,onChange,soIcone,className}){
     <fieldset className={"seg"+(className?' '+className:'')}>
       <legend className="sr">{rotulo}</legend>
       {opcoes.map(o=>(
-        <label key={o.id} className={"seg-btn"+(valor===o.id?' ativo':'')} title={o.dica} data-dica={soIcone?o.txt:undefined}>
-          <input type="radio" className="sr" name={nome} value={o.id} checked={valor===o.id} onChange={()=>onChange(o.id)}/>
+        <label key={o.id} className={"seg-btn"+(valor===o.id?' ativo':'')+(o.off?' off':'')} title={o.dica} data-dica={soIcone?o.txt:undefined}>
+          <input type="radio" className="sr" name={nome} value={o.id} checked={valor===o.id} disabled={!!o.off} onChange={()=>onChange(o.id)}/>
           {o.svg||(o.ic&&<Icon n={o.ic}/>)}<span className={soIcone?'sr':'seg-txt'}>{o.txt}</span>
         </label>
       ))}
@@ -727,24 +729,112 @@ function ComoVincular({compacto}){
   const [codigo,setCodigo]=useState('');
   const [copiado,setCopiado]=useState(false);
   const copiar=()=>{try{navigator.clipboard.writeText(SITE_PAREAR);setCopiado(true);setTimeout(()=>setCopiado(false),2500);}catch{}};
+  const idCodigo=useId();
   return(
     <div className="como-vincular">
-      <Passos rotulo="Como vincular um servidor" itens={[
-        {ic:'server',txt:'Ligue o Argos no computador: instalar_docker.bat, iniciar.bat ou iniciar.sh'},
-        {ic:'globe',txt:'Nesse mesmo computador, toque em "Adicionar este computador": o site encontra o servidor sozinho'},
-        {ic:'check',txt:'Entre nesta conta e clique em Vincular'},
-      ]}/>
-      <p className="acoes" style={{marginTop:12}}>
+      <ol className="vincular-passos" aria-label="Como vincular um servidor">
+        <li><strong>Ligue o Argos no computador</strong><span>Programa Argos EPI Servidor (abaixo), instalar_docker.bat, iniciar.bat ou iniciar.sh</span></li>
+        <li><strong>Nesse mesmo computador, toque em “Adicionar este computador”</strong><span>O site encontra o servidor sozinho. Se o navegador perguntar, permita o acesso aos apps do computador.</span></li>
+        <li><strong>Entre nesta conta e clique em Vincular</strong><span>No programa do servidor também há o botão “Vincular agora”.</span></li>
+      </ol>
+      <div className="vincular-acoes">
         <a className="btn btn-primary" href={SITE_PAREAR}><Icon n="plus"/>Adicionar este computador</a>
-        <button type="button" className="btn btn-claro" onClick={copiar}><Icon n={copiado?'check':'link'}/>{copiado?'Link copiado':'Copiar link para outro computador'}</button>
-      </p>
+        <button type="button" className="btn btn-secondary" onClick={copiar}><Icon n={copiado?'check':'link'}/>{copiado?'Link copiado':'Copiar link'}</button>
+      </div>
       {!compacto&&(
-        <form className="aj-linha" style={{marginTop:12}} onSubmit={enviar(()=>{const c=codigo.trim();if(c) window.location.href=SITE_PAREAR+'?codigo='+encodeURIComponent(c);})}>
-          <Campo ic="key" rotulo="Código do servidor"><input value={codigo} onChange={e=>setCodigo(e.target.value.toUpperCase())} placeholder="O site não achou? Digite o código da janela do servidor" maxLength={9}/></Campo>
-          <button type="submit" className="btn btn-secondary btn-sm" disabled={codigo.trim().length<8}><Icon n="key"/>Vincular</button>
+        <form className="vincular-codigo" onSubmit={enviar(()=>{const c=codigo.trim();if(c) window.location.href=SITE_PAREAR+'?codigo='+encodeURIComponent(c);})}>
+          <label htmlFor={idCodigo}><Icon n="key"/>O site não achou o servidor? Digite o código que aparece nele</label>
+          <div className="vincular-codigo-linha">
+            <input id={idCodigo} value={codigo} onChange={e=>setCodigo(e.target.value.toUpperCase())} placeholder="ABCD-1234" maxLength={9} autoComplete="off" spellCheck={false}/>
+            <button type="submit" className="btn btn-primary" disabled={codigo.trim().length<8}><Icon n="check"/>Vincular</button>
+          </div>
         </form>
       )}
     </div>
+  );
+}
+
+/* Programa do servidor (Windows/Linux) pronto para baixar. Os arquivos ficam no R2;
+   o downloads.json (tamanhos, nomes) vem junto do site e é gerado pelo empacotamento. */
+const DOWNLOADS_URL=String(window.ARGOS_DOWNLOADS_URL||'https://pub-6b5befc214654d93bdc0345875151ea0.r2.dev/argosepi-discovery/').replace(/\/?$/,'/');
+const PLACAS={nvidia:{txt:'NVIDIA',dica:'GeForce, RTX, Quadro (CUDA)',ic:'zap'},dml:{txt:'AMD ou Intel',dica:'Radeon, Arc, Iris Xe (DirectML)',ic:'chip'},cpu:{txt:'Só o processador',dica:'Qualquer computador',ic:'gauge'}};
+function detectarSistema(){
+  const p=((navigator.userAgentData&&navigator.userAgentData.platform)||navigator.platform||'')+' '+navigator.userAgent;
+  return /linux|x11/i.test(p)&&!/android/i.test(p)?'linux':'windows';
+}
+function detectarPlaca(){
+  try{
+    const gl=document.createElement('canvas').getContext('webgl');
+    const ext=gl&&gl.getExtension('WEBGL_debug_renderer_info');
+    const r=ext?String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)||''):'';
+    // "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Ti (0x...) Direct3D11 ...)" -> "NVIDIA GeForce RTX 4060 Ti"
+    const nome=((r.match(/ANGLE \([^,]+,\s*([^(,]+)/)||[])[1]||r).trim();
+    if(/nvidia|geforce|rtx|gtx|quadro/i.test(r)) return {placa:'nvidia',nome};
+    if(/radeon|amd|intel.*\b(arc|iris)\b/i.test(r)) return {placa:'dml',nome};
+    return {placa:'cpu',nome};
+  }catch{return {placa:'cpu',nome:''};}
+}
+const tamTxt=(b)=>!b?'':b>=1073741824?(b/1073741824).toFixed(1).replace('.',',')+' GB':Math.max(1,Math.round(b/1048576))+' MB';
+
+function BaixarServidor(){
+  const [man,setMan]=useState(undefined);
+  const [so,setSo]=useState(detectarSistema);
+  const detectada=useMemo(detectarPlaca,[]);
+  const [placa,setPlaca]=useState(detectada.placa);
+  useEffect(()=>{
+    let vivo=true;
+    fetch('downloads.json',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{if(vivo) setMan(j&&j.versao?j:null);}).catch(()=>{if(vivo) setMan(null);});
+    return()=>{vivo=false;};
+  },[]);
+  const placasSo=so==='linux'?['nvidia','cpu']:['nvidia','dml','cpu'];
+  const placaOk=placasSo.includes(placa)?placa:'cpu';
+  let link=null,tamanho=0,nota='';
+  if(man){
+    if(so==='windows'){
+      const w=man.windows||{};
+      const py=(w.python||{})[placaOk];
+      if(py){
+        const nomeSetup={nvidia:'nvidia',dml:'amd-intel',cpu:'cpu'}[placaOk];
+        link=DOWNLOADS_URL+'ArgosEPI-Servidor-Setup-'+nomeSetup+'.exe';
+        tamanho=((w.app||{}).tamanho||0)+(py.tamanho||0);
+        nota=`O instalador é pequeno: ele baixa o resto (${tamTxt(tamanho)}) já pronto, sem compilar nada. Não precisa de administrador.`;
+      }
+    }else{
+      const l=(man.linux||{})[placaOk];
+      if(l){link=DOWNLOADS_URL+l.url;tamanho=l.tamanho;nota='';}
+    }
+  }
+  const nomeSo=so==='linux'?'Linux':'Windows';
+  return(
+    <section className="bloco baixar" aria-labelledby="titulo-baixar">
+      <header className="bloco-titulo"><Icon n="download"/><h2 id="titulo-baixar">Baixar o programa do servidor</h2>
+        {man&&<span className="chip">versão {man.versao}</span>}</header>
+      <p className="baixar-intro">Instale em cada computador que vai analisar câmeras (por exemplo, um por filial). Vem tudo pronto: PyTorch, banco de dados e a IA. Ele abre numa janela, pode ligar junto com o computador e mostra a conta e as câmeras.</p>
+      <div className="baixar-escolhas">
+        <div className="baixar-campo"><span className="baixar-rot">Sistema</span>
+          <Opcoes rotulo="Sistema" valor={so} onChange={setSo} opcoes={[{id:'windows',ic:'monitor',txt:'Windows 10/11'},{id:'linux',ic:'terminal',txt:'Linux'}]}/></div>
+        <div className="baixar-campo"><span className="baixar-rot">Placa de vídeo</span>
+          <Opcoes rotulo="Placa de vídeo" valor={placaOk} onChange={setPlaca}
+            opcoes={placasSo.map(id=>({id,ic:PLACAS[id].ic,txt:PLACAS[id].txt,dica:PLACAS[id].dica}))}/></div>
+      </div>
+      {detectada.nome&&<p className="dica-linha" style={{marginTop:10}}><Icon n="chip"/>Este computador: {detectada.nome}{detectada.placa===placaOk?' (escolha sugerida)':''}</p>}
+      {so==='linux'&&placa==='dml'&&<p className="dica-linha" style={{marginTop:6}}><Icon n="alert"/>No Linux, placas AMD/Intel usam a versão do processador.</p>}
+      {man===undefined
+        ? <p className="dica-linha" style={{marginTop:14}}><span className="giro"/>Procurando a versão mais nova...</p>
+        : link
+          ? <div className="baixar-acao">
+              <a className="btn btn-gold btn-grande" href={link} download><Icon n="download"/>Baixar para {nomeSo} · {PLACAS[placaOk].txt}{tamanho?` (${tamTxt(tamanho)})`:''}</a>
+              {nota&&<p className="dica-linha">{nota}</p>}
+              {so==='linux'&&(
+                <div className="baixar-linux">
+                  <p className="dica-linha">Depois de baixar, no terminal:</p>
+                  <pre><code>{`tar -xzf ${link.split('/').pop()}\ncd argos-epi-servidor && ./instalar.sh`}</code></pre>
+                  <p className="dica-linha">Ubuntu, Debian, Mint, Fedora e parecidos (x64, com interface gráfica). Não rode como root.</p>
+                </div>
+              )}
+            </div>
+          : <p className="aviso"><Icon n="clock"/>O instalador {nomeSo} ainda está sendo publicado. Por enquanto: baixe o projeto em github.com/AndrosoftStudio/argos e rode {so==='linux'?'configurar.sh e iniciar.sh':'configurar.bat e iniciar.bat (ou instalar_docker.bat)'}.</p>}
+    </section>
   );
 }
 
@@ -758,7 +848,7 @@ const quandoFoi=(ts)=>{
 };
 const gb=(b)=>b?(b/1073741824).toFixed(0)+' GB':'—';
 
-function ServidorCard({s,alc,principal,onUsar,onRenomear,onRemover}){
+function ServidorCard({s,alc,principal,onUsar,onRenomear,onRemover,token,onToast}){
   const est=s.estado||{};
   const hw=s.hardware||{};
   const malha=(est.malha&&est.malha.pares)||[];
@@ -782,7 +872,7 @@ function ServidorCard({s,alc,principal,onUsar,onRenomear,onRemover}){
         <button type="button" className="ib sm perigo dica-dir" onClick={()=>onRemover(s)} aria-label={'Desvincular '+s.nome} data-dica="Desvincular"><Icon n="trash"/></button>
       </header>
       <ul className="diag" aria-label="Situação do servidor">
-        {s.tipo&&<li className="chip"><Icon n="chip"/>{s.tipo==='gpu'?'GPU':s.tipo.toUpperCase()}{hw.gpu_name?' · '+hw.gpu_name:''}</li>}
+        {(hw.gpu_name||s.tipo)&&<li className="chip"><Icon n="chip"/>{hw.gpu_name||({nvidia:'NVIDIA',dml:'AMD/Intel',cpu:'Só CPU',gpu:'GPU'}[s.tipo]||String(s.tipo).toUpperCase())}</li>}
         {hw.docker!==undefined&&<li className="chip"><Icon n="box"/>{hw.docker?'Docker':'Sem Docker'}</li>}
         {disp!=null&&<li className={"chip"+(disp<30?' alerta':' bom')}><Icon n="gauge"/>Livre {disp}%</li>}
         {cams!=null&&<li className="chip"><Icon n="camera"/>{cams} câmera(s)</li>}
@@ -798,12 +888,74 @@ function ServidorCard({s,alc,principal,onUsar,onRenomear,onRemover}){
           {est.malha.ultimo?' · '+quandoFoi(est.malha.ultimo):''}
         </p>
       )}
+      <HardwareServidor s={s} alc={alc} token={token} onToast={onToast}/>
       {alc&&!principal&&(
         <footer className="card-acoes">
           <button type="button" className="btn btn-secondary btn-sm" onClick={()=>onUsar(s)}><Icon n="check"/>Usar neste painel</button>
         </footer>
       )}
     </article>
+  );
+}
+
+/* Placa de vídeo ou processador: escolhido em cada servidor e guardado nele (dados/hardware.json).
+   As câmeras ligadas recarregam no hardware novo sozinhas. */
+const NOME_GPU={nvidia:'NVIDIA',dml:'AMD/Intel'};
+function HardwareServidor({s,alc,token,onToast}){
+  const [hw,setHw]=useState(null);
+  const [salvando,setSalvando]=useState(false);
+  const base=alc&&alc.base;
+  useEffect(()=>{
+    if(!base||!token){setHw(null);return;}
+    let vivo=true;
+    authFetch(base+'/servidor/hardware',token).then(r=>r.ok?r.json():null).then(j=>{if(vivo&&j) setHw(j);}).catch(()=>{});
+    return()=>{vivo=false;};
+  },[base,token]);
+  const h=s.hardware||{};
+  const escolha=(hw&&hw.dispositivo)||h.dispositivo||'auto';
+  const gpu=hw?hw.gpu:(h.gpu!==undefined?h.gpu:(s.tipo&&s.tipo!=='cpu'?s.tipo:''));
+  const nomeGpu=(hw&&hw.gpu_nome)||h.gpu_name||NOME_GPU[gpu]||'';
+  const trocar=async(v)=>{
+    if(!base||v===escolha) return;
+    setSalvando(true);
+    try{
+      const r=await authFetch(base+'/servidor/hardware',token,{method:'POST',body:JSON.stringify({dispositivo:v})});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(j.error||'Não deu para trocar.');
+      setHw(j);
+      onToast(v==='cpu'?`${s.nome}: processando só no processador.`:v==='gpu'?`${s.nome}: processando na placa de vídeo.`:`${s.nome}: escolha automática.`);
+    }catch(e){onToast(mensagemErro(e),'err');}
+    finally{setSalvando(false);}
+  };
+  const idRot=useId();
+  return(
+    <div className={"hw-servidor"+(salvando?' ocupado':'')} role="group" aria-labelledby={idRot}>
+      <p className="hw-rot" id={idRot}><Icon n="gauge"/>Processar câmeras com</p>
+      <Opcoes rotulo="Processar câmeras com" valor={escolha} onChange={trocar}
+        opcoes={[
+          {id:'auto',ic:'zap',txt:'Automático',dica:'Placa de vídeo se houver, senão o processador',off:!base},
+          {id:'gpu',ic:'chip',txt:'Placa de vídeo',dica:gpu?nomeGpu:'Nenhuma placa compatível neste servidor',off:!base||!gpu},
+          {id:'cpu',ic:'gauge',txt:'Processador',dica:'Deixa a placa de vídeo livre',off:!base},
+        ]}/>
+      <p className="dica-linha">
+        {!base
+          ? <><Icon n="wifi"/>Para trocar, este servidor precisa estar ao alcance deste navegador (ligado e online).</>
+          : !gpu
+            ? <><Icon n="info"/>Sem placa de vídeo compatível: processa no processador.</>
+            : hw&&gpu==='nvidia'&&hw.rosto_na_gpu===false
+              ? <><Icon n="alert"/>{nomeGpu}: câmeras na placa; o reconhecimento de rosto ainda na CPU (atualize o servidor).</>
+              : <><Icon n="chip"/>{nomeGpu}{hw&&hw.em_uso?` · em uso: ${hw.em_uso==='gpu'?'placa de vídeo':'processador'}`:''}</>}
+      </p>
+    </div>
+  );
+}
+
+function AbasAjustes({atual}){
+  return(
+    <nav className="abas" aria-label="Seções dos ajustes">
+      <a href="#config" className={"aba"+(atual==='config'?' ativa':'')} aria-current={atual==='config'?'page':undefined}><Icon n="gear"/>Geral</a>
+      <a href="#servidores" className={"aba"+(atual==='servidores'?' ativa':'')} aria-current={atual==='servidores'?'page':undefined}><Icon n="server"/>Servidores</a>
+    </nav>
   );
 }
 
@@ -821,27 +973,34 @@ function ServidoresPage({servidores,alcance,principalId,carregando,onAtualizar,o
   };
   const online=servidores.filter(s=>s.online).length;
   return(
-    <Pagina ic="server" titulo="Servidores" total={servidores.length} acoes={
-      <button type="button" className="btn btn-claro" onClick={onAtualizar} disabled={carregando} aria-label="Atualizar"><Icon n="refresh"/><span className="btn-rotulo" aria-hidden="true">{carregando?'Buscando...':'Atualizar'}</span></button>}>
+    <Pagina ic="gear" titulo="Ajustes" acoes={
+      <button type="button" className="btn btn-claro" onClick={onAtualizar} disabled={carregando} aria-label="Atualizar servidores"><Icon n="refresh"/><span className="btn-rotulo" aria-hidden="true">{carregando?'Buscando...':'Atualizar'}</span></button>}>
+      <AbasAjustes atual="servidores"/>
       {servidores.length===0
-        ? <Vazio ic="server" titulo="Nenhum servidor vinculado"><ComoVincular/></Vazio>
+        ? <section className="bloco" aria-labelledby="titulo-sem-servidor">
+            <header className="bloco-titulo"><Icon n="server"/><h2 id="titulo-sem-servidor">Nenhum servidor vinculado</h2></header>
+            <ComoVincular/>
+          </section>
         : <>
-            <p className="dica-linha" style={{marginBottom:12}}>
-              <Icon n="globe"/>{online} de {servidores.length} online. Os servidores da conta formam uma malha: EPIs, equipe, áreas, links de celular e o histórico de faltas são copiados entre eles.
-            </p>
-            <ul className="cards" aria-label="Servidores da conta">
+            <section className="bloco servidores-resumo" aria-labelledby="titulo-servidores">
+              <header className="bloco-titulo"><Icon n="server"/><h2 id="titulo-servidores">Servidores da conta</h2>
+                <span className={"chip"+(online?' bom':' alerta')}><span className={"dot"+(online?' on':'')}/>{online} de {servidores.length} online</span></header>
+              <p className="dica-linha"><Icon n="globe"/>Os servidores da conta formam uma malha: EPIs, equipe, áreas, links de celular e o histórico de faltas são copiados entre eles. Em cada um dá para escolher se a IA roda na placa de vídeo ou no processador.</p>
+            </section>
+            <ul className="servidores-lista" aria-label="Servidores da conta">
               {servidores.map(s=>(
                 <li key={s.id}>
-                  <ServidorCard s={s} alc={alcance[s.id]} principal={s.id===principalId}
+                  <ServidorCard s={s} alc={alcance[s.id]} principal={s.id===principalId} token={token} onToast={onToast}
                     onUsar={onUsar} onRenomear={renomear} onRemover={remover}/>
                 </li>
               ))}
             </ul>
-            <section className="bloco" style={{marginTop:16}} aria-label="Adicionar servidor">
-              <header className="bloco-titulo"><Icon n="plus"/><h2>Adicionar outro servidor</h2></header>
+            <section className="bloco" aria-labelledby="titulo-add-servidor">
+              <header className="bloco-titulo"><Icon n="plus"/><h2 id="titulo-add-servidor">Adicionar outro servidor</h2></header>
               <ComoVincular/>
             </section>
           </>}
+      <BaixarServidor/>
     </Pagina>
   );
 }
@@ -2798,7 +2957,8 @@ function ZonaEditor({streamId,token,backendUrl,onClose,onToast}){
 }
 
 /* ═══ APP ════════════════════════════════════════════════════ */
-const PAGINAS=NAV_ITEMS.map(i=>i.id);
+// #servidores abre Ajustes já na aba Servidores (fora do menu, mas o endereço antigo continua valendo)
+const PAGINAS=[...NAV_ITEMS.map(i=>i.id),'servidores'];
 const paginaDoHash=()=>{
   const h=decodeURIComponent(window.location.hash.slice(1));
   return PAGINAS.includes(h)?h:'cameras';
@@ -2821,7 +2981,8 @@ function App(){
   const [online,setOnline]=useState(false);
   const [streams_list,setStreamsList]=useState([]);
   const [defaultModel,setDefaultModel]=useState(()=>localStorage.getItem('epi_defaultModel')||'yolo26n.pt');
-  const [device,setDevice]=useState(()=>localStorage.getItem('epi_device')||'auto');
+  // GPU ou CPU é escolhido por servidor (Ajustes > Servidores); a câmera só pede 'auto'
+  const device='auto';
   const [serverLinks,setServerLinks]=useState({});
   const [toast,setToast]=useState(null);
   const [paused,setPaused]=useState(false);
@@ -3242,14 +3403,16 @@ function App(){
 
       <nav className="rail" aria-label="Menu principal">
         <ul className="rail-lista">
-          {NAV_ITEMS.map(item=>(
+          {NAV_ITEMS.map(item=>{
+            const ativo=page===item.id||(item.id==='config'&&page==='servidores');
+            return(
             <li key={item.id}>
-              <a href={'#'+item.id} className={"rail-item"+(page===item.id?' ativo':'')}
-                aria-current={page===item.id?'page':undefined}>
+              <a href={'#'+item.id} className={"rail-item"+(ativo?' ativo':'')}
+                aria-current={ativo?'page':undefined}>
                 <Icon n={item.icon}/><span>{item.label}</span>
               </a>
             </li>
-          ))}
+          );})}
         </ul>
       </nav>
 
@@ -3412,6 +3575,7 @@ function App(){
 
       {page==='config'&&(
         <Pagina ic="gear" titulo="Ajustes">
+          <AbasAjustes atual="config"/>
           <section className="bloco" aria-labelledby="titulo-preferencias">
             <h2 className="sr" id="titulo-preferencias">Preferências</h2>
             <ul className="pref-lista">
@@ -3489,14 +3653,7 @@ function App(){
                       }
                     </select>
                   </p>
-                  <p className="field"><label htmlFor={idServidor+'-hw'}><Icon n="gauge"/>Hardware</label>
-                    <select id={idServidor+'-hw'} value={device} onChange={e=>{setDevice(e.target.value);localStorage.setItem('epi_device',e.target.value);}}>
-                      <option value="auto">Auto</option>
-                      <option value="0">GPU NVIDIA</option>
-                      <option value="dml">GPU AMD/Intel</option>
-                      <option value="cpu">CPU</option>
-                    </select>
-                  </p>
+                  <p className="field"><span className="field-rot"><Icon n="gauge"/>Placa de vídeo ou CPU</span><a className="btn btn-secondary" href="#servidores"><Icon n="server"/>Escolher em Servidores</a></p>
                 </form>
                 <ul className="diag" style={{marginTop:12}} aria-label="Situação">
                   <li className={"chip"+(online?' bom':' alerta')}><Icon n="server"/>{online?'online':'offline'}</li>

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Argos EPI Servidor</title>
+<link rel="icon" href="favicon.ico">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <img class="brand-logo" src="icone-512.png" alt="">
+      <span class="brand-word">ARGOS</span><span class="brand-tag">SERVIDOR</span>
+    </div>
+    <div class="topo-dir">
+      <span class="estado-pill" id="pill" role="status"><span class="dot"></span><span id="pill-txt">Abrindo...</span></span>
+      <button type="button" class="btn btn-gold" data-acao="painel"><svg class="ic" data-ic="globe"></svg><span class="btn-rotulo">Abrir painel</span></button>
+    </div>
+  </header>
+
+  <nav class="rail" aria-label="Menu">
+    <ul class="rail-lista">
+      <li><a href="#inicio" class="rail-item" data-pag="inicio"><svg class="ic" data-ic="home"></svg><span>Início</span></a></li>
+      <li><a href="#cameras" class="rail-item" data-pag="cameras"><svg class="ic" data-ic="camera"></svg><span>Câmeras</span></a></li>
+      <li><a href="#registro" class="rail-item" data-pag="registro"><svg class="ic" data-ic="list"></svg><span>Registro</span></a></li>
+      <li><a href="#ajustes" class="rail-item" data-pag="ajustes"><svg class="ic" data-ic="gear"></svg><span>Ajustes</span></a></li>
+    </ul>
+  </nav>
+
+  <main class="main" id="main"></main>
+</div>
+
+<dialog class="janela" id="dlg-fechar" aria-labelledby="dlg-fechar-t">
+  <header class="janela-topo"><span class="janela-ico"><svg class="ic" data-ic="power"></svg></span><h2 id="dlg-fechar-t">Fechar a janela?</h2></header>
+  <p class="janela-texto">Em segundo plano o servidor continua analisando as câmeras e o ícone fica perto do relógio. Fechando de vez, as câmeras deste servidor param.</p>
+  <label class="check"><input type="checkbox" id="dlg-fechar-lembrar"> Lembrar a escolha (dá para mudar em Ajustes)</label>
+  <footer class="janela-acoes">
+    <button type="button" class="btn btn-secondary" data-fechar="cancelar">Cancelar</button>
+    <button type="button" class="btn btn-danger" data-fechar="sair"><svg class="ic" data-ic="power"></svg>Fechar e desligar</button>
+    <button type="button" class="btn btn-primary" data-fechar="bandeja" autofocus><svg class="ic" data-ic="down"></svg>Segundo plano</button>
+  </footer>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>
