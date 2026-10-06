@@ -4,9 +4,13 @@ import sys
 import threading
 
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, BASE)
-sys.path.insert(0, os.path.join(BASE, "scripts"))
+if getattr(sys, "frozen", False):
+    # programa compilado: <instalacao>/motor/ArgosMotor.exe (ver backend/pastas.py)
+    BASE = os.path.dirname(os.path.dirname(os.path.abspath(sys.executable)))
+else:
+    BASE = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, BASE)
+    sys.path.insert(0, os.path.join(BASE, "scripts"))
 
 os.makedirs(os.path.join(BASE, "dados", "users"), exist_ok=True)
 os.makedirs(os.path.join(BASE, "models"), exist_ok=True)
@@ -59,7 +63,7 @@ except Exception:
     print_banner = None
 
 
-if __name__ == "__main__":
+def main():
     if print_banner:
         print_banner("Servidor backend v20 - IA, cameras, hub e TensorRT", compact=True)
     else:
@@ -83,8 +87,15 @@ if __name__ == "__main__":
         AM._device_global = "cpu"
         print("  Escolhido nos Ajustes: processar so na CPU")
 
-    AM.local_ip = os.environ.get("ARGOS_LOCAL_IP", "").strip() or get_local_ip()
-    print(f"  URL local  : http://{AM.local_ip}:{PORTA}")
+    # ARGOS_HOST=127.0.0.1 (padrao do programa instalado): so este computador e o tunel
+    # acessam, e o Windows nao pede permissao de firewall (que exige administrador).
+    host = os.environ.get("ARGOS_HOST", "").strip() or "0.0.0.0"
+    if host in ("127.0.0.1", "localhost"):
+        AM.local_ip = ""      # nao anuncia endereco de rede que ninguem alcanca
+        print("  URL local  : so este computador (rede local desligada nos Ajustes)")
+    else:
+        AM.local_ip = os.environ.get("ARGOS_LOCAL_IP", "").strip() or get_local_ip()
+        print(f"  URL local  : http://{AM.local_ip}:{PORTA}")
     print(f"  Painel     : http://localhost:{PORTA}")
     print("  Vinculo    : https://argosepi.vercel.app/parear.html (abre sozinho na primeira vez)")
     print("  CORS       : " + ", ".join(sorted(AM.CORS_ORIGINS)))
@@ -104,4 +115,8 @@ if __name__ == "__main__":
     abrir = (not os.path.exists("/.dockerenv")
              and os.environ.get("ARGOS_ABRIR_NAVEGADOR", "1").strip().lower() not in ("0", "false", "nao", "no"))
     start_conta_e_malha(abrir_navegador=abrir)
-    app.run(host="0.0.0.0", port=PORTA, threaded=True, debug=False)
+    app.run(host=host, port=PORTA, threaded=True, debug=False)
+
+
+if __name__ == "__main__":
+    main()

@@ -17,6 +17,12 @@
     <div class="topo-dir">
       <span class="estado-pill" id="pill" role="status"><span class="dot"></span><span id="pill-txt">Abrindo...</span></span>
       <button type="button" class="btn btn-gold" data-acao="painel"><svg class="ic" data-ic="globe"></svg><span class="btn-rotulo">Abrir painel</span></button>
+      <!-- botoes da janela: so aparecem dentro do programa (a barra azul e a barra de titulo) -->
+      <div class="jan-botoes" role="group" aria-label="Janela">
+        <button type="button" class="jan-btn" data-janela="min" aria-label="Minimizar" title="Minimizar"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6h7"/></svg></button>
+        <button type="button" class="jan-btn" data-janela="max" aria-label="Maximizar" title="Maximizar"><svg viewBox="0 0 12 12" aria-hidden="true"><rect class="jan-max" x="2.5" y="2.5" width="7" height="7" rx="1.4"/><g class="jan-rest"><rect x="2" y="4" width="6" height="6" rx="1.2"/><path d="M4.5 2H9a1 1 0 0 1 1 1v4.5"/></g></svg></button>
+        <button type="button" class="jan-btn jan-fechar" data-janela="fechar" aria-label="Fechar" title="Fechar"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="m3 3 6 6M9 3l-6 6"/></svg></button>
+      </div>
     </div>
   </header>
 

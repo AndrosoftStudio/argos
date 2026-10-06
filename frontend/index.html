@@ -792,12 +792,13 @@ function BaixarServidor(){
   if(man){
     if(so==='windows'){
       const w=man.windows||{};
-      const py=(w.python||{})[placaOk];
-      if(py){
+      // programa compilado: janela + motor (.exe), bibliotecas do motor (.dll) e base (modelos, banco)
+      const prog=(w.programa||{})[placaOk], motor=(w.motor||{})[placaOk];
+      if(prog&&motor){
         const nomeSetup={nvidia:'nvidia',dml:'amd-intel',cpu:'cpu'}[placaOk];
         link=DOWNLOADS_URL+'ArgosEPI-Servidor-Setup-'+nomeSetup+'.exe';
-        tamanho=((w.app||{}).tamanho||0)+(py.tamanho||0);
-        nota=`O instalador é pequeno: ele baixa o resto (${tamTxt(tamanho)}) já pronto, sem compilar nada. Não precisa de administrador.`;
+        tamanho=(prog.tamanho||0)+(motor.tamanho||0)+((w.base||{}).tamanho||0);
+        nota=`O instalador é pequeno: ele baixa o programa já compilado (${tamTxt(tamanho)}), com os modelos de IA junto; depois de instalado nada mais é baixado. Não precisa de administrador.`;
       }
     }else{
       const l=(man.linux||{})[placaOk];
@@ -809,7 +810,7 @@ function BaixarServidor(){
     <section className="bloco baixar" aria-labelledby="titulo-baixar">
       <header className="bloco-titulo"><Icon n="download"/><h2 id="titulo-baixar">Baixar o programa do servidor</h2>
         {man&&<span className="chip">versão {man.versao}</span>}</header>
-      <p className="baixar-intro">Instale em cada computador que vai analisar câmeras (por exemplo, um por filial). Vem tudo pronto: PyTorch, banco de dados e a IA. Ele abre numa janela, pode ligar junto com o computador e mostra a conta e as câmeras.</p>
+      <p className="baixar-intro">Instale em cada computador que vai analisar câmeras (por exemplo, um por filial). Vem tudo pronto e compilado: PyTorch, banco de dados e os modelos de IA. Ele abre numa janela, pode ligar junto com o computador e mostra a conta e as câmeras.</p>
       <div className="baixar-escolhas">
         <div className="baixar-campo"><span className="baixar-rot">Sistema</span>
           <Opcoes rotulo="Sistema" valor={so} onChange={setSo} opcoes={[{id:'windows',ic:'monitor',txt:'Windows 10/11'},{id:'linux',ic:'terminal',txt:'Linux'}]}/></div>

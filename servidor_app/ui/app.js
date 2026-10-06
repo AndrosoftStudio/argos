@@ -49,12 +49,36 @@ function hidratarIcones(raiz = document) {
 
 /* ── janela do programa (ponte) ───────────────────────────── */
 const host = window.chrome && window.chrome.webview ? {
+  casca: 'webview2',
   enviar: (m) => window.chrome.webview.postMessage(JSON.stringify(m)),
   ouvir: (f) => window.chrome.webview.addEventListener('message', e => f(typeof e.data === 'string' ? JSON.parse(e.data) : e.data)),
 } : window.argosJanela ? {
+  casca: 'electron',
   enviar: (m) => window.argosJanela.enviar(m),
   ouvir: (f) => window.argosJanela.ouvir(f),
 } : null;
+
+/* janela com design proprio: a barra azul do topo e a barra de titulo (arrasta, minimiza, maximiza, fecha) */
+if (host) {
+  document.documentElement.classList.add('na-janela', 'casca-' + host.casca);
+  if (host.casca === 'webview2') {   // no Electron quem arrasta e o CSS (app-region)
+    document.querySelector('.topbar').addEventListener('mousedown', (ev) => {
+      if (ev.button !== 0 || ev.target.closest('button,a,input,select,label')) return;
+      host.enviar({ tipo: 'janela', acao: ev.detail === 2 ? 'max' : 'arrastar' });
+    });
+  }
+  document.addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-janela]');
+    if (b) host.enviar({ tipo: 'janela', acao: b.dataset.janela });
+  });
+}
+function janelaMaximizada(sim) {
+  document.documentElement.classList.toggle('maximizada', !!sim);
+  const b = document.querySelector('[data-janela="max"]');
+  if (b) { b.title = sim ? 'Restaurar' : 'Maximizar'; b.setAttribute('aria-label', b.title); }
+}
+// cor da barra do topo no tema atual: a moldura da janela acompanha
+const corDaBarra = () => getComputedStyle(document.documentElement).getPropertyValue('--brand').trim();
 
 /* ── API ──────────────────────────────────────────────────── */
 async function api(caminho, corpo) {
@@ -350,6 +374,10 @@ function paginaAjustes() {
       <li><span class="pref-ico">${ic('sun')}</span><div class="pref-txt"><p class="pref-nome">Tema</p></div>
         <fieldset class="seg"><legend class="sr">Tema</legend>${radio('tema', 'sistema', 'Auto', 'monitor')}${radio('tema', 'claro', 'Claro', 'sun')}${radio('tema', 'escuro', 'Escuro', 'moon')}</fieldset>
       </li>
+      <li><span class="pref-ico">${ic('wifi')}</span><div class="pref-txt"><p class="pref-nome">Aceitar conexões da rede local</p>
+          <p class="pref-dica">Desligado, só este computador e o endereço seguro do site falam com o servidor, e ${win ? 'o Windows não pede permissão de firewall (administrador)' : 'nenhuma porta fica aberta na rede'}. Ligue só se outro servidor Argos da mesma rede precisar acessar direto.</p></div>
+        <label class="switch"><input type="checkbox" role="switch" data-cfg="rede_local" ${c.rede_local ? 'checked' : ''} aria-label="Aceitar conexões da rede local"><span class="switch-trilho"></span><span class="switch-bolha"></span></label>
+      </li>
     </ul></section>
     ${blocoHardware()}
     <section class="bloco"><header class="bloco-titulo">${ic('server')}<h2>Sobre</h2></header>
@@ -417,7 +445,7 @@ async function ciclo() {
     E = await api('/api/estado');
     conectado = true;
     aplicarTema(E.config.tema);
-    if (host) host.enviar({ tipo: 'config', ao_fechar: E.config.ao_fechar, saindo: E.app.saindo });
+    if (host) host.enviar({ tipo: 'config', ao_fechar: E.config.ao_fechar, saindo: E.app.saindo, cor: corDaBarra() });
   } catch { conectado = false; }
   desenhar(false);
 }
@@ -469,8 +497,8 @@ document.addEventListener('change', async (ev) => {
     const d = await api('/api/config', mud);
     E.config = d.config;
     aplicarTema(E.config.tema);
-    if (host) host.enviar({ tipo: 'config', ao_fechar: E.config.ao_fechar });
-    aviso('Ajuste salvo.');
+    if (host) host.enviar({ tipo: 'config', ao_fechar: E.config.ao_fechar, cor: corDaBarra() });
+    aviso(mud.rede_local !== undefined ? 'Ajuste salvo. Reiniciando o servidor...' : 'Ajuste salvo.');
     desenhar(true);
   } catch { aviso('Não consegui salvar o ajuste.'); }
 });
@@ -507,7 +535,9 @@ if (host) host.ouvir((m) => {
   if (!m) return;
   if (m.tipo === 'pedir_fechar') perguntarFechar();
   if (m.tipo === 'ir') location.hash = m.pagina || 'inicio';
+  if (m.tipo === 'janela_estado') janelaMaximizada(m.maximizada);
 });
+if (host) host.enviar({ tipo: 'janela', acao: 'estado' });
 
 hidratarIcones();
 desenhar(true);

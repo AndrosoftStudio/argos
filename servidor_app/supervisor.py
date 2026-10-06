@@ -4,13 +4,15 @@ Roda escondido (sem console), aberto pela janela do programa (ArgosEPI.exe no
 Windows, Electron no Linux). Cuida de tudo que o iniciar.bat fazia:
 
   - liga o PostgreSQL portatil (bin/pgsql, banco em dados/pgdata) numa porta livre;
-  - baixa os modelos de rosto na primeira vez (da fonte oficial do InsightFace);
+  - confere os modelos de rosto (ja vem na instalacao; so baixa se alguem apagou);
   - liga o backend (run.py) numa porta livre de 8088 a 8097 e reinicia se cair;
   - serve a interface da janela (pasta ui) e uma API so para ela, em 127.0.0.1;
   - aplica "iniciar com o sistema" e confere se ha versao nova.
 
 Quando a janela fecha de vez (ou morre), desliga o backend e o banco.
 Uso: python supervisor.py --pai <pid da janela> --exe <caminho do programa>
+No programa instalado este arquivo vai compilado dentro do motor (ver motor.py):
+a interface sai do recursos.pak e o backend e o proprio motor com o papel "servidor".
 """
 import argparse
 import collections
@@ -31,8 +33,18 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-AQUI = os.path.dirname(os.path.abspath(__file__))
-RAIZ = os.path.dirname(AQUI)
+CONGELADO = bool(getattr(sys, 'frozen', False))
+if CONGELADO:   # <instalacao>/motor/ArgosMotor.exe
+    MOTOR = os.path.dirname(os.path.abspath(sys.executable))
+    RAIZ = os.path.dirname(MOTOR)
+    AQUI = RAIZ
+    import pastas
+    PAK = pastas.PAK
+else:
+    AQUI = os.path.dirname(os.path.abspath(__file__))
+    RAIZ = os.path.dirname(AQUI)
+    MOTOR = os.path.join(RAIZ, 'python')
+    PAK = None
 UI = os.path.join(AQUI, 'ui')
 DADOS = os.path.join(RAIZ, 'dados')
 LOGS = os.path.join(DADOS, 'logs')
@@ -47,7 +59,7 @@ ROSTO_DIR = os.path.join(RAIZ, 'models', 'insightface', 'models', 'buffalo_l')
 ROSTO_ARQS = ('det_10g.onnx', 'w600k_r50.onnx')
 
 PADRAO = {'iniciar_com_sistema': False, 'iniciar_minimizado': True, 'ao_fechar': 'perguntar',
-          'tema': 'sistema', 'avisar_atualizacao': True}
+          'tema': 'sistema', 'avisar_atualizacao': True, 'rede_local': False}
 
 
 def _ler(caminho, padrao=''):
@@ -59,7 +71,7 @@ def _ler(caminho, padrao=''):
 
 
 VERSAO = _ler(os.path.join(RAIZ, 'VERSAO.txt'), 'dev')
-VARIANTE = _ler(os.path.join(RAIZ, 'python', 'argos-variante.txt'), '')
+VARIANTE = _ler(os.path.join(MOTOR, 'argos-variante.txt'), '')
 FONTE = (os.environ.get('ARGOS_DOWNLOADS_URL') or _ler(os.path.join(AQUI, 'fonte.txt')) or DOWNLOADS_PADRAO).rstrip('/') + '/'
 
 
@@ -183,7 +195,7 @@ class Config:
                 arq = os.path.join(pasta, 'argos-epi-servidor.desktop')
                 if ligado:
                     os.makedirs(pasta, exist_ok=True)
-                    icone = os.path.join(UI, 'icone-512.png')
+                    icone = os.path.join(RAIZ, 'argos-epi-servidor.png') if CONGELADO else os.path.join(UI, 'icone-512.png')
                     with open(arq, 'w', encoding='utf-8') as f:
                         f.write('[Desktop Entry]\nType=Application\nName=Argos EPI Servidor\n'
                                 f'Exec={cmd}\nIcon={icone}\nX-GNOME-Autostart-enabled=true\nTerminal=false\n')
@@ -369,8 +381,9 @@ class Modelos:
 
 # ── backend (run.py) ─────────────────────────────────────────────────
 class Backend:
-    def __init__(self, banco):
+    def __init__(self, banco, rede_local=lambda: False):
         self.banco = banco
+        self.rede_local = rede_local
         self.proc = None
         self.estado, self.porta, self.erro = 'parado', None, ''
         self.desde = 0.0
@@ -391,14 +404,20 @@ class Backend:
                 return
             env = dict(os.environ)
             env.update({'ARGOS_PORTA': str(self.porta), 'ARGOS_ABRIR_NAVEGADOR': '0',
-                        'PYTHONUNBUFFERED': '1', 'PYTHONIOENCODING': 'utf-8', 'ARGOS_PROGRAMA': '1'})
+                        'PYTHONUNBUFFERED': '1', 'PYTHONIOENCODING': 'utf-8', 'ARGOS_PROGRAMA': '1',
+                        'ARGOS_DOWNLOADS_URL': FONTE})   # de onde o backend baixa o pacote do TensorRT
             if self.banco.porta:
                 env['DATABASE_URL'] = self.banco.url()
+            # So este computador e o tunel acessam: assim o Windows nao mostra o aviso do
+            # firewall (que pede administrador). "Aceitar a rede local" fica nos Ajustes.
+            if not os.environ.get('ARGOS_HOST'):
+                env['ARGOS_HOST'] = '0.0.0.0' if self.rede_local() else '127.0.0.1'
             self.estado, self.erro, self.resumo = 'iniciando', '', None
             self.desde = time.time()
             log(f'Ligando o servidor na porta {self.porta}...')
             kw = {'creationflags': SEM_JANELA} if WIN else {'start_new_session': True}
-            self.proc = subprocess.Popen([sys.executable, '-u', 'run.py'], cwd=RAIZ, env=env,
+            cmd = [sys.executable, 'servidor'] if CONGELADO else [sys.executable, '-u', 'run.py']
+            self.proc = subprocess.Popen(cmd, cwd=RAIZ, env=env,
                                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                          stderr=subprocess.STDOUT, **kw)
             threading.Thread(target=self._ler, args=(self.proc,), daemon=True).start()
@@ -538,7 +557,7 @@ class Supervisor:
         self.config = Config(exe)
         self.banco = Banco()
         self.modelos = Modelos()
-        self.backend = Backend(self.banco)
+        self.backend = Backend(self.banco, lambda: bool(self.config.dados.get('rede_local')))
         self.atualizacao = Atualizacao()
         self.pai = pai
         self.saindo = False
@@ -667,17 +686,23 @@ def _servidor_http(sup):
             self.wfile.write(corpo)
 
         def _arquivo(self, rel):
-            caminho = os.path.realpath(os.path.join(UI, rel))
-            if not caminho.startswith(os.path.realpath(UI) + os.sep) or not os.path.isfile(caminho):
-                self.send_error(404)
-                return
+            if PAK is not None:   # programa compilado: a interface vem do recursos.pak
+                corpo = PAK.ler('ui/' + rel)
+                if corpo is None:
+                    self.send_error(404)
+                    return
+            else:
+                caminho = os.path.realpath(os.path.join(UI, rel))
+                if not caminho.startswith(os.path.realpath(UI) + os.sep) or not os.path.isfile(caminho):
+                    self.send_error(404)
+                    return
+                with open(caminho, 'rb') as f:
+                    corpo = f.read()
             tipos = {'.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
                      '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml',
                      '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.ico': 'image/x-icon'}
-            with open(caminho, 'rb') as f:
-                corpo = f.read()
             self.send_response(200)
-            self.send_header('Content-Type', tipos.get(os.path.splitext(caminho)[1], 'application/octet-stream'))
+            self.send_header('Content-Type', tipos.get(os.path.splitext(rel)[1], 'application/octet-stream'))
             self.send_header('Cache-Control', 'no-store')
             self.send_header('Content-Length', str(len(corpo)))
             self.end_headers()
@@ -729,7 +754,11 @@ def _servidor_http(sup):
             except ValueError:
                 return self._json({'erro': 'json invalido'}, 400)
             if u.path == '/api/config':
-                return self._json({'config': sup.config.mudar(corpo)})
+                rede = bool(sup.config.dados.get('rede_local'))
+                cfg = sup.config.mudar(corpo)
+                if bool(cfg.get('rede_local')) != rede and sup.backend.querer_ligado:
+                    sup.acao('reiniciar', {})   # o endereco em que o servidor escuta so muda ao religar
+                return self._json({'config': cfg})
             if u.path == '/api/acao':
                 ok = sup.acao(str(corpo.get('acao') or ''), corpo)
                 return self._json({'ok': ok}, 200 if ok else 400)

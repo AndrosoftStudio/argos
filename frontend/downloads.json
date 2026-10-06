@@ -1,53 +1,88 @@
 {
-    "versao":  "20.1.0",
-    "data":  "2026-10-02",
+    "versao":  "20.2.0",
+    "data":  "2026-10-03",
     "notas":  "",
     "windows":  {
                     "setup":  {
                                   "url":  "ArgosEPI-Servidor-Setup.exe",
-                                  "tamanho":  120320,
-                                  "sha256":  "20d1f1a851b073a7152387618ce63d104bf781fc88e91268f74ed51526e1bf23"
+                                  "tamanho":  123904,
+                                  "sha256":  "8c5bdab21dbbbac090449bb6158c7760a1f24ea6da268beda852e411a0da3805"
                               },
-                    "app":  {
-                                "url":  "win/argos-app-20.1.0.zip",
-                                "tamanho":  195441278,
-                                "sha256":  "b6dd2df8f06e4c28e07ff569f3dbcec18665b1c2d3c5a9e0bb0286c77635651e",
-                                "descompactado":  332243865
-                            },
-                    "python":  {
-                                   "nvidia":  {
-                                                  "id":  "py312-nvidia-1adc0844",
-                                                  "url":  "win/python-nvidia-py312-nvidia-1adc0844.zip",
-                                                  "tamanho":  3011948316,
-                                                  "sha256":  "542805df701912900038dc947136276aa023b1c86c2d8d5439a4cf6f77e0f44c",
-                                                  "descompactado":  5086883443
-                                              },
-                                   "dml":  {
-                                               "id":  "py312-dml-b3116fcd",
-                                               "url":  "win/python-dml-py312-dml-b3116fcd.zip",
-                                               "tamanho":  300092063,
-                                               "sha256":  "09a1c9036d4dcad66480d7d5a30699b046496c3fdad50f0141151ae2f90dbf25",
-                                               "descompactado":  959086462
-                                           },
-                                   "cpu":  {
-                                               "id":  "py312-cpu-1e483ced",
-                                               "url":  "win/python-cpu-py312-cpu-1e483ced.zip",
-                                               "tamanho":  298183355,
-                                               "sha256":  "2bc1d8bd8f1386432cdc261edf4159fe1abca40c797608a285273d1c5a3ac107",
-                                               "descompactado":  995463412
-                                           }
+                    "base":  {
+                                 "id":  "3335d94196",
+                                 "url":  "win/argos-base-3335d94196.zip",
+                                 "tamanho":  351346497,
+                                 "sha256":  "0bceecd7605601e638111cfaf5bdb76d87e580acae3b5e9686203fa4553b1765",
+                                 "descompactado":  479695260
+                             },
+                    "programa":  {
+                                     "nvidia":  {
+                                                    "url":  "win/argos-programa-20.2.0-nvidia.zip",
+                                                    "tamanho":  48643822,
+                                                    "sha256":  "5370d0e9ac622299c7b633a5f2d73cd9e5ddccb0692e17701428202f67965182",
+                                                    "descompactado":  49695250
+                                                },
+                                     "dml":  {
+                                                 "url":  "win/argos-programa-20.2.0-dml.zip",
+                                                 "tamanho":  38983637,
+                                                 "sha256":  "fb43b9fb7ae5e42e59d2b746ca6240bdef1f71a2d4106d0fbaa945a024ab0c17",
+                                                 "descompactado":  39997660
+                                             },
+                                     "cpu":  {
+                                                 "url":  "win/argos-programa-20.2.0-cpu.zip",
+                                                 "tamanho":  47973967,
+                                                 "sha256":  "5281d18751381563bf0dd7c9dffa0ea06d1b7a3117cc38eb4ce8ca3c1735f0d5",
+                                                 "descompactado":  49011869
+                                             }
+                                 },
+                    "motor":  {
+                                  "nvidia":  {
+                                                 "id":  "2d198de5c3",
+                                                 "url":  "win/argos-motor-nvidia-2d198de5c3.zip",
+                                                 "tamanho":  2904375679,
+                                                 "sha256":  "79f3b7138e31d1f48f105497416e64b4fd3e17e9a3a9722ae9e2a111826d8d8c",
+                                                 "descompactado":  4691623067
+                                             },
+                                  "dml":  {
+                                              "id":  "07160e2970",
+                                              "url":  "win/argos-motor-dml-07160e2970.zip",
+                                              "tamanho":  196459735,
+                                              "sha256":  "2386239941e6ad056416e48979fd95e9f8d115dff7ab5d8af3df94dc50c54c27",
+                                              "descompactado":  582641567
+                                          },
+                                  "cpu":  {
+                                              "id":  "ab1c4febef",
+                                              "url":  "win/argos-motor-cpu-ab1c4febef.zip",
+                                              "tamanho":  189053250,
+                                              "sha256":  "e04c2538dcb2a6a5b59abb015198d4a964cc9a7f2268b906b4965bd62e851150",
+                                              "descompactado":  595591861
+                                          }
+                              },
+                    "extras":  {
+                                   "tensorrt":  {
+                                                    "nvidia":  {
+                                                                   "id":  "14c12e2931",
+                                                                   "url":  "win/argos-tensorrt-nvidia-14c12e2931.zip",
+                                                                   "tamanho":  2207015083,
+                                                                   "sha256":  "b15b1da244479d351ff49fbbe73fc308d1b5a9f2694cc26cdcab5b2644f6ea0a",
+                                                                   "descompactado":  3395568769,
+                                                                   "motor":  "2d198de5c3"
+                                                               }
+                                                }
                                }
                 },
     "linux":  {
                   "cpu":  {
-                              "url":  "linux/argos-epi-servidor-20.1.0-cpu.tar.gz",
-                              "tamanho":  731814500,
-                              "sha256":  "bf9c78033061d328895a3e4ac13a7244f4d355f14ff9f6f4ce7a53d186711bad"
+                              "url":  "linux/argos-epi-servidor-20.2.0-cpu.tar.gz",
+                              "tamanho":  802515307,
+                              "sha256":  "1dc66eaa060a4f10c3d9cee44308ef5ee2c3759e687de53c7e051ed24e1cbb49",
+                              "descompactado":  1737559714
                           },
                   "nvidia":  {
-                                 "url":  "linux/argos-epi-servidor-20.1.0-nvidia.tar.gz",
-                                 "tamanho":  4463288741,
-                                 "sha256":  "e38af9828a1f8b6a6ee488ad15d2741ce9183c5089403643cf02f0f4371e00a9"
+                                 "url":  "linux/argos-epi-servidor-20.2.0-nvidia.tar.gz",
+                                 "tamanho":  4417949585,
+                                 "sha256":  "772f51e5216adf7147a8b82eda346584cf83be9ccd142bee744ec98d3748e3ec",
+                                 "descompactado":  7624559539
                              }
               }
 }

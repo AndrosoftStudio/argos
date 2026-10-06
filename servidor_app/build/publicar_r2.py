@@ -57,6 +57,8 @@ def main():
     ap.add_argument('--saida', default=r'D:\argos-build\saida')
     ap.add_argument('--site', default='', help='pasta frontend: grava downloads.json depois de subir')
     ap.add_argument('--so-listar', action='store_true', help='mostra o que subiria, sem enviar')
+    ap.add_argument('--limpar', action='store_true',
+                    help='depois de subir, apaga da pasta do R2 os pacotes de versoes antigas (o que o latest.json nao usa mais)')
     a = ap.parse_args()
 
     manifesto = os.path.join(a.saida, 'latest.json')
@@ -66,9 +68,14 @@ def main():
         m = json.load(f)
 
     # o que o latest.json aponta (e as copias do instalador por placa, que o site baixa)
-    arquivos = [m['windows']['setup']['url'], m['windows']['app']['url']]
-    arquivos += [p['url'] for p in (m['windows'].get('python') or {}).values()]
+    w = m['windows']
+    arquivos = [w['setup']['url'], w['base']['url']]
+    arquivos += [p['url'] for p in (w.get('motor') or {}).values()]
+    arquivos += [p['url'] for p in (w.get('programa') or {}).values()]
     arquivos += [p['url'] for p in (m.get('linux') or {}).values() if isinstance(p, dict) and p.get('url')]
+    for so in (w, m.get('linux') or {}):      # pacotes opcionais (TensorRT)
+        for extra in ((so.get('extras') or {}) if isinstance(so, dict) else {}).values():
+            arquivos += [p['url'] for p in extra.values() if isinstance(p, dict) and p.get('url')]
     arquivos += [f'ArgosEPI-Servidor-Setup-{n}.exe' for n in ('nvidia', 'amd-intel', 'cpu')]
     faltando = [r for r in arquivos if not os.path.exists(os.path.join(a.saida, r))]
     if faltando:
@@ -118,6 +125,22 @@ def main():
         subir(rel, cache='public, max-age=300' if fixo else 'public, max-age=31536000, immutable')
     subir('latest.json', cache='no-cache')
     print(f'Publicado em {prefixo} (bucket {bucket}).')
+
+    # pacotes de versoes antigas que ficaram na pasta (so dentro do prefixo do Argos)
+    atuais = {prefixo + r.replace('\\', '/') for r in arquivos} | {prefixo + 'latest.json'}
+    sobras = []
+    for pagina in s3.get_paginator('list_objects_v2').paginate(Bucket=bucket, Prefix=prefixo):
+        sobras += [(o['Key'], o['Size']) for o in pagina.get('Contents', []) if o['Key'] not in atuais]
+    if sobras:
+        print(f'Sobras de versoes antigas: {len(sobras)} arquivos, {sum(t for _, t in sobras) / 1073741824:.1f} GB')
+        for chave_obj, tam in sobras:
+            print(f'  {chave_obj}  ({tam / 1048576:.0f} MB)')
+        if a.limpar:
+            for i in range(0, len(sobras), 500):
+                s3.delete_objects(Bucket=bucket, Delete={'Objects': [{'Key': k} for k, _ in sobras[i:i + 500]]})
+            print('  apagadas.')
+        else:
+            print('  (rode de novo com --limpar para apagar)')
 
     if a.site:
         destino = os.path.join(a.site, 'downloads.json')

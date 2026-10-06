@@ -1,10 +1,13 @@
 /*
  * Janela do Argos EPI Servidor no Linux (Electron). Faz o que o ArgosEPI.exe faz no Windows:
- *  - liga o supervisor (python servidor_app/supervisor.py), que cuida do banco, do backend e da interface;
+ *  - liga o motor compilado (motor/argos-motor supervisor), que cuida do banco, do backend e da interface;
  *  - mostra a interface que ele serve em 127.0.0.1 (a linha "ARGOS_UI <url>" na saida dele);
  *  - icone na bandeja; o X segue o ajuste "Ao fechar a janela" (perguntar, segundo plano ou fechar);
  *  - uma janela so: abrir de novo pelo menu so traz a que ja esta aberta;
- *  - --minimizado: liga em segundo plano (o "iniciar com o computador" usa).
+ *  - --minimizado: liga em segundo plano (o "iniciar com o computador" usa);
+ *  - design proprio: sem a moldura do sistema; a barra azul da interface arrasta a janela e traz
+ *    os botoes de minimizar, maximizar e fechar.
+ * No pacote este arquivo vai dentro de janela/resources/app.asar.
  */
 const { app, BrowserWindow, Tray, Menu, ipcMain, shell, nativeImage, dialog } = require('electron');
 const path = require('path');
@@ -13,10 +16,9 @@ const http = require('http');
 const { spawn } = require('child_process');
 
 const RAIZ = process.env.ARGOS_RAIZ || path.resolve(process.resourcesPath, '..', '..');
-const PYTHON = path.join(RAIZ, 'python', 'bin', 'python3');
-const SUPERVISOR = path.join(RAIZ, 'servidor_app', 'supervisor.py');
+const MOTOR = path.join(RAIZ, 'motor', 'argos-motor');
 const LANCADOR = path.join(RAIZ, 'argos-epi-servidor');
-const ICONE = path.join(RAIZ, 'servidor_app', 'ui', 'icone-512.png');
+const ICONE = path.join(RAIZ, 'argos-epi-servidor.png');
 const SITE = 'https://argosepi.vercel.app';
 
 let janela = null, bandeja = null, sup = null, urlUi = '';
@@ -28,7 +30,9 @@ app.setName('Argos EPI Servidor');
 Menu.setApplicationMenu(null);
 
 const SPLASH = 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><meta charset="utf-8">
-<body style="margin:0;height:100vh;display:grid;place-items:center;background:#0d1137;color:#e8ecf3;font:600 15px system-ui,sans-serif">
+<body style="margin:0;height:100vh;display:grid;place-items:center;background:#0d1137;color:#e8ecf3;font:600 15px system-ui,sans-serif;-webkit-app-region:drag;user-select:none">
+<button onclick="window.argosJanela&&argosJanela.enviar({tipo:'janela',acao:'fechar'})" title="Fechar"
+ style="position:fixed;top:10px;right:10px;width:38px;height:34px;border:0;border-radius:10px;background:transparent;color:#fff;font-size:18px;cursor:pointer;-webkit-app-region:no-drag">&#10005;</button>
 <div style="text-align:center"><div style="font:400 34px Impact,'Anton',sans-serif;letter-spacing:.04em;color:#fbc343">ARGOS EPI</div>
 <p style="opacity:.8">Ligando o servidor...</p></div></body>`);
 
@@ -36,6 +40,7 @@ function criarJanela(visivel) {
   janela = new BrowserWindow({
     width: 1120, height: 780, minWidth: 420, minHeight: 480, show: visivel,
     backgroundColor: '#0d1137', title: 'Argos EPI Servidor', icon: ICONE, autoHideMenuBar: true,
+    frame: false,   // a barra de titulo e a da interface (ui/app.css: .casca-electron .topbar)
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   janela.loadURL(urlUi || SPLASH);
@@ -44,6 +49,9 @@ function criarJanela(visivel) {
   janela.webContents.on('will-navigate', (ev, url) => {
     if (!url.startsWith('http://127.0.0.1:') && !url.startsWith('data:')) { ev.preventDefault(); shell.openExternal(url); }
   });
+  const estado = () => { if (janela) janela.webContents.send('argos', { tipo: 'janela_estado', maximizada: janela.isMaximized() }); };
+  janela.on('maximize', estado);
+  janela.on('unmaximize', estado);
   janela.on('close', (ev) => {
     if (podeFechar) return;
     ev.preventDefault();
@@ -81,12 +89,12 @@ function criarBandeja() {
 }
 
 function ligarSupervisor() {
-  if (!fs.existsSync(PYTHON)) {
-    dialog.showErrorBox('Argos EPI Servidor', `Arquivos do programa incompletos (falta ${PYTHON}). Instale de novo pelo site.`);
+  if (!fs.existsSync(MOTOR)) {
+    dialog.showErrorBox('Argos EPI Servidor', `Arquivos do programa incompletos (falta ${MOTOR}). Instale de novo pelo site.`);
     podeFechar = true; app.quit(); return;
   }
-  sup = spawn(PYTHON, ['-X', 'utf8', '-u', SUPERVISOR, '--pai', String(process.pid), '--exe', LANCADOR],
-    { cwd: RAIZ, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONNOUSERSITE: '1' } });
+  sup = spawn(MOTOR, ['supervisor', '--pai', String(process.pid), '--exe', LANCADOR],
+    { cwd: RAIZ, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } });
   let resto = '';
   sup.stdout.on('data', (b) => {
     resto += b.toString('utf8');
@@ -142,6 +150,12 @@ ipcMain.on('argos', (_e, m) => {
   if (m.tipo === 'config' && m.ao_fechar) aoFechar = m.ao_fechar;
   if (m.tipo === 'esconder' && janela) janela.hide();
   if (m.tipo === 'saindo') { saindo = true; if (!sup) { podeFechar = true; app.quit(); } }
+  if (m.tipo === 'janela' && janela) {
+    if (m.acao === 'min') janela.minimize();
+    else if (m.acao === 'max') { if (janela.isMaximized()) janela.unmaximize(); else janela.maximize(); }
+    else if (m.acao === 'fechar') janela.close();
+    else if (m.acao === 'estado') janela.webContents.send('argos', { tipo: 'janela_estado', maximizada: janela.isMaximized() });
+  }
 });
 
 app.whenReady().then(() => {

@@ -1,7 +1,9 @@
 #!/bin/sh
 # Instala (ou atualiza) o Argos EPI Servidor para o usuario atual, sem root:
 #   programa em ~/.local/share/argos-epi-servidor, atalho no menu de aplicativos (e na area de trabalho).
-# Ao atualizar, a pasta dados (banco, rostos, gravacoes) e o .env ficam como estao.
+# O pacote ja vem compilado (motor/ com as bibliotecas, modelos em models/): nada e baixado depois.
+# Ao atualizar, a pasta dados (banco, rostos, gravacoes), o .env e os modelos enviados pelo painel
+# ficam como estao; o resto da pasta antiga (inclusive sobras de versoes anteriores) e apagado.
 set -e
 ORIGEM="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 DESTINO="${ARGOS_DESTINO:-${XDG_DATA_HOME:-$HOME/.local/share}/argos-epi-servidor}"
@@ -20,7 +22,8 @@ echo "Argos EPI Servidor $(cat "$ORIGEM/VERSAO.txt" 2>/dev/null) -> $DESTINO"
 if [ -d "$DESTINO" ]; then
   for pid in $(pgrep -f "$DESTINO/janela/argos-epi-servidor" 2>/dev/null); do kill -TERM "$pid" 2>/dev/null || true; done
   i=0
-  while pgrep -f "$DESTINO/(janela|python)/" >/dev/null 2>&1 && [ $i -lt 45 ]; do sleep 1; i=$((i+1)); done
+  while pgrep -f "$DESTINO/(janela|motor|python)/" >/dev/null 2>&1 && [ $i -lt 45 ]; do sleep 1; i=$((i+1)); done
+  pkill -KILL -f "$DESTINO/(janela|motor|python)/" 2>/dev/null || true
   if [ -x "$DESTINO/bin/pgsql/bin/pg_ctl" ] && [ -d "$DESTINO/dados/pgdata" ]; then
     "$DESTINO/bin/pgsql/bin/pg_ctl" -D "$DESTINO/dados/pgdata" stop -m fast >/dev/null 2>&1 || true
   fi
@@ -28,21 +31,26 @@ fi
 
 mkdir -p "$DESTINO"
 if [ "$ORIGEM" != "$DESTINO" ]; then
-  # troca os arquivos do programa; dados/ e .env nunca sao tocados
-  for item in "$ORIGEM"/* "$ORIGEM"/.env.example; do
+  # limpa a instalacao anterior: fica so o que e do usuario (dados, .env, modelos e envios)
+  for item in "$DESTINO"/* "$DESTINO"/.[!.]*; do
+    [ -e "$item" ] || continue
+    case "$(basename "$item")" in dados|.env|models|uploads) continue ;; esac
+    rm -rf "$item"
+  done
+  for item in "$ORIGEM"/*; do
     [ -e "$item" ] || continue
     nome="$(basename "$item")"
     case "$nome" in dados|.env) continue ;; esac
-    rm -rf "${DESTINO:?}/$nome"
+    if [ "$nome" = "models" ]; then mkdir -p "$DESTINO/models"; cp -a "$item/." "$DESTINO/models/"; continue; fi
     cp -a "$item" "$DESTINO/"
   done
 fi
 chmod +x "$DESTINO/argos-epi-servidor" "$DESTINO/instalar.sh" "$DESTINO/desinstalar.sh" "$DESTINO/janela/argos-epi-servidor" \
-  "$DESTINO/cloudflared" "$DESTINO/python/bin/"* "$DESTINO/bin/pgsql/bin/"* 2>/dev/null || true
+  "$DESTINO/motor/argos-motor" "$DESTINO/bin/cloudflared" "$DESTINO/bin/pgsql/bin/"* 2>/dev/null || true
 
 # atalho no menu de aplicativos
 mkdir -p "$APPS" "$ICONES"
-cp "$DESTINO/servidor_app/ui/icone-512.png" "$ICONES/argos-epi-servidor.png"
+cp "$DESTINO/argos-epi-servidor.png" "$ICONES/argos-epi-servidor.png"
 cat > "$APPS/argos-epi-servidor.desktop" <<EOF
 [Desktop Entry]
 Type=Application

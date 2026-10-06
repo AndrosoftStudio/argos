@@ -1,22 +1,26 @@
-# Gera o Argos EPI Servidor para Windows (programa com janela + instalador), pronto para subir ao R2:
+# Gera o Argos EPI Servidor para Windows ja compilado (so .exe, .dll/.pyd e arquivos de modelo; nenhum
+# codigo-fonte vai para a instalacao), pronto para subir ao R2:
 #   <Saida>\ArgosEPI-Servidor-Setup.exe (+ copias -nvidia, -amd-intel, -cpu: o site baixa a da placa escolhida)
-#   <Saida>\win\argos-app-<versao>.zip                programa, backend, interface, modelos, PostgreSQL, cloudflared
-#   <Saida>\win\python-<placa>-<id>.zip               Python 3.12 + PyTorch + bibliotecas ja compiladas
+#   <Saida>\win\argos-programa-<versao>-<placa>.zip   janela (ArgosEPI.exe), motor\ArgosMotor.exe e recursos.pak
+#   <Saida>\win\argos-motor-<placa>-<id>.zip          bibliotecas do motor (.dll/.pyd: Python, PyTorch, OpenCV...)
+#   <Saida>\win\argos-base-<id>.zip                   modelos (YOLO e rosto), PostgreSQL e cloudflared
+#   <Saida>\win\argos-tensorrt-nvidia-<id>.zip        opcional (NVIDIA): DLLs do TensorRT, baixadas pelo botao do painel
 #   <Saida>\latest.json                               o que o instalador e o programa leem
-# O Python so e refeito quando muda (placa + requirements.txt): as atualizacoes do programa ficam pequenas.
+# O motor e a base so sao refeitos/baixados quando o conteudo muda (o id e o hash dos arquivos):
+# uma atualizacao comum do programa baixa so o argos-programa (dezenas de MB).
 # Requisitos: Windows 10/11 (csc do .NET Framework, curl, tar) e internet na primeira vez.
-# Uso: powershell -ExecutionPolicy Bypass -File empacotar_windows.ps1 -Versao 20.1.0 [-Placas cpu,nvidia,dml] [-SoPrograma]
+# Uso: powershell -ExecutionPolicy Bypass -File empacotar_windows.ps1 -Versao 20.2.0 [-Placas cpu,nvidia,dml] [-SoJanela]
 param(
-  [string]$Versao = "20.1.0",
+  [string]$Versao = "20.2.0",
   [string[]]$Placas = @("cpu", "nvidia", "dml"),
   [string]$Trabalho = "D:\argos-build",
   [string]$Notas = "",
-  [switch]$SoPrograma
+  [switch]$SoJanela
 )
 $ErrorActionPreference = "Stop"
 # com -File a lista chega como um texto so ("cpu,dml,nvidia")
 $Placas = @($Placas | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-$app =Split-Path -Parent $PSScriptRoot             # servidor_app
+$app = Split-Path -Parent $PSScriptRoot             # servidor_app
 $raiz = Split-Path -Parent $app                     # pasta do projeto (v20)
 $cache = Join-Path $Trabalho "cache"
 $saida = Join-Path $Trabalho "saida"
@@ -25,20 +29,47 @@ $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 New-Item -ItemType Directory -Force $cache, "$saida\win", $palco | Out-Null
 # cache do uv junto do trabalho (o PyTorch com CUDA ocupa varios GB)
 if (-not $env:UV_CACHE_DIR) { $env:UV_CACHE_DIR = Join-Path $Trabalho "uv-cache" }
+$env:UV_LINK_MODE = "copy"; $env:UV_HTTP_TIMEOUT = "900"
 [Net.ServicePointManager]::SecurityProtocol = "Tls12"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $PG_VERSAO = "16.14-1"
 $PY_VERSAO = "3.12"
 $TORCH = @{
-  cpu    = @{ pacotes = @("torch", "torchvision"); indice = "https://download.pytorch.org/whl/cpu"; onnx = "" }
-  nvidia = @{ pacotes = @("torch", "torchvision"); indice = "https://download.pytorch.org/whl/cu126"; onnx = "onnxruntime-gpu==1.23.2" }
-  dml    = @{ pacotes = @("torch-directml"); indice = ""; onnx = "onnxruntime-directml==1.24.4" }   # prende o torch 2.4.1 (DirectML)
+  cpu    = @{ pacotes = @("torch", "torchvision"); indice = "https://download.pytorch.org/whl/cpu"; onnx = ""; extras = @() }
+  # onnx + tensorrt: o onnx vai no motor; as DLLs do TensorRT viram um pacote opcional (ver abaixo)
+  nvidia = @{ pacotes = @("torch", "torchvision"); indice = "https://download.pytorch.org/whl/cu126"; onnx = "onnxruntime-gpu==1.23.2"
+              extras = @("onnx>=1.12.0,<2.0.0", "tensorrt-cu12>=10.3,!=10.1.0,!=10.2.0,<11") }
+  dml    = @{ pacotes = @("torch-directml"); indice = ""; onnx = "onnxruntime-directml==1.24.4"; extras = @() }   # prende o torch 2.4.1 (DirectML)
 }
 # onnx: rostos (SCRFD + ArcFace) na placa. onnxruntime-gpu 1.23 = CUDA 12 + cuDNN 9, que vem com o torch cu126
 # (a 1.24+ ja pede CUDA 13 e cairia para a CPU)
+$MODELOS = "argos_epi_v1.pt", "argos_epi_v1.json", "yolo26n.pt", "yolo26s.pt", "yolo26n-pose.pt", "yolo26s-pose.pt", "yolo26m-pose.pt"
+$ROSTO = "det_10g.onnx", "w600k_r50.onnx"
+# runtime do Visual C++ ao lado do motor (instalacao local permitida pela Microsoft): o PyTorch nao abre
+# com o mais antigo que o PyInstaller pega de outras bibliotecas, nem em PCs sem o Redistributable
+$VCRT = "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "msvcp140_atomic_wait.dll", "msvcp140_codecvt_ids.dll",
+        "vcruntime140.dll", "vcruntime140_1.dll", "concrt140.dll", "vcomp140.dll"
 function Passo($t) { Write-Host "`n== $t" -ForegroundColor Yellow }
 function Baixar($url, $dest) { if (-not (Test-Path $dest)) { Write-Host "   baixando $url"; curl.exe -L --fail --retry 3 -s -o $dest $url; if ($LASTEXITCODE) { throw "falha ao baixar $url" } } }
 function Sha($f) { (Get-FileHash $f -Algorithm SHA256).Hash.ToLower() }
+function Tamanho($pasta) { (Get-ChildItem $pasta -Recurse -File | Measure-Object Length -Sum).Sum }
+# id de uma pasta = hash do conteudo (caminho + SHA-256 de cada arquivo): muda so quando algum arquivo muda
+function IdDaPasta($pasta, $fora = @()) {
+  $linhas = Get-ChildItem $pasta -Recurse -File | Where-Object { $fora -notcontains $_.Name } | Sort-Object FullName | ForEach-Object {
+    $_.FullName.Substring($pasta.Length + 1).ToLower() + ":" + (Get-FileHash $_.FullName -Algorithm SHA256).Hash }
+  $sha = [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($linhas -join "`n"))
+  (($sha[0..4] | ForEach-Object { $_.ToString("x2") }) -join "")
+}
+function Zipar($pasta, $zip) {
+  if (Test-Path $zip) { Remove-Item $zip }
+  [IO.Compression.ZipFile]::CreateFromDirectory($pasta, $zip, "Optimal", $false)
+}
+function Descrever($zip, $url, $pasta, $id = $null) {
+  $o = [ordered]@{}
+  if ($id) { $o.id = $id }
+  $o.url = $url; $o.tamanho = (Get-Item $zip).Length; $o.sha256 = (Sha $zip); $o.descompactado = (Tamanho $pasta)
+  $o
+}
 
 # ---------------------------------------------------------------- ferramentas
 Passo "Ferramentas (uv, SDK do WebView2, PostgreSQL, cloudflared)"
@@ -59,7 +90,7 @@ Baixar "https://get.enterprisedb.com/postgresql/postgresql-$PG_VERSAO-windows-x6
 $cf = Join-Path $cache "cloudflared.exe"
 Baixar "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" $cf
 
-# ---------------------------------------------------------------- programa (.exe)
+# ---------------------------------------------------------------- janela e instalador (.exe)
 Passo "Compilando o ArgosEPI.exe e o instalador"
 & $uv run --no-project --python 3.12 --with pillow python "$PSScriptRoot\gerar_icone.py"
 if (-not (Test-Path "$app\windows\argos.ico")) { throw "rode gerar_icone.py (precisa do Pillow)" }
@@ -73,108 +104,181 @@ $setup = Join-Path $saida "ArgosEPI-Servidor-Setup.exe"
   "/r:System.IO.Compression.dll" "/r:System.IO.Compression.FileSystem.dll" "/r:System.Management.dll" "$app\windows\Setup.cs"
 if ($LASTEXITCODE) { throw "falha ao compilar o instalador" }
 foreach ($n in "nvidia", "amd-intel", "cpu") { Copy-Item $setup (Join-Path $saida "ArgosEPI-Servidor-Setup-$n.exe") -Force }
-if ($SoPrograma) { Write-Host "OK (so os .exe): $exeApp, $setup"; return }
+if ($SoJanela) { Write-Host "OK (so os .exe): $exeApp, $setup"; return }
 
-# ---------------------------------------------------------------- pacote do programa
-Passo "Montando o programa $Versao"
-$p = Join-Path $palco "app"
-if (Test-Path $p) { Remove-Item $p -Recurse -Force }
-New-Item -ItemType Directory -Force $p | Out-Null
-robocopy "$raiz\backend" "$p\backend" /e /xd __pycache__ hub /xf *.pyc /njh /njs /nfl /ndl | Out-Null
-robocopy "$raiz\frontend" "$p\frontend" /e /xd api /njh /njs /nfl /ndl | Out-Null
-robocopy "$raiz\scripts" "$p\scripts" /e /xd __pycache__ /xf *.pyc /njh /njs /nfl /ndl | Out-Null
-robocopy "$app" "$p\servidor_app" supervisor.py /njh /njs /nfl /ndl | Out-Null
-robocopy "$app\ui" "$p\servidor_app\ui" /e /njh /njs /nfl /ndl | Out-Null
-New-Item -ItemType Directory -Force "$p\models", "$p\bin" | Out-Null
-foreach ($m in "argos_epi_v1.pt", "argos_epi_v1.json", "yolo26n.pt", "yolo26s.pt", "yolo26n-pose.pt", "yolo26s-pose.pt", "yolo26m-pose.pt") {
-  Copy-Item "$raiz\models\$m" "$p\models\" }
-Copy-Item "$raiz\run.py", "$raiz\requirements.txt", "$raiz\.env.example" $p
-Copy-Item $exeApp, "$sdk\*.dll" $p
-Copy-Item "$app\windows\argos.ico" $p
-Copy-Item $cf "$p\cloudflared.exe"
-Copy-Item $uv "$p\bin\uv.exe"      # o botao "Instalar dependencias do TensorRT" usa
-Set-Content -Encoding ascii "$p\VERSAO.txt" $Versao
-@"
+# ---------------------------------------------------------------- base: modelos, PostgreSQL, cloudflared
+Passo "Base (modelos de visao computacional, PostgreSQL, cloudflared)"
+$b = Join-Path $palco "base"
+if (Test-Path $b) { Remove-Item $b -Recurse -Force }
+$rostoDir = "$b\models\insightface\models\buffalo_l"
+New-Item -ItemType Directory -Force "$b\models", "$b\bin", $rostoDir | Out-Null
+foreach ($m in $MODELOS) { Copy-Item "$raiz\models\$m" "$b\models\" }
+# modelos de rosto (SCRFD + ArcFace do InsightFace buffalo_l): vao na instalacao, nada e baixado depois
+$rostoLocal = "$raiz\models\insightface\models\buffalo_l"
+if (-not ($ROSTO | Where-Object { -not (Test-Path "$rostoLocal\$_") })) { foreach ($r in $ROSTO) { Copy-Item "$rostoLocal\$r" $rostoDir } }
+else {
+  Baixar "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip" "$cache\buffalo_l.zip"
+  foreach ($r in $ROSTO) { tar.exe -xf "$cache\buffalo_l.zip" -C $rostoDir $r; if ($LASTEXITCODE) { throw "buffalo_l.zip sem $r" } }
+}
+# PostgreSQL portatil: so bin, lib e share (sem pgAdmin, docs, include)
+tar.exe -xf $pgzip -C "$b\bin" pgsql/bin pgsql/lib pgsql/share
+Get-ChildItem "$b\bin\pgsql\bin" -Include "pgAdmin*", "*.pdb", "stackbuilder*" -Recurse | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+Get-ChildItem "$b\bin\pgsql\lib" -Filter *.lib -Recurse | Remove-Item -Force
+Remove-Item "$b\bin\pgsql\share\doc" -Recurse -Force -ErrorAction SilentlyContinue
+Copy-Item $cf "$b\bin\cloudflared.exe"
+$idBase = IdDaPasta $b
+Set-Content -Encoding ascii "$b\bin\argos-base-id.txt" $idBase
+$zipBase = Join-Path $saida "win\argos-base-$idBase.zip"
+if (-not (Test-Path $zipBase)) {
+  Get-ChildItem "$saida\win" -Filter "argos-base-*.zip" | Remove-Item -Force
+  Zipar $b $zipBase
+} else { Write-Host "   base $idBase ja pronta" }
+$descBase = Descrever $zipBase "win/argos-base-$idBase.zip" $b $idBase
+
+# ---------------------------------------------------------------- motor e programa, por placa
+$programas = @{}; $motores = @{}; $trts = @{}
+foreach ($placa in $Placas) {
+  $t = $TORCH[$placa]
+  # --- Python de montagem (fica so na maquina de build; o usuario recebe o motor compilado)
+  Passo "Python $PY_VERSAO de montagem para $placa"
+  $base = Join-Path $palco "py-$placa"
+  $py = "$base\python\python.exe"
+  if (-not (Test-Path $py)) {
+    if (Test-Path $base) { Remove-Item $base -Recurse -Force }
+    New-Item -ItemType Directory -Force $base | Out-Null
+    & $uv python install $PY_VERSAO --install-dir "$base\uvpython" --no-bin
+    $dir = Get-ChildItem "$base\uvpython" -Directory | Where-Object { $_.Name -like "cpython-3.12*" -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Select-Object -First 1
+    Move-Item $dir.FullName "$base\python"
+    Remove-Item "$base\uvpython" -Recurse -Force
+    Remove-Item "$base\python\Lib\EXTERNALLY-MANAGED" -ErrorAction SilentlyContinue
+    if ($t.indice) { & $uv pip install --python $py @($t.pacotes) --index-url $t.indice }
+    else { & $uv pip install --python $py @($t.pacotes) }
+    if ($LASTEXITCODE) { throw "falha no PyTorch ($placa)" }
+  }
+  # numpy<2 do requirements: o resto se encaixa no torch ja instalado.
+  # Com placa, o onnxruntime comum da lugar ao da placa (os dois pacotes ocupam a mesma pasta).
+  $req = Join-Path $base "requirements.txt"
+  [IO.File]::WriteAllLines($req, @(Get-Content "$raiz\requirements.txt" | Where-Object { -not ($t.onnx -and $_ -match '^\s*onnxruntime') }))
+  & $uv pip install --python $py -r $req pyinstaller
+  if ($LASTEXITCODE) { throw "falha no requirements.txt ($placa)" }
+  if ($t.onnx) {
+    & $uv pip install --python $py $t.onnx "numpy<2"
+    if ($LASTEXITCODE) { throw "falha no $($t.onnx) ($placa)" }
+  }
+  if ($t.extras.Count) {
+    # o tensorrt-cu12 monta as dependencias pelo pip (o uv nao serve aqui); numpy travado na versao instalada
+    $trava = Join-Path $base "restricoes.txt"
+    & $py -c "import numpy; print('numpy==' + numpy.__version__)" | Set-Content -Encoding ascii $trava
+    & $py -m pip install --disable-pip-version-check -q -c $trava @($t.extras)
+    if ($LASTEXITCODE) { throw "falha nos extras ($placa)" }
+  }
+  & $py -c "import torch, ultralytics, cv2, flask, psycopg, onnxruntime, cryptography; print('ok', torch.__version__, onnxruntime.get_available_providers())"
+  if ($LASTEXITCODE) { throw "o Python de montagem nao importa as bibliotecas ($placa)" }
+
+  # --- compila: motor\ArgosMotor.exe + bibliotecas (.dll/.pyd), sem nenhum .py
+  Passo "Compilando o motor ($placa)"
+  $pyi = Join-Path $palco "pyi-$placa"
+  New-Item -ItemType Directory -Force $pyi | Out-Null
+  $env:ARGOS_RAIZ = $raiz; $env:ARGOS_PLACA = $placa
+  & $py -m PyInstaller --noconfirm --log-level WARN --distpath "$pyi\dist" --workpath "$pyi\work" "$PSScriptRoot\motor.spec"
+  if ($LASTEXITCODE) { throw "falha ao compilar o motor ($placa)" }
+  $motor = "$pyi\dist\motor"
+  foreach ($dll in $VCRT) { if (Test-Path "$env:WINDIR\System32\$dll") { Copy-Item "$env:WINDIR\System32\$dll" $motor -Force } }
+  # so serve para compilar extensoes em C++ (e scripts de exemplo das bibliotecas): nao vai para o usuario
+  Get-ChildItem $motor -Recurse -Include *.lib, *.h, *.hpp, *.cmake, *.pyi, *.pdb, *.sh, *.js, *.html, *.ipynb | Remove-Item -Force -ErrorAction SilentlyContinue
+  $fontes = @(Get-ChildItem $motor -Recurse -Include *.py, *.pyw)
+  if ($fontes.Count) { throw "sobrou codigo-fonte no motor ($placa): " + (($fontes | Select-Object -First 5 | ForEach-Object { $_.FullName.Substring($motor.Length + 1) }) -join ", ") }
+  Set-Content -Encoding ascii "$motor\argos-variante.txt" $placa
+  $temTrt = Test-Path "$motor\tensorrt_libs"
+  if ($temTrt) { Set-Content -Encoding ascii "$motor\argos-trt-id.txt" "montagem" }   # o conferir abre o TensorRT tambem
+  # autoteste: abre PyTorch, OpenCV, Ultralytics e o backend inteiro, detecta num quadro e procura rostos
+  $env:INSIGHTFACE_ROOT = "$b\models\insightface"
+  & "$motor\ArgosMotor.exe" conferir --rosto --detectar "$b\models\yolo26n.pt"
+  $codigo = $LASTEXITCODE
+  Remove-Item Env:\INSIGHTFACE_ROOT
+  if ($codigo) { throw "o motor compilado nao passou no autoteste ($placa)" }
+
+  # --- TensorRT (so NVIDIA): 3 GB de DLLs que poucos usam. Saem do motor para um pacote opcional, que o
+  #     botao "Instalar dependencias do TensorRT" do painel baixa ja compilado e extrai em motor\
+  $pt = Join-Path $palco "trt-$placa"
+  if (Test-Path $pt) { Remove-Item $pt -Recurse -Force }
+  if ($temTrt) {
+    New-Item -ItemType Directory -Force "$pt\motor" | Out-Null
+    Remove-Item "$motor\argos-trt-id.txt"
+    Move-Item "$motor\tensorrt_libs", "$motor\tensorrt_bindings" "$pt\motor\"
+    Get-ChildItem $motor -Directory -Filter "tensorrt_cu12*.dist-info" | Move-Item -Destination "$pt\motor\"
+    & "$motor\ArgosMotor.exe" conferir          # e continua abrindo sem ele
+    if ($LASTEXITCODE) { throw "o motor nao abre sem o pacote do TensorRT ($placa)" }
+  }
+
+  # --- bibliotecas do motor (tudo menos o executavel): so mudam quando muda uma dependencia
+  $idMotor = IdDaPasta $motor @("ArgosMotor.exe", "argos-motor-id.txt")
+  Set-Content -Encoding ascii "$motor\argos-motor-id.txt" $idMotor
+  if ($temTrt) {
+    $idTrt = IdDaPasta "$pt\motor"
+    Set-Content -Encoding ascii "$pt\motor\argos-trt-id.txt" $idTrt
+    $zipTrt = Join-Path $saida "win\argos-tensorrt-$placa-$idTrt.zip"
+    if (-not (Test-Path $zipTrt)) {
+      Passo "Empacotando o TensorRT opcional ($placa, $idTrt)"
+      Get-ChildItem "$saida\win" -Filter "argos-tensorrt-$placa-*.zip" | Remove-Item -Force
+      Zipar $pt $zipTrt
+    } else { Write-Host "   pacote do TensorRT $placa ($idTrt) ja pronto" }
+    $d = Descrever $zipTrt "win/argos-tensorrt-$placa-$idTrt.zip" $pt $idTrt
+    $d.motor = $idMotor                         # so serve neste motor
+    $trts[$placa] = $d
+    Remove-Item $pt -Recurse -Force
+  }
+  $zipMotor = Join-Path $saida "win\argos-motor-$placa-$idMotor.zip"
+  $pm = Join-Path $palco "motor-$placa"
+  if (Test-Path $pm) { Remove-Item $pm -Recurse -Force }
+  New-Item -ItemType Directory -Force $pm | Out-Null
+  if (-not (Test-Path $zipMotor)) {
+    Passo "Empacotando as bibliotecas do motor ($placa, $idMotor)"
+    Get-ChildItem "$saida\win" -Filter "argos-motor-$placa-*.zip" | Remove-Item -Force
+    robocopy $motor "$pm\motor" /e /xf ArgosMotor.exe /njh /njs /nfl /ndl | Out-Null
+    Zipar $pm $zipMotor
+    Remove-Item $pm -Recurse -Force
+  } else { Write-Host "   bibliotecas do motor $placa ($idMotor) ja prontas" }
+  $descMotor = [ordered]@{ id = $idMotor; url = "win/argos-motor-$placa-$idMotor.zip"; tamanho = (Get-Item $zipMotor).Length; sha256 = (Sha $zipMotor)
+                           descompactado = (Tamanho $motor) - (Get-Item "$motor\ArgosMotor.exe").Length }
+  $motores[$placa] = $descMotor
+
+  # --- programa: janela, motor (executavel) e recursos
+  Passo "Montando o programa $Versao ($placa)"
+  $p = Join-Path $palco "programa-$placa"
+  if (Test-Path $p) { Remove-Item $p -Recurse -Force }
+  New-Item -ItemType Directory -Force "$p\motor" | Out-Null
+  Copy-Item $exeApp, "$sdk\*.dll" $p
+  Copy-Item "$motor\ArgosMotor.exe" "$p\motor\"
+  & $py "$PSScriptRoot\montar_recursos.py" $raiz "$p\recursos.pak"
+  if ($LASTEXITCODE) { throw "falha ao montar o recursos.pak" }
+  Set-Content -Encoding ascii "$p\VERSAO.txt" $Versao
+  @"
 Argos EPI Servidor $Versao
 Servidor de cameras com IA para EPIs (TCC SENAI Lauro de Freitas/BA).
 Abra pelo atalho "Argos EPI Servidor". Os dados ficam na pasta dados (banco, rostos, gravacoes).
 Para desinstalar: Configuracoes do Windows > Aplicativos > Argos EPI Servidor.
 "@ | Set-Content -Encoding UTF8 "$p\LEIA-ME.txt"
-# PostgreSQL portatil: so bin, lib e share (sem pgAdmin, docs, include)
-tar.exe -xf $pgzip -C "$p\bin" pgsql/bin pgsql/lib pgsql/share
-Get-ChildItem "$p\bin\pgsql\bin" -Include "pgAdmin*", "*.pdb", "stackbuilder*" -Recurse | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-Get-ChildItem "$p\bin\pgsql\lib" -Filter *.lib -Recurse | Remove-Item -Force
-Remove-Item "$p\bin\pgsql\share\doc" -Recurse -Force -ErrorAction SilentlyContinue
-$zipApp = Join-Path $saida "win\argos-app-$Versao.zip"
-if (Test-Path $zipApp) { Remove-Item $zipApp }
-[IO.Compression.ZipFile]::CreateFromDirectory($p, $zipApp, "Optimal", $false)
-$descApp = (Get-ChildItem $p -Recurse -File | Measure-Object Length -Sum).Sum
-
-# ---------------------------------------------------------------- Python por placa
-$reqTexto = [IO.File]::ReadAllText("$raiz\requirements.txt")
-$pythons = @{}
-foreach ($placa in $Placas) {
-  # o id muda quando muda o requirements.txt ou a receita da placa: so ai o Python e refeito
-  $receita = $reqTexto + "|" + ($TORCH[$placa].pacotes -join ",") + "|" + $TORCH[$placa].indice + "|" + $TORCH[$placa].onnx
-  $sha = [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($receita))
-  $id = "py312-$placa-" + (($sha[0..3] | ForEach-Object { $_.ToString("x2") }) -join "")
-  $zipPy = Join-Path $saida "win\python-$placa-$id.zip"
-  $info = "$zipPy.json"
-  if ((Test-Path $zipPy) -and (Test-Path $info)) {
-    Passo "Python $placa ja pronto ($id)"
-    $pythons[$placa] = Get-Content $info -Raw | ConvertFrom-Json
-    continue
-  }
-  Passo "Python $PY_VERSAO para $placa ($id)"
-  $base = Join-Path $palco "py-$placa"
-  if (Test-Path $base) { Remove-Item $base -Recurse -Force }
-  New-Item -ItemType Directory -Force $base | Out-Null
-  & $uv python install $PY_VERSAO --install-dir "$base\uvpython" --no-bin
-  $dir = Get-ChildItem "$base\uvpython" -Directory | Where-Object { $_.Name -like "cpython-3.12*" -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Select-Object -First 1
-  Move-Item $dir.FullName "$base\python"
-  Remove-Item "$base\uvpython" -Recurse -Force
-  Remove-Item "$base\python\Lib\EXTERNALLY-MANAGED" -ErrorAction SilentlyContinue
-  $py = "$base\python\python.exe"
-  $env:UV_LINK_MODE = "copy"; $env:UV_HTTP_TIMEOUT = "900"
-  $t = $TORCH[$placa]
-  if ($t.indice) { & $uv pip install --python $py @($t.pacotes) --index-url $t.indice }
-  else { & $uv pip install --python $py @($t.pacotes) }
-  if ($LASTEXITCODE) { throw "falha no PyTorch ($placa)" }
-  # numpy<2 do requirements: o resto se encaixa no torch ja instalado
-  & $uv pip install --python $py -r "$raiz\requirements.txt"
-  if ($LASTEXITCODE) { throw "falha no requirements.txt ($placa)" }
-  if ($t.onnx) {   # troca o onnxruntime comum pelo da placa
-    & $uv pip uninstall --python $py onnxruntime
-    & $uv pip install --python $py $t.onnx "numpy<2"
-    if ($LASTEXITCODE) { throw "falha no $($t.onnx) ($placa)" }
-  }
-  & $py -c "import torch, ultralytics, cv2, flask, psycopg, onnxruntime, cryptography; print('ok', torch.__version__, onnxruntime.get_available_providers())"
-  if ($LASTEXITCODE) { throw "o Python montado nao importa as bibliotecas ($placa)" }
-  # runtime do Visual C++ junto do python.exe (instalacao local permitida pela Microsoft):
-  # o PyTorch e o OpenCV nao abrem sem ele em PCs que nunca instalaram o Redistributable
-  foreach ($dll in "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "vcruntime140.dll", "vcruntime140_1.dll", "concrt140.dll", "vcomp140.dll") {
-    if (Test-Path "$env:WINDIR\System32\$dll") { Copy-Item "$env:WINDIR\System32\$dll" "$base\python\" -Force } }
-  # so serve para compilar extensoes em C++: nao vai para o usuario
-  Get-ChildItem "$base\python\Lib\site-packages\torch\lib" -Filter *.lib -ErrorAction SilentlyContinue | Remove-Item -Force
-  Remove-Item "$base\python\Lib\site-packages\torch\include" -Recurse -Force -ErrorAction SilentlyContinue
-  Get-ChildItem "$base\python" -Directory -Recurse -Filter __pycache__ | Remove-Item -Recurse -Force
-  Set-Content -Encoding ascii "$base\python\argos-variante.txt" $placa
-  Set-Content -Encoding ascii "$base\python\argos-python-id.txt" $id
-  Get-ChildItem (Join-Path $saida "win") -Filter "python-$placa-*.zip*" | Remove-Item -Force
-  [IO.Compression.ZipFile]::CreateFromDirectory("$base\python", $zipPy, "Optimal", $true)
-  $obj = [ordered]@{ id = $id; url = "win/python-$placa-$id.zip"; tamanho = (Get-Item $zipPy).Length; sha256 = (Sha $zipPy);
-                     descompactado = (Get-ChildItem "$base\python" -Recurse -File | Measure-Object Length -Sum).Sum }
-  $obj | ConvertTo-Json | Set-Content -Encoding UTF8 $info
-  $pythons[$placa] = [pscustomobject]$obj
-  Remove-Item $base -Recurse -Force
+  Get-ChildItem "$saida\win" -Filter "argos-programa-*-$placa.zip" | Remove-Item -Force
+  $zipProg = Join-Path $saida "win\argos-programa-$Versao-$placa.zip"
+  Zipar $p $zipProg
+  $programas[$placa] = Descrever $zipProg "win/argos-programa-$Versao-$placa.zip" $p
 }
+# pacotes do formato antigo (Python solto + codigo): nao sao mais usados
+Get-ChildItem "$saida\win" -Include "argos-app-*.zip", "python-*.zip", "python-*.zip.json" -Recurse | Remove-Item -Force
 
 # ---------------------------------------------------------------- latest.json
 Passo "latest.json"
 $manifesto = Join-Path $saida "latest.json"
 $atual = if (Test-Path $manifesto) { Get-Content $manifesto -Raw | ConvertFrom-Json } else { $null }
-$py = [ordered]@{}
-foreach ($k in "nvidia", "dml", "cpu") { if ($pythons.ContainsKey($k)) { $py[$k] = $pythons[$k] } elseif ($atual -and $atual.windows.python.$k) { $py[$k] = $atual.windows.python.$k } }
+$prog = [ordered]@{}; $mot = [ordered]@{}; $trt = [ordered]@{}
+foreach ($k in "nvidia", "dml", "cpu") {
+  if ($programas.ContainsKey($k)) { $prog[$k] = $programas[$k]; $mot[$k] = $motores[$k]; if ($trts.ContainsKey($k)) { $trt[$k] = $trts[$k] } }
+  elseif ($atual -and $atual.versao -eq $Versao -and $atual.windows.programa.$k) {
+    $prog[$k] = $atual.windows.programa.$k; $mot[$k] = $atual.windows.motor.$k
+    if ($atual.windows.extras.tensorrt.$k) { $trt[$k] = $atual.windows.extras.tensorrt.$k }
+  }
+}
 # pacotes do Linux: o empacotar_linux.sh grava saida\linux\linux.json
 $linuxJson = Join-Path $saida "linux\linux.json"
 $linux = if (Test-Path $linuxJson) { Get-Content $linuxJson -Raw | ConvertFrom-Json } elseif ($atual -and $atual.linux) { $atual.linux } else { [ordered]@{} }
@@ -182,8 +286,10 @@ $m = [ordered]@{
   versao = $Versao; data = (Get-Date -Format "yyyy-MM-dd"); notas = $Notas
   windows = [ordered]@{
     setup = [ordered]@{ url = "ArgosEPI-Servidor-Setup.exe"; tamanho = (Get-Item $setup).Length; sha256 = (Sha $setup) }
-    app = [ordered]@{ url = "win/argos-app-$Versao.zip"; tamanho = (Get-Item $zipApp).Length; sha256 = (Sha $zipApp); descompactado = $descApp }
-    python = $py
+    base = $descBase
+    programa = $prog
+    motor = $mot
+    extras = [ordered]@{ tensorrt = $trt }      # opcional: baixado pelo botao do painel (so NVIDIA)
   }
   linux = $linux
 }

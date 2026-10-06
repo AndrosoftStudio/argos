@@ -1,8 +1,10 @@
 // Argos EPI Servidor - janela do programa no Windows (ArgosEPI.exe).
 // C# + WebView2, compilado com o csc do .NET Framework que ja vem no Windows (ver build/empacotar_windows.ps1).
-// A janela nao tem console: ela abre o supervisor (servidor_app\supervisor.py) escondido, que liga o banco e
-// o servidor, e mostra a interface dele (servidor_app\ui). Icone na bandeja, "iniciar com o Windows" e a
+// A janela nao tem console: ela abre o motor (motor\ArgosMotor.exe supervisor) escondido, que liga o banco e
+// o servidor, e mostra a interface dele (recursos.pak). Icone na bandeja, "iniciar com o Windows" e a
 // escolha do X (fechar de vez ou ficar em segundo plano) vem dos Ajustes da interface.
+// Design proprio: sem a barra de titulo do Windows; a barra azul da interface e a barra da janela
+// (arrastar, minimizar, maximizar, fechar), mantendo borda de redimensionar, encaixe e cantos do Windows 11.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -70,6 +72,17 @@ namespace ArgosEPI
         readonly EventWaitHandle evMostrar, evSair;
 
         [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int valor, int tamanho);
+        [DllImport("user32.dll")] static extern bool ReleaseCapture();
+        [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")] static extern int GetSystemMetrics(int indice);
+        [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr hWnd);
+        [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hWnd);
+        [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
+
+        // faixa em volta da interface por onde a janela e redimensionada (a cor acompanha a barra do topo)
+        const int Borda = 5;
+        const int WM_NCCALCSIZE = 0x83, WM_NCHITTEST = 0x84, WM_NCLBUTTONDOWN = 0xA1, WM_WINDOWPOSCHANGED = 0x47, HTCAPTION = 2;
+        static readonly Color Azul = Color.FromArgb(55, 64, 180);
 
         public Janela(bool minimizado)
         {
@@ -78,7 +91,13 @@ namespace ArgosEPI
             ClientSize = new Size(1120, 740);
             MinimumSize = new Size(780, 540);
             StartPosition = FormStartPosition.CenterScreen;
-            BackColor = Navy;
+            BackColor = Azul;
+            Padding = new Padding(Borda);
+            Resize += (s, e) =>
+            {
+                Padding = new Padding(IsHandleCreated && IsZoomed(Handle) ? 0 : Borda);
+                EnviarEstadoJanela();
+            };
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
             web = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = Navy };
@@ -124,8 +143,98 @@ namespace ArgosEPI
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            int escuro = 1;   // barra de titulo escura, combinando com o programa
-            if (DwmSetWindowAttribute(Handle, 20, ref escuro, 4) != 0) DwmSetWindowAttribute(Handle, 19, ref escuro, 4);
+            try
+            {
+                int escuro = 1;
+                if (DwmSetWindowAttribute(Handle, 20, ref escuro, 4) != 0) DwmSetWindowAttribute(Handle, 19, ref escuro, 4);
+                int cantos = 2;   // cantos arredondados (Windows 11)
+                DwmSetWindowAttribute(Handle, 33, ref cantos, 4);
+                CorDaMoldura(Azul);
+            }
+            catch { }
+        }
+
+        void CorDaMoldura(Color c)
+        {
+            BackColor = c;
+            try { int cor = c.R | (c.G << 8) | (c.B << 16); DwmSetWindowAttribute(Handle, 34, ref cor, 4); } catch { }   // COLORREF 0x00BBGGRR
+        }
+
+        // Sem a barra de titulo do Windows: a area do cliente ocupa a janela toda e a barra e a da interface.
+        // A faixa de Borda px em volta (Padding) continua redimensionando; encaixe e sombra seguem os do sistema.
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_NCCALCSIZE && m.WParam != IntPtr.Zero)
+            {
+                // IsZoomed e nao WindowState: nesta mensagem o WinForms ainda nao atualizou o estado
+                if (IsZoomed(Handle))
+                {
+                    // maximizada, a janela passa um pouco da tela: desconta essa sobra
+                    var r = (RECT)Marshal.PtrToStructure(m.LParam, typeof(RECT));
+                    int fx = GetSystemMetrics(32) + GetSystemMetrics(92), fy = GetSystemMetrics(33) + GetSystemMetrics(92);
+                    r.Left += fx; r.Right -= fx; r.Top += fy; r.Bottom -= fy;
+                    Marshal.StructureToPtr(r, m.LParam, false);
+                }
+                m.Result = IntPtr.Zero;
+                return;
+            }
+            if (m.Msg == WM_NCHITTEST && !IsZoomed(Handle))
+            {
+                int x = (short)((long)m.LParam & 0xFFFF), y = (short)(((long)m.LParam >> 16) & 0xFFFF);
+                var p = PointToClient(new Point(x, y));
+                int b = Borda + 2, w = ClientSize.Width, h = ClientSize.Height;
+                bool esq = p.X < b, dir = p.X >= w - b, cima = p.Y < b, baixo = p.Y >= h - b;
+                int onde = cima && esq ? 13 : cima && dir ? 14 : baixo && esq ? 16 : baixo && dir ? 17
+                         : esq ? 10 : dir ? 11 : cima ? 12 : baixo ? 15 : 0;
+                if (onde != 0) { m.Result = (IntPtr)onde; return; }
+            }
+            base.WndProc(ref m);
+            if (m.Msg == WM_WINDOWPOSCHANGED) GuardarLimites();   // depois de o WinForms aplicar o tamanho dele
+        }
+
+        // Sem a moldura do Windows, o WinForms erra a conta ao voltar de maximizada/minimizada (soma a
+        // moldura que nao existe e a janela cresce a cada vez): quem guarda e devolve o tamanho normal e a janela.
+        Rectangle limitesNormais;
+        bool estavaNormal, tamanhoInicial;
+
+        void GuardarLimites()
+        {
+            if (!IsHandleCreated || !Visible) return;
+            bool normal = !IsZoomed(Handle) && !IsIconic(Handle);
+            if (normal)
+            {
+                if (!tamanhoInicial)
+                {
+                    tamanhoInicial = true;
+                    float escala;
+                    using (var g = CreateGraphics()) escala = g.DpiX / 96f;
+                    var area = Screen.FromHandle(Handle).WorkingArea;
+                    var t = new Size(Math.Min((int)(1140 * escala), area.Width), Math.Min((int)(780 * escala), area.Height));
+                    limitesNormais = new Rectangle(area.X + (area.Width - t.Width) / 2, area.Y + (area.Height - t.Height) / 2, t.Width, t.Height);
+                    estavaNormal = true;
+                    Bounds = limitesNormais;
+                }
+                else if (!estavaNormal && Size != limitesNormais.Size) { estavaNormal = true; Size = limitesNormais.Size; }
+                else limitesNormais = Bounds;
+            }
+            estavaNormal = normal;
+        }
+
+        void EnviarEstadoJanela()
+        {
+            Enviar("{\"tipo\":\"janela_estado\",\"maximizada\":" + (WindowState == FormWindowState.Maximized ? "true" : "false") + "}");
+        }
+
+        void AcaoDaJanela(string acao)
+        {
+            switch (acao)
+            {
+                case "arrastar": ReleaseCapture(); SendMessage(Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero); break;
+                case "min": WindowState = FormWindowState.Minimized; break;
+                case "max": WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized; break;
+                case "fechar": Close(); break;
+                case "estado": EnviarEstadoJanela(); break;
+            }
         }
 
         bool iniciouWeb;
@@ -164,28 +273,35 @@ namespace ArgosEPI
             }
         }
 
+        // tela dos primeiros segundos (antes de a interface responder): ja arrasta e fecha a janela
         static string Abertura(string texto)
         {
             return "<!doctype html><html><body style=\"margin:0;height:100vh;display:grid;place-items:center;background:#080a1d;color:#fff;" +
-                   "font-family:'Segoe UI',sans-serif\"><div style=\"text-align:center\"><div style=\"font:700 44px 'Bahnschrift','Segoe UI';letter-spacing:.04em\">ARGOS " +
+                   "font-family:'Segoe UI',sans-serif;user-select:none;overflow:hidden\">" +
+                   "<button id=\"x\" title=\"Fechar\" style=\"position:fixed;top:10px;right:10px;width:38px;height:34px;border:0;border-radius:10px;" +
+                   "background:transparent;color:#fff;font-size:18px;cursor:pointer\" onmouseover=\"this.style.background='#e5484d'\" " +
+                   "onmouseout=\"this.style.background='transparent'\">&#10005;</button>" +
+                   "<div style=\"text-align:center\"><div style=\"font:700 44px 'Bahnschrift','Segoe UI';letter-spacing:.04em\">ARGOS " +
                    "<span style=\"font-size:16px;background:#fbc343;color:#05075a;padding:4px 8px;border-radius:4px;vertical-align:middle\">SERVIDOR</span></div>" +
-                   "<p style=\"opacity:.75;margin-top:14px\">" + WebUtility.HtmlEncode(texto) + "</p></div></body></html>";
+                   "<p style=\"opacity:.75;margin-top:14px\">" + WebUtility.HtmlEncode(texto) + "</p></div>" +
+                   "<script>var w=window.chrome&&window.chrome.webview;function e(a){if(w)w.postMessage(JSON.stringify({tipo:'janela',acao:a}));}" +
+                   "document.getElementById('x').onclick=function(ev){ev.stopPropagation();e('fechar');};" +
+                   "document.onmousedown=function(ev){if(ev.button===0&&ev.target.id!=='x')e('arrastar');};</script></body></html>";
         }
 
         void IniciarSupervisor()
         {
-            var python = Path.Combine(Programa.Pasta, "python", "python.exe");
-            var script = Path.Combine(Programa.Pasta, "servidor_app", "supervisor.py");
-            if (!File.Exists(python) || !File.Exists(script))
+            var motor = Path.Combine(Programa.Pasta, "motor", "ArgosMotor.exe");
+            if (!File.Exists(motor))
             {
-                MessageBox.Show("A instalação está incompleta (falta o Python do Argos).\nRode o instalador do Argos EPI Servidor de novo.",
+                MessageBox.Show("A instalação está incompleta (falta o motor do Argos).\nRode o instalador do Argos EPI Servidor de novo.",
                     Programa.Nome, MessageBoxButtons.OK, MessageBoxIcon.Error);
                 saindoDeVez = true;
                 Close();
                 return;
             }
-            var psi = new ProcessStartInfo(python, "-X utf8 -u \"" + script + "\" --pai " + Process.GetCurrentProcess().Id +
-                                                   " --exe \"" + Application.ExecutablePath + "\"")
+            var psi = new ProcessStartInfo(motor, "supervisor --pai " + Process.GetCurrentProcess().Id +
+                                                  " --exe \"" + Application.ExecutablePath + "\"")
             {
                 UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Programa.Pasta,
                 RedirectStandardOutput = true, RedirectStandardError = true,
@@ -239,8 +355,15 @@ namespace ArgosEPI
             switch (tipo as string)
             {
                 case "config":
-                    object af;
+                    object af, cor;
                     if (m.TryGetValue("ao_fechar", out af) && af is string) aoFechar = (string)af;
+                    // a moldura da janela acompanha a cor da barra do topo (tema claro/escuro)
+                    if (m.TryGetValue("cor", out cor) && cor is string)
+                        try { var c = ColorTranslator.FromHtml(((string)cor).Trim()); if (c.ToArgb() != BackColor.ToArgb()) CorDaMoldura(c); } catch { }
+                    break;
+                case "janela":
+                    object ac;
+                    if (m.TryGetValue("acao", out ac) && ac is string) AcaoDaJanela((string)ac);
                     break;
                 case "esconder": Esconder(); break;
                 case "saindo":
@@ -254,7 +377,7 @@ namespace ArgosEPI
 
         void Enviar(string json)
         {
-            try { if (webPronta && urlUi != null) web.CoreWebView2.PostWebMessageAsString(json); } catch { }
+            try { if (webPronta && urlUi != null && web.CoreWebView2 != null) web.CoreWebView2.PostWebMessageAsString(json); } catch { }
         }
 
         void AoFechar(object s, FormClosingEventArgs e)

@@ -9,11 +9,12 @@ import threading
 
 import torch
 
+import pastas
 import ppe_taxonomy as tax
 from ppe_analyzer import supported_items
 from yolo_runtime import precision_kwargs
 
-MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'models')
+MODELS_DIR = os.path.join(pastas.RAIZ, 'models')
 # modelo de pose por nivel de detalhe (o Ultralytics baixa na primeira vez)
 POSE_MODELS = {'tempo_real': 'yolo26n-pose.pt', 'detalhado': 'yolo26s-pose.pt', 'super': 'yolo26m-pose.pt'}
 

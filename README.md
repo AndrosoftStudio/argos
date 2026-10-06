@@ -106,11 +106,35 @@ estiver ocupada, o servidor usa a próxima livre (até 8097).
 **Programa Argos EPI Servidor** (`servidor_app/`): uma janela com a mesma cara do site, sem
 console, que liga o banco, o backend e o túnel, mostra a conta, a máquina e as câmeras em
 processamento, e fica no ícone perto do relógio. No Windows é um `.exe` (WinForms + WebView2,
-`servidor_app/windows/`); no Linux, Electron (`servidor_app/linux/`). Os dois só mostram a
-interface servida pelo `servidor_app/supervisor.py`. Para gerar: `servidor_app/build/empacotar_windows.ps1`
-(instalador + programa + um Python por placa: NVIDIA cu126, DirectML, CPU) e
-`servidor_app/build/empacotar_linux.sh` (em container); `publicar_r2.py` sobe para a pasta
-`argosepi-discovery` do Cloudflare R2, de onde o site baixa.
+`servidor_app/windows/`); no Linux, Electron (`servidor_app/linux/`). A janela tem design
+próprio: sem a barra de título do sistema, a barra azul da interface arrasta a janela e traz
+os botões de minimizar, maximizar e fechar.
+
+O programa instalado é **compilado**: não vai nenhum código-fonte, nem Python solto.
+
+| Na pasta instalada | O que é |
+|---|---|
+| `ArgosEPI.exe` (Linux: `janela/` com `app.asar`) | a janela |
+| `motor\ArgosMotor.exe` + `.dll`/`.pyd` | supervisor + backend compilados (PyInstaller, `servidor_app/build/motor.spec`), com Python, PyTorch, OpenCV e onnxruntime ao lado |
+| `recursos.pak` | interface da janela e painel local (zip só de leitura, `backend/pastas.py`) |
+| `models\` | YOLO (`.pt`) e rosto (`.onnx`), já na instalação: nada é baixado depois |
+| `bin\` | PostgreSQL portátil e cloudflared |
+| `dados\` | banco, rostos, gravações (nunca apagado ao atualizar) |
+
+Para gerar: `servidor_app/build/empacotar_windows.ps1` (instalador + programa + motor por placa:
+NVIDIA cu126, DirectML, CPU + base com modelos e banco) e `servidor_app/build/empacotar_linux.sh`
+(em container); `publicar_r2.py` sobe para a pasta `argosepi-discovery` do Cloudflare R2, de onde
+o site baixa (as chaves do R2 só entram por variável de ambiente na hora de enviar; nunca ficam
+no projeto). O instalador limpa a pasta ao instalar por cima: ficam só `dados\`, `.env`,
+`models\` e `uploads\`.
+
+**TensorRT (só NVIDIA):** as DLLs do TensorRT têm 3 GB, então não vão no download de todo
+mundo. O botão "Instalar dependências do TensorRT" do painel baixa um pacote opcional já
+compilado (`argos-tensorrt-nvidia-<id>`, só `.dll`/`.pyd`) e extrai em `motor\`; não usa pip
+(`backend/dependencias.py`). O instalador traz o pacote de volta quando troca o motor.
+
+O programa escuta só em `127.0.0.1` (o acesso de fora vem pelo túnel), então o Windows não
+pede permissão de firewall/administrador. "Aceitar conexões da rede local" fica nos Ajustes.
 
 **GPU ou CPU por servidor:** site → Ajustes → Servidores (ou Ajustes no programa).
 `GET/POST /servidor/hardware` (conta) e `/local/hardware` (só na máquina) gravam

@@ -21,6 +21,7 @@ import time
 import uuid
 
 import db
+import pastas
 
 # ── Politica de captura e retencao ──────────────────────────────────
 FIM_EPISODIO_S = 20.0      # violacao sumiu por mais que isso -> episodio fechado
@@ -30,7 +31,7 @@ RETENCAO_DIAS = 7          # evidencias sao temporarias
 RETENCAO_EVENTOS_DIAS = 365
 MARGEM_RECORTE = 0.12      # folga ao redor da caixa, para pegar o funcionario todo
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = pastas.RAIZ
 # Fuso usado para separar os dias nos graficos. Antes era 'localtime', que o
 # PostgreSQL do Docker (imagem alpine) nao reconhece: a consulta dava erro e a
 # pagina de desempenho do funcionario nunca mostrava as faltas registradas.

@@ -1,10 +1,14 @@
 // Argos EPI Servidor - instalador (ArgosEPI-Servidor-Setup.exe). Nao precisa de administrador.
-// Pequeno: le o latest.json da pasta de downloads (R2) e baixa so o que a maquina precisa, ja compilado:
-//   win/argos-app-<versao>.zip          programa, backend, interface, modelos, PostgreSQL e cloudflared
-//   win/python-<placa>-<id>.zip         Python 3.12 com PyTorch e bibliotecas prontas (.dll), por placa de video:
-//                                       nvidia (CUDA), dml (AMD/Intel com DirectML) ou cpu
+// Pequeno: le o latest.json da pasta de downloads (R2) e baixa so o que a maquina precisa, tudo ja compilado
+// (so .exe, .dll/.pyd e arquivos de modelo; nenhum codigo-fonte e nada para baixar depois de instalado):
+//   win/argos-programa-<versao>-<placa>.zip   janela (ArgosEPI.exe), motor\ArgosMotor.exe e recursos.pak
+//   win/argos-motor-<placa>-<id>.zip          bibliotecas do motor (Python, PyTorch, OpenCV... em .dll), por placa:
+//                                             nvidia (CUDA + TensorRT), dml (AMD/Intel com DirectML) ou cpu
+//   win/argos-base-<id>.zip                   modelos (YOLO e rosto), PostgreSQL e cloudflared
+// O motor e a base so sao baixados de novo quando mudam (id): atualizar costuma baixar so o programa.
 // Atualizar = rodar de novo (ou o botao "Atualizar" do programa, que chama com --atualizar <pasta>).
-// A pasta dados (banco, rostos, gravacoes) e o .env nunca sao apagados nem sobrescritos.
+// Instalar por cima limpa a pasta: so ficam dados\ (banco, rostos, gravacoes), .env, models\ e uploads\;
+// o resto (inclusive o Python solto e o codigo das versoes antigas) e apagado.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -38,7 +42,8 @@ namespace ArgosEPI.Instalador
             Application.SetCompatibleTextRenderingDefault(false);
             string fonte = Arg(args, "--fonte") ?? FontePadrao;
             if (!fonte.EndsWith("/")) fonte += "/";
-            Application.Run(new Tela(fonte, Arg(args, "--atualizar"), Arg(args, "--variante")));
+            // --portatil: so poe os arquivos na pasta (sem atalhos, sem registro no Windows e sem abrir no fim)
+            Application.Run(new Tela(fonte, Arg(args, "--atualizar"), Arg(args, "--variante")) { Portatil = args.Contains("--portatil") });
         }
 
         static string Arg(string[] a, string nome)
@@ -56,6 +61,7 @@ namespace ArgosEPI.Instalador
             Marinho = Color.FromArgb(5, 7, 90), Azul = Color.FromArgb(77, 88, 216), Perigo = Color.FromArgb(255, 107, 107);
 
         readonly string fonte, pastaAtualizar, varianteArg;
+        public bool Portatil;
         Dictionary<string, object> manifesto;
         readonly Placa placa = Placa.Detectar();
         string variante = "cpu";
@@ -217,12 +223,13 @@ namespace ArgosEPI.Instalador
                 var txt = await Task.Run(() => { using (var wc = new WebClient { Encoding = Encoding.UTF8 }) return wc.DownloadString(fonte + "latest.json?n=" + DateTime.UtcNow.Ticks); });
                 manifesto = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(txt);
                 lblVersao.Text = "Versão " + Str(manifesto, "versao") + " · servidor de câmeras com IA para EPIs";
-                var py = Obj(Obj(manifesto, "windows"), "python");
+                var w = Obj(manifesto, "windows");
+                if (Obj(w, "programa") == null || Obj(w, "base") == null)
+                    throw new Exception("este instalador é de outra versão: baixe o instalador de novo pelo site");
                 foreach (var kv in radios)
                 {
-                    var p = Obj(py, kv.Key);
-                    if (p == null) { kv.Value.Enabled = false; continue; }
-                    kv.Value.Text += "  ·  " + Tam(Num(p, "tamanho"));
+                    if (Obj(Obj(w, "programa"), kv.Key) == null || Obj(Obj(w, "motor"), kv.Key) == null) { kv.Value.Enabled = false; continue; }
+                    kv.Value.Text += "  ·  " + Tam(Soma(kv.Key, "tamanho"));
                 }
                 if (!radios[variante].Enabled) radios.Values.First(r => r.Enabled).Checked = true;
                 btnInstalar.Enabled = true;
@@ -253,12 +260,24 @@ namespace ArgosEPI.Instalador
         void AtualizarEspaco()
         {
             if (manifesto == null || lblEspaco == null) return;
-            var w = Obj(manifesto, "windows");
-            long baixar = Num(Obj(w, "app"), "tamanho") + Num(Obj(Obj(w, "python"), variante), "tamanho");
-            long ocupa = Num(Obj(w, "app"), "descompactado") + Num(Obj(Obj(w, "python"), variante), "descompactado");
+            long baixar = Soma(variante, "tamanho"), ocupa = Soma(variante, "descompactado");
             string livre = "";
             try { livre = " · livre no disco: " + Tam(new DriveInfo(Path.GetPathRoot(Path.GetFullPath(txtPasta.Text))).AvailableFreeSpace); } catch { }
             lblEspaco.Text = "Baixa " + Tam(baixar) + " e ocupa cerca de " + Tam(ocupa) + livre;
+        }
+
+        // programa + bibliotecas do motor + base, para a placa escolhida
+        long Soma(string placa, string campo)
+        {
+            var w = Obj(manifesto, "windows");
+            return Num(Obj(Obj(w, "programa"), placa), campo) + Num(Obj(Obj(w, "motor"), placa), campo) + Num(Obj(w, "base"), campo);
+        }
+
+        // so instala em pasta vazia ou onde o Argos ja esta (a limpeza apagaria arquivos de outra coisa)
+        static bool PastaServe(string pasta)
+        {
+            if (!Directory.Exists(pasta) || !Directory.EnumerateFileSystemEntries(pasta).Any()) return true;
+            return File.Exists(Path.Combine(pasta, "ArgosEPI.exe")) || File.Exists(Path.Combine(pasta, "instalacao.json"));
         }
 
         // ---------- instalacao ----------
@@ -266,6 +285,12 @@ namespace ArgosEPI.Instalador
         {
             var pasta = txtPasta.Text.Trim().TrimEnd('\\');
             if (pasta.Length < 4) { MessageBox.Show(this, "Escolha uma pasta de instalação."); return; }
+            if (!PastaServe(pasta))
+            {
+                MessageBox.Show(this, "Essa pasta já tem outros arquivos.\n\nEscolha uma pasta vazia (ou a pasta onde o " + Principal.Nome + " já está instalado).",
+                    Principal.Nome, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             if (variante == "nvidia" && !placa.Nvidia && pastaAtualizar == null &&
                 MessageBox.Show(this, "Não encontrei placa NVIDIA neste computador. Instalar a versão NVIDIA mesmo assim?\n\n(Sem a placa, ela usa o processador.)",
                     Principal.Nome, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
@@ -280,78 +305,146 @@ namespace ArgosEPI.Instalador
             catch (Exception ex) { erro = ex.Message; Log("ERRO: " + ex); }
             barra.Value = ok ? 1000 : barra.Value;
             lblEtapa.Text = ok ? (pastaAtualizar != null ? "Atualizado!" : "Pronto! O " + Principal.Nome + " está instalado.") : "A instalação não terminou";
-            lblDetalhe.Text = ok ? "Na primeira vez ele cria o banco e baixa os modelos de rosto (uns 280 MB). Depois é só vincular à sua conta pela janela do programa."
+            lblDetalhe.Text = ok ? "Tudo já veio instalado (programa, bibliotecas e modelos): nada mais é baixado. Agora é só abrir e vincular à sua conta pela janela do programa."
                                  : erro + "\nO que já foi baixado fica guardado: tentar de novo continua de onde parou.";
             lblDetalhe.ForeColor = ok ? Suave : Perigo;
             if (!ok) { txtLog.Visible = true; lnkDetalhes.Text = "Esconder detalhes"; btnTentar.Visible = true; }
             chkAbrir.Visible = ok;
             btnConcluir.Visible = true;
             btnConcluir.Text = ok ? "Concluir" : "Fechar";
-            if (ok && pastaAtualizar != null) { Abrir(pasta); Close(); }
+            if (Portatil) chkAbrir.Checked = false;
+            if (ok && pastaAtualizar != null) { if (!Portatil) Abrir(pasta); Close(); }
         }
 
         void Executar(string pasta, bool iniciar, bool atalho, CancellationToken ct)
         {
             var w = Obj(manifesto, "windows");
-            var app = Obj(w, "app");
-            var py = Obj(Obj(w, "python"), variante);
+            var prog = Obj(Obj(w, "programa"), variante);
+            var motor = Obj(Obj(w, "motor"), variante);
+            var basePac = Obj(w, "base");
             var cache = Path.Combine(Path.GetTempPath(), "ArgosEPI-Setup");
             Directory.CreateDirectory(cache);
             Log("Pasta: " + pasta + " | placa: " + variante + " | fonte: " + fonte);
+            if (!PastaServe(pasta)) throw new Exception("A pasta escolhida já tem outros arquivos: escolha uma pasta vazia.");
 
-            // 1. o que baixar (o Python so quando muda: as atualizacoes do programa ficam pequenas)
-            string pyAtual = null;
-            try { pyAtual = File.ReadAllText(Path.Combine(pasta, "python", "argos-python-id.txt")).Trim(); } catch { }
-            bool precisaPy = pyAtual != Str(py, "id") || !File.Exists(Path.Combine(pasta, "python", "python.exe"));
-            var arquivos = new List<Dictionary<string, object>> { app };
-            if (precisaPy) arquivos.Add(py); else Log("Python " + pyAtual + " já instalado: não precisa baixar de novo.");
+            // 1. o que baixar (bibliotecas do motor e base so quando mudam: as atualizacoes ficam pequenas)
+            bool precisaMotor = Marca(Path.Combine(pasta, "motor", "argos-motor-id.txt")) != Str(motor, "id");
+            bool precisaBase = Marca(Path.Combine(pasta, "bin", "argos-base-id.txt")) != Str(basePac, "id");
+            var arquivos = new List<Dictionary<string, object>>();
+            var nomes = new Dictionary<Dictionary<string, object>, string>();
+            if (precisaBase) { arquivos.Add(basePac); nomes[basePac] = "os modelos e o banco de dados"; } else Log("Modelos e banco já instalados: não precisa baixar de novo.");
+            if (precisaMotor) { arquivos.Add(motor); nomes[motor] = "as bibliotecas (" + Rotulo(variante) + ")"; } else Log("Bibliotecas " + Str(motor, "id") + " já instaladas: não precisa baixar de novo.");
+            // pacote opcional do TensorRT (instalado pelo painel): mora dentro de motor\, entao volta junto quando o motor e trocado
+            var trt = Obj(Obj(Obj(w, "extras"), "tensorrt"), variante);
+            bool refazTrt = precisaMotor && trt != null && File.Exists(Path.Combine(pasta, "motor", "argos-trt-id.txt"));
+            if (refazTrt) { arquivos.Add(trt); nomes[trt] = "o TensorRT (já estava instalado)"; }
+            arquivos.Add(prog); nomes[prog] = "o programa";
             long total = arquivos.Sum(a => Num(a, "tamanho")), feitoAntes = 0;
-            var baixados = new List<string>();
+            var baixados = new Dictionary<Dictionary<string, object>, string>();
             foreach (var a in arquivos)
             {
                 var nome = Path.GetFileName(Str(a, "url"));
-                Etapa(a == app ? "Baixando o programa" : "Baixando o Python e o PyTorch (" + Rotulo(variante) + ")", 0);
+                Etapa("Baixando " + nomes[a], 0);
                 var dest = Path.Combine(cache, nome);
                 long antes = feitoAntes;
                 Baixar(Url(Str(a, "url")), dest, Num(a, "tamanho"), Str(a, "sha256"), (feito, vel) =>
                     Etapa(null, (int)(700.0 * (antes + feito) / Math.Max(1, total)), Tam(antes + feito) + " de " + Tam(total) + (vel > 0 ? " · " + Tam((long)vel) + "/s" : "")), ct);
                 feitoAntes += Num(a, "tamanho");
-                baixados.Add(dest);
+                baixados[a] = dest;
             }
 
             // 2. fecha o programa aberto (e o banco dele) antes de trocar os arquivos
             Etapa("Fechando o programa aberto", 710, "");
             Fechar(pasta);
 
-            // 3. extrai
+            // 3. limpa a pasta: so fica o que e do usuario (e o motor/base que nao mudaram)
             Directory.CreateDirectory(pasta);
-            Etapa("Instalando o programa", 730, "");
-            Extrair(baixados[0], pasta, 730, 800, ct);
-            if (precisaPy)
+            Etapa("Removendo os arquivos da versão anterior", 720, "");
+            Limpar(pasta, !precisaMotor, !precisaBase);
+
+            // 4. extrai (tudo ja compilado: nada e instalado ou baixado depois)
+            long totalExt = Math.Max(1, arquivos.Sum(a => Num(a, "descompactado"))), feitoExt = 0;
+            Func<Dictionary<string, object>, int[]> faixa = a =>
             {
-                Etapa("Instalando o Python e o PyTorch", 800, "");
-                var novo = Path.Combine(pasta, "python.novo");
-                if (Directory.Exists(novo)) ApagarPasta(novo);
-                Extrair(baixados[1], novo, 800, 950, ct);
-                var velho = Path.Combine(pasta, "python");
-                if (Directory.Exists(velho)) ApagarPasta(velho);
-                Directory.Move(Path.Combine(novo, "python"), velho);
+                int de = 730 + (int)(220.0 * feitoExt / totalExt);
+                feitoExt += Num(a, "descompactado");
+                return new[] { de, 730 + (int)(220.0 * feitoExt / totalExt) };
+            };
+            if (precisaBase)
+            {
+                Etapa("Instalando os modelos e o banco de dados", -1, "");
+                var f = faixa(basePac);
+                Extrair(baixados[basePac], pasta, f[0], f[1], ct);
+            }
+            if (precisaMotor)
+            {
+                Etapa("Instalando as bibliotecas (" + Rotulo(variante) + ")", -1, "");
+                var f = faixa(motor);
+                var novo = Path.Combine(pasta, "motor.novo");
+                Extrair(baixados[motor], novo, f[0], f[1], ct);
+                Directory.Move(Path.Combine(novo, "motor"), Path.Combine(pasta, "motor"));
                 ApagarPasta(novo);
             }
+            if (refazTrt)
+            {
+                Etapa("Instalando o TensorRT", -1, "");
+                var f = faixa(trt);
+                Extrair(baixados[trt], pasta, f[0], f[1], ct);
+            }
+            Etapa("Instalando o programa", -1, "");
+            var fp = faixa(prog);
+            Extrair(baixados[prog], pasta, fp[0], fp[1], ct);
 
-            // 4. Windows: WebView2, atalhos, desinstalar, iniciar com o Windows
+            // 5. Windows: WebView2, atalhos, desinstalar, iniciar com o Windows
             Etapa("Preparando o Windows", 960, "");
             GarantirWebView2(cache);
             var exe = Path.Combine(pasta, "ArgosEPI.exe");
-            Atalho(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), Principal.Nome + ".lnk"), exe, pasta);
-            var lnkMesa = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), Principal.Nome + ".lnk");
-            if (atalho) Atalho(lnkMesa, exe, pasta); else if (pastaAtualizar == null && File.Exists(lnkMesa)) File.Delete(lnkMesa);
-            RegistrarDesinstalar(pasta, exe, Str(manifesto, "versao"));
-            if (iniciar) IniciarComWindows(pasta, exe);
+            if (!Portatil)
+            {
+                Atalho(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), Principal.Nome + ".lnk"), exe, pasta);
+                var lnkMesa = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), Principal.Nome + ".lnk");
+                if (atalho) Atalho(lnkMesa, exe, pasta); else if (pastaAtualizar == null && File.Exists(lnkMesa)) File.Delete(lnkMesa);
+                RegistrarDesinstalar(pasta, exe, Str(manifesto, "versao"));
+                if (iniciar) IniciarComWindows(pasta, exe);
+            }
             File.WriteAllText(Path.Combine(pasta, "instalacao.json"), new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
-                { "versao", Str(manifesto, "versao") }, { "variante", variante }, { "python_id", Str(py, "id") }, { "instalado_em", DateTime.Now.ToString("s") } }));
-            foreach (var b in baixados) try { File.Delete(b); } catch { }
+                { "versao", Str(manifesto, "versao") }, { "variante", variante }, { "motor_id", Str(motor, "id") }, { "base_id", Str(basePac, "id") },
+                { "instalado_em", DateTime.Now.ToString("s") } }));
+            foreach (var b in baixados.Values) try { File.Delete(b); } catch { }
             Log("OK");
+        }
+
+        static string Marca(string arquivo)
+        {
+            try { return File.ReadAllText(arquivo).Trim(); } catch { return null; }
+        }
+
+        // Apaga tudo o que nao e do usuario: versoes antigas deixavam Python solto, codigo-fonte e outros arquivos.
+        // Ficam: dados\ (banco, rostos, gravacoes), .env, models\ (modelos enviados pelo painel) e uploads\.
+        void Limpar(string pasta, bool manterMotor, bool manterBase)
+        {
+            var ficam = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "dados", ".env", "models", "uploads" };
+            if (manterMotor) ficam.Add("motor");
+            if (manterBase) ficam.Add("bin");
+            int n = 0;
+            foreach (var item in Directory.GetFileSystemEntries(pasta))
+            {
+                var nome = Path.GetFileName(item);
+                if (ficam.Contains(nome)) continue;
+                if (Directory.Exists(item)) { Etapa(null, -1, "Removendo " + nome + "..."); ApagarPasta(item); }
+                else ApagarArquivo(item);
+                n++;
+            }
+            if (n > 0) Log("pasta limpa: " + n + " itens da versão anterior removidos");
+        }
+
+        void ApagarArquivo(string arq)
+        {
+            for (int t = 0; ; t++)
+            {
+                try { File.SetAttributes(arq, FileAttributes.Normal); File.Delete(arq); return; }
+                catch (Exception) { if (t >= 10) throw; Thread.Sleep(500); }
+            }
         }
 
         string Url(string u) { return u.Contains("://") ? u : fonte + u; }
@@ -574,7 +667,13 @@ namespace ArgosEPI.Instalador
             for (int t = 0; ; t++)
             {
                 try { if (Directory.Exists(p)) Directory.Delete(p, true); return; }
-                catch (Exception) { if (t >= 15) throw; Thread.Sleep(1000); }
+                catch (Exception)
+                {
+                    if (t >= 15) throw;
+                    // arquivo somente leitura ou ainda preso por um processo que esta fechando
+                    try { foreach (var f in Directory.EnumerateFiles(p, "*", SearchOption.AllDirectories)) File.SetAttributes(f, FileAttributes.Normal); } catch { }
+                    Thread.Sleep(1000);
+                }
             }
         }
 

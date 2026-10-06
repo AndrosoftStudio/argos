@@ -27,6 +27,8 @@ import threading
 
 import numpy as np
 
+import pastas
+
 # Mesmo limiar do projeto DEEPFAKE. Abaixo disso, mesma pessoa.
 LIMIAR_DISTANCIA = float(os.environ.get('ARGOS_FACE_DIST', '1.0'))
 # Margem minima entre o melhor e o segundo melhor candidato. Sem isso, dois
@@ -47,8 +49,7 @@ _erro_carga = None
 
 
 def _raiz_modelos() -> str:
-    return os.environ.get('INSIGHTFACE_ROOT') or os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'models', 'insightface')
+    return os.environ.get('INSIGHTFACE_ROOT') or os.path.join(pastas.RAIZ, 'models', 'insightface')
 
 
 def _caminho(nome) -> str:

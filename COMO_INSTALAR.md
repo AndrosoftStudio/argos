@@ -17,8 +17,11 @@ servidor usa a próxima livre, até a 8097, e mostra o endereço na janela.
 
 **Windows 10/11:** baixe `ArgosEPI-Servidor-Setup-<placa>.exe` pelo site e abra. O instalador
 (pequeno) mostra a placa detectada, a pasta (padrão `%LOCALAPPDATA%\Programs\Argos EPI Servidor`),
-"Iniciar junto com o Windows" e o atalho na área de trabalho; depois baixa o programa e um Python
-com o PyTorch já pronto para a placa (NVIDIA ~2,6 GB, AMD/Intel ~0,7 GB, CPU ~0,4 GB).
+"Iniciar junto com o Windows" e o atalho na área de trabalho; depois baixa o programa **já
+compilado** para a placa escolhida, com os modelos de IA junto. Na pasta instalada só ficam
+`.exe`, `.dll` e os arquivos dos modelos (nenhum código-fonte, nenhum Python solto), e depois de
+instalado nada mais é baixado. Instalar por cima de uma versão antiga limpa a pasta: ficam só
+`dados\`, `.env`, `models\` e `uploads\`. Não pede administrador em nenhum momento.
 
 **Linux x64:** baixe o `.tar.gz` (NVIDIA ou CPU) e, no terminal, sem sudo:
 
@@ -29,12 +32,18 @@ cd argos-epi-servidor && ./instalar.sh
 
 Fica em `~/.local/share/argos-epi-servidor`, com atalho no menu de aplicativos.
 
-O programa abre numa janela (sem console), com o ícone perto do relógio. Mostra a conta
+O programa abre numa janela própria (sem console e sem a barra de título do sistema: a barra
+azul do topo arrasta a janela e tem os botões), com o ícone perto do relógio. Mostra a conta
 vinculada, o computador (CPU, RAM, GPU), as câmeras que este servidor está processando (com
 miniaturas) e o registro. Em **Ajustes**: iniciar com o sistema (em segundo plano ou com a
 janela), o que o **X** faz (perguntar, segundo plano ou fechar o servidor), tema e **Processar
-câmeras com** (automático, placa de vídeo ou processador). Ele mesmo liga o PostgreSQL
-portátil, baixa o modelo de rosto na primeira vez, escolhe portas livres e se atualiza.
+câmeras com** (automático, placa de vídeo ou processador) e **Aceitar conexões da rede local**
+(desligado por padrão: o servidor só escuta em `127.0.0.1` e o acesso de fora vem pelo endereço
+seguro do túnel, então o Windows não mostra o aviso de firewall que pede administrador). Ele
+mesmo liga o PostgreSQL portátil, escolhe portas livres e se atualiza. Os modelos (EPIs, pose e
+rosto) já vêm na instalação. Na versão NVIDIA, a conversão para TensorRT é um pacote opcional
+(3 GB de DLLs): o botão "Instalar dependências do TensorRT", no cartão do modelo, baixa o pacote
+já compilado para dentro da pasta do programa.
 Os dados ficam em `dados\` dentro da pasta do programa e nunca são apagados ao atualizar.
 
 ## Placa de vídeo ou processador

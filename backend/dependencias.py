@@ -10,10 +10,14 @@ nao vem no requirements.txt. O botao "Instalar dependencias" chama instalar():
     com --no-deps, na pasta do volume.
   - Fora do Docker (iniciar.bat / iniciar.sh): instala direto no Python do Argos,
     com o pip ou, no Python portatil do .bat, com o uv (bin/uv.exe).
+  - No programa compilado (Argos EPI Servidor): nao ha pip nem Python solto. O onnx ja
+    vem no motor; as DLLs do TensorRT (3 GB) sao um pacote opcional, ja compilado, que
+    e baixado da pasta de downloads e extraido dentro de motor/.
 
-Nos dois casos o numpy fica travado na versao instalada: o onnx puxaria o numpy 2,
+Com pip, o numpy fica travado na versao instalada: o onnx puxaria o numpy 2,
 e o resto do projeto precisa do numpy 1.
 """
+import hashlib
 import importlib
 import importlib.metadata
 import importlib.util
@@ -26,12 +30,18 @@ import tempfile
 import threading
 import time
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import pastas
+
+BASE_DIR = pastas.RAIZ
 EM_DOCKER = os.path.exists('/.dockerenv')
 PASTA_DOCKER = os.environ.get('ARGOS_PYLIBS', '/app/pylibs')
 # os mesmos limites que o Ultralytics confere ao exportar (TensorRT 10, CUDA 12)
 PACOTES = ['onnx>=1.12.0,<2.0.0', 'tensorrt-cu12>=10.3,!=10.1.0,!=10.2.0,<11']
 TAMANHO_APROX = '~2 GB'
+# programa compilado: <instalacao>/motor (onde ficam o executavel e as .dll)
+MOTOR = os.path.dirname(os.path.abspath(sys.executable)) if pastas.CONGELADO else ''
+MARCA_TRT = os.path.join(MOTOR, 'argos-trt-id.txt')      # vem dentro do pacote do TensorRT
+DOWNLOADS_PADRAO = 'https://pub-6b5befc214654d93bdc0345875151ea0.r2.dev/argosepi-discovery/'
 
 _lock = threading.Lock()
 _estado = {'status': 'parado', 'etapa': '', 'log': [], 'inicio': 0.0, 'fim': 0.0, 'erro': ''}
@@ -45,6 +55,8 @@ def preparar_caminho():
 
 
 def faltando() -> list:
+    if pastas.CONGELADO:
+        return [] if os.path.exists(MARCA_TRT) else ['tensorrt']
     preparar_caminho()
     return [m for m in ('onnx', 'tensorrt') if importlib.util.find_spec(m) is None]
 
@@ -55,7 +67,7 @@ def estado() -> dict:
         e['log'] = list(_estado['log'][-12:])
     e['faltando'] = faltando()
     e['tamanho'] = TAMANHO_APROX
-    e['modo'] = 'docker' if EM_DOCKER else 'local'
+    e['modo'] = 'docker' if EM_DOCKER else 'programa' if pastas.CONGELADO else 'local'
     return e
 
 
@@ -107,7 +119,93 @@ def _trava_numpy(pasta: str) -> str:
     return caminho
 
 
+def _ler(caminho: str) -> str:
+    try:
+        with open(caminho, encoding='utf-8') as f:
+            return f.read().strip()
+    except OSError:
+        return ''
+
+
+def _instalar_no_programa():
+    """Programa compilado: baixa o pacote do TensorRT (so .dll/.pyd) e extrai em motor/. Sem pip."""
+    import tarfile
+    import zipfile
+
+    import requests
+
+    fonte = (os.environ.get('ARGOS_DOWNLOADS_URL') or DOWNLOADS_PADRAO).rstrip('/') + '/'
+    _etapa('Procurando o pacote do TensorRT')
+    m = requests.get(fonte + 'latest.json', timeout=30, headers={'User-Agent': 'ArgosEPI-Servidor'}).json()
+    so = 'windows' if os.name == 'nt' else 'linux'
+    pac = (((m.get(so) or {}).get('extras') or {}).get('tensorrt') or {}).get('nvidia')
+    if not pac:
+        raise RuntimeError('O pacote do TensorRT nao foi publicado para este sistema.')
+    meu = _ler(os.path.join(MOTOR, 'argos-motor-id.txt'))
+    if pac.get('motor') and meu and pac['motor'] != meu:
+        raise RuntimeError('O pacote do TensorRT publicado e de outra versao do programa. Atualize o '
+                           'Argos EPI Servidor (Ajustes do programa > Procurar atualizacao) e tente de novo.')
+    url = pac['url'] if '://' in pac['url'] else fonte + pac['url']
+    total = int(pac.get('tamanho') or 0)
+    destino = os.path.join(BASE_DIR, 'dados', 'tensorrt.baixando')
+    os.makedirs(os.path.dirname(destino), exist_ok=True)
+    _etapa(f'Baixando o TensorRT ({total / 1073741824:.1f} GB)')
+    soma, feito, ultimo = hashlib.sha256(), 0, -1
+    try:
+        with requests.get(url, stream=True, timeout=60, headers={'User-Agent': 'ArgosEPI-Servidor'}) as r:
+            r.raise_for_status()
+            with open(destino, 'wb') as f:
+                for bloco in r.iter_content(1 << 20):
+                    f.write(bloco)
+                    soma.update(bloco)
+                    feito += len(bloco)
+                    pct = feito * 100 // total if total else 0
+                    if pct != ultimo:
+                        ultimo = pct
+                        with _lock:
+                            _estado['etapa'] = (f'Baixando o TensorRT: {pct}% '
+                                                f'({feito / 1073741824:.1f} de {total / 1073741824:.1f} GB)')
+        if pac.get('sha256') and soma.hexdigest() != pac['sha256']:
+            raise RuntimeError('O download veio corrompido (SHA-256 diferente). Tente de novo.')
+        _etapa('Instalando as bibliotecas do TensorRT')
+        raiz = os.path.realpath(BASE_DIR)
+
+        def alvo(nome):
+            caminho = os.path.realpath(os.path.join(raiz, nome))
+            if not caminho.startswith(os.path.join(raiz, 'motor') + os.sep):
+                raise RuntimeError(f'Pacote com caminho inesperado: {nome}')
+            os.makedirs(os.path.dirname(caminho), exist_ok=True)
+            return caminho
+
+        if url.endswith('.zip'):
+            with zipfile.ZipFile(destino) as z:
+                for item in z.infolist():
+                    if not item.is_dir():
+                        nome = item.filename.replace(chr(92), '/')
+                        with z.open(item) as origem, open(alvo(nome), 'wb') as saida:
+                            shutil.copyfileobj(origem, saida, 1 << 20)
+        else:
+            with tarfile.open(destino) as t:
+                for item in t:
+                    if item.isfile():
+                        with t.extractfile(item) as origem, open(alvo(item.name), 'wb') as saida:
+                            shutil.copyfileobj(origem, saida, 1 << 20)
+    finally:
+        try:
+            os.remove(destino)
+        except OSError:
+            pass
+    if not os.path.exists(MARCA_TRT):
+        raise RuntimeError('O pacote baixado nao tem o que era esperado.')
+
+
 def _instalar():
+    if pastas.CONGELADO:
+        _instalar_no_programa()
+        _etapa('Conferindo')
+        import tensorrt
+        _registrar(f'TensorRT {tensorrt.__version__} pronto.')
+        return
     with tempfile.TemporaryDirectory(prefix='argos-trt-') as tmp:
         restricoes = _trava_numpy(tmp)
         if EM_DOCKER:

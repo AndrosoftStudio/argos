@@ -10,7 +10,7 @@ NOVIDADES:
   - Treinamento de modelos YOLO customizados por EPI e por funcionários
   - Botão de parar câmera em /cam (via endpoint /streams/stop_external)
 """
-import os, sys, time, threading, subprocess, socket, base64, re, json, shutil, uuid, importlib.util
+import os, sys, time, threading, subprocess, socket, base64, re, json, shutil, uuid, zlib, importlib.util
 import numpy as np, cv2, torch, psutil
 from flask import Flask, jsonify, request, Response, stream_with_context
 import requests
@@ -36,6 +36,7 @@ except ImportError:
         pass
 
 sys.path.insert(0, os.path.dirname(__file__))
+import pastas
 from processor import VideoProcessor
 from epi_detector import melhor_modelo_argos, resolve_device, gpu_disponivel
 from epi_detector import preferencia as preferencia_dispositivo, definir_preferencia as _definir_dispositivo
@@ -61,7 +62,29 @@ try:
 except ImportError:  # sem flask-sock o tempo real usa so HTTP binario
     Sock = None
 
-app = Flask(__name__, static_folder='../frontend', static_url_path='/')
+_TIPOS_ESTATICOS = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+                    '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml',
+                    '.png': 'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon', '.woff2': 'font/woff2',
+                    '.webmanifest': 'application/manifest+json'}
+
+
+class _App(Flask):
+    """No programa compilado nao existe a pasta frontend: o painel local sai do recursos.pak."""
+
+    def send_static_file(self, filename):
+        if pastas.PAK is None:
+            return super().send_static_file(filename)
+        dados = pastas.PAK.ler('frontend/' + filename)
+        if dados is None:
+            return Response('Not Found', status=404, mimetype='text/plain')
+        ext = os.path.splitext(filename)[1].lower()
+        r = Response(dados, content_type=_TIPOS_ESTATICOS.get(ext, 'application/octet-stream'))
+        r.headers['Cache-Control'] = 'no-cache'
+        r.set_etag(f'{len(dados):x}-{zlib.crc32(dados):08x}')
+        return r.make_conditional(request)
+
+
+app = _App(__name__, static_folder='../frontend', static_url_path='/')
 sock = Sock(app) if Sock else None
 
 # Tamanho maximo de um envio (video, modelo .pt, zip de dataset). Sem limite, um
@@ -198,7 +221,7 @@ camera_scan_jobs: dict = {}
 camera_scan_jobs_lock = threading.Lock()
 TENSORRT_JOB_TIMEOUT_SEC = int(os.environ.get('EPI_TENSORRT_JOB_TIMEOUT_SEC', '2700') or '2700')
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = pastas.RAIZ
 MODELS_DIR = os.path.join(BASE_DIR, 'models')
 DADOS_DIR = os.path.join(BASE_DIR, 'dados', 'users')
 HUB_URL = os.environ.get('BACKEND_HUB_URL', '').strip().rstrip('/')
@@ -862,13 +885,15 @@ def _start_cf(port=8088):
     if not _ligado('ARGOS_TUNEL'):   # ARGOS_TUNEL=0: so rede local (testes, rede sem internet)
         print("[CF] Tunel desligado (ARGOS_TUNEL=0)")
         return
-    cmds = ["cloudflared",
+    cmds = [os.path.join(BASE_DIR,"bin","cloudflared.exe"),   # o programa instalado traz o seu
+            os.path.join(BASE_DIR,"bin","cloudflared"),
+            "cloudflared",
             os.path.join(BASE_DIR,"cloudflared.exe"),
             os.path.join(BASE_DIR,"cloudflared")]
     cmd = None
     for c in cmds:
         try:
-            if subprocess.run([c,"--version"],capture_output=True,timeout=3).returncode == 0:
+            if subprocess.run([c,"--version"],capture_output=True,timeout=8).returncode == 0:
                 cmd = c; break
         except: pass
     if not cmd: print("[CF] cloudflared não encontrado"); return

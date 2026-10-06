@@ -31,6 +31,7 @@ from psycopg.types.json import Jsonb
 
 import conta
 import db
+import pastas
 
 INTERVALO_S = 20
 LIMITE = 500
@@ -148,7 +149,7 @@ def colunas(tabela: str) -> dict:
 
 
 # ── Caminhos de arquivo: viajam relativos a pasta dados/ ────────────
-BASE_DADOS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'dados')
+BASE_DADOS = os.path.join(pastas.RAIZ, 'dados')
 
 
 def relativo(caminho: str) -> str:
