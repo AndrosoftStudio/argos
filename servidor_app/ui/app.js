@@ -190,9 +190,10 @@ function blocoServidor() {
       ${tipo ? `<li>${ic('chip')}<span>${esc(tipo)}</span></li>` : ''}
       ${mq.cpu_count ? `<li>${ic('gauge')}<span>${mq.cpu_count} núcleos · ${gb(mq.ram_total)} de memória</span></li>` : ''}
       ${r && r.url_local ? `<li>${ic('wifi')}<span>Na rede: <a data-acao="link" data-url="${esc(r.url_local)}">${esc(r.url_local)}</a></span></li>` : ''}
-      ${r && r.cloudflare_url ? `<li>${ic('globe')}<span>Internet: <a data-acao="link" data-url="${esc(r.cloudflare_url)}">${esc(r.cloudflare_url)}</a></span></li>` : ''}
+      ${linhaInternet(r)}
       ${blocoAjuda(r)}
     </ul>
+    ${avisoInternet(r)}
     ${r ? `<div class="medidores">${medidor('Processador', pct(mq.cpu))}${medidor('Memória', pct(mq.ram_pct))}${medidor('Livre p/ câmeras', pct(r.disponivel))}</div>` : ''}
     <div class="acoes">
       ${ligado ? `<button type="button" class="btn btn-secondary" data-acao="reiniciar">${ic('refresh')}Reiniciar</button>
@@ -200,6 +201,22 @@ function blocoServidor() {
                : `<button type="button" class="btn btn-primary" data-acao="ligar" ${s.estado === 'parando' ? 'disabled' : ''}>${ic('play')}Ligar</button>`}
     </div>
   </section>`;
+}
+
+/* endereço público (túnel): é por ele que o celular-câmera e o painel aberto em outro lugar chegam aqui */
+const TUNEL_FALHOU = ['falhou', 'bloqueado', 'sem_programa'];
+function linhaInternet(r) {
+  if (!r) return '';
+  if (r.cloudflare_url) return `<li>${ic('globe')}<span>Internet: <a data-acao="link" data-url="${esc(r.cloudflare_url)}">${esc(r.cloudflare_url)}</a></span></li>`;
+  const t = r.tunel || {};
+  if (t.estado === 'abrindo') return `<li>${ic('globe')}<span>Internet: abrindo o endereço público...</span></li>`;
+  if (TUNEL_FALHOU.includes(t.estado)) return `<li>${ic('globe')}<span>Internet: <strong style="color:var(--dn)">sem endereço público</strong></span></li>`;
+  return '';
+}
+function avisoInternet(r) {
+  const t = (r && !r.cloudflare_url && r.tunel) || {};
+  if (!TUNEL_FALHOU.includes(t.estado)) return '';
+  return `<p class="faixa erro" style="margin-top:12px;flex-wrap:nowrap;align-items:flex-start">${ic('alert')}<span style="flex:1;min-width:0">Sem endereço de internet: celular usado como câmera e painel aberto em outro computador não alcançam este servidor. ${esc(t.erro || '')}${t.estado === 'falhou' ? ' Nova tentativa automática em instantes.' : ''}</span></p>`;
 }
 
 /* servidores da mesma conta e da mesma rede dividem o trabalho das câmeras (rostos e EPIs) */
@@ -419,7 +436,7 @@ function assinatura() {
   if (pagina === 'inicio') {
     const r = E.resumo;
     return JSON.stringify([E.servidor, E.banco.estado, E.banco.erro, E.modelos, E.app.etapa, E.atualizacao,
-      r && [r.vinculado, r.conta, r.servidor, r.codigo, r.erro, r.url_local, r.cloudflare_url, r.pares, r.tipo,
+      r && [r.vinculado, r.conta, r.servidor, r.codigo, r.erro, r.url_local, r.cloudflare_url, r.tunel, r.pares, r.tipo,
         (r.ajuda || []).map(p => [p.nome, p.disponivel, (p.usados.rosto || 0) + (p.usados.epi || 0) > 0]), r.ajudou && Math.floor(((r.ajudou.rosto || 0) + (r.ajudou.epi || 0)) / 500),
         r.maquina, r.disponivel, (r.cameras || []).map(c => [c.id, c.ativa, (c.faltando || []).length])],
       Math.floor(Date.now() / 30000)]);

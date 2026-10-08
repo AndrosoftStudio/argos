@@ -228,6 +228,12 @@ Cloudflare ligado (padrão).
 - **"Este servidor pertence a outra conta"**: ele foi vinculado a outra pessoa. Quem é
   dono desvincula em **Servidores**, ou entre com a conta certa.
 - **"Nenhum servidor ligado"** no site: o servidor está desligado ou ainda não foi vinculado.
+- **O celular-câmera não acha o servidor** (link de **Dispositivos**): o celular chega no servidor
+  pelo endereço de internet (túnel do Cloudflare). A página do celular diz o motivo; no programa
+  do servidor, veja a linha **Internet** na tela **Início** (na versão 20.3.1 em diante ela mostra
+  "sem endereço público" e a causa). Rede de escola ou empresa costuma bloquear o túnel: ligue o
+  computador do servidor em outra rede (por exemplo, a internet compartilhada do celular). No
+  `iniciar.bat`/Docker, procure as linhas `[CF]` no registro.
 
 ---
 

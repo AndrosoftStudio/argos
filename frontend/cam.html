@@ -119,16 +119,17 @@ let BASE_RESOLVIDO = Boolean(BASE);
 const api = (caminho) => (BASE || '') + caminho;
 
 async function _tokenServe(base, tok){
-  // /streams/<id>/config responde 200 com token valido e 401 com token de outro backend
+  // /streams/<id>/config responde 200 com token valido e 401 com token de outro backend.
+  // 'mudo' = o endereco nem respondeu (tunel caido ou rede do servidor fora do ar)
   try {
     const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), 6000);
+    const t = setTimeout(() => ctl.abort(), 8000);
     const r = await fetch(limpaUrl(base) + '/streams/' + encodeURIComponent(buildStreamId(tok)) + '/config',
                           { headers: { 'Authorization': 'Bearer ' + tok, 'ngrok-skip-browser-warning': 'true' },
                             cache: 'no-store', signal: ctl.signal });
     clearTimeout(t);
-    return r.ok;
-  } catch { return false; }
+    return r.ok ? 'ok' : 'recusou';
+  } catch { return 'mudo'; }
 }
 
 async function _mesmaOrigemEhBackend(){
@@ -160,27 +161,58 @@ async function _candidatosDoHub(){
   } catch { return []; }
 }
 
+// O que o site contou sobre os servidores da conta na ultima consulta (null = nao respondeu)
+let CONTA_INFO = null;
+
 async function _candidatosDaConta(){
   if (!CONTA_ALVO) return [];
+  CONTA_INFO = null;
   try {
     const r = await fetch(API_SITE + '/enderecos/' + encodeURIComponent(CONTA_ALVO), { cache: 'no-store' });
-    if (!r.ok) return [];
+    if (!r.ok) { if (r.status === 404) CONTA_INFO = { vinculados: 0, ligados: 0 }; return []; }
     const d = await r.json().catch(() => ({}));
+    CONTA_INFO = d;
     return (Array.isArray(d.servidores) ? d.servidores : [])
       .sort((a, b) => (b.availability || 0) - (a.availability || 0))
       .map((s) => limpaUrl(s.url)).filter(Boolean);
   } catch { return []; }
 }
 
+/* Por que nenhum servidor foi achado: link antigo, servidor desligado ou servidor
+   ligado numa rede que nao deixou abrir o endereco publico (o caso mais confuso). */
+function _motivoSemServidor(){
+  if (!CONTA_ALVO) return 'Este link é antigo e não diz de qual conta é. No painel, abra Dispositivos e toque em "Copiar link" de novo.';
+  const i = CONTA_INFO;
+  if (!i) return 'Não foi possível consultar o site do Argos EPI. Confira a internet do celular e tente de novo.';
+  if (i.vinculados === 0) return 'A conta deste link não tem servidor vinculado. Abra o Argos EPI Servidor no computador e vincule à conta.';
+  if (!i.ligados) return 'Nenhum servidor desta conta está ligado agora. Abra o Argos EPI Servidor no computador e espere aparecer "Ligado".';
+  if (i.abrindo) return 'O servidor acabou de ligar e ainda está abrindo o endereço de internet. Espere uns segundos e toque em Iniciar de novo.';
+  return 'O servidor está ligado, mas sem endereço de internet: a rede do computador não deixou abrir o túnel, e sem ele o celular não alcança o servidor. '
+    + (i.motivo ? i.motivo + ' ' : '')
+    + 'No programa do servidor, veja a linha "Internet" na tela Início; trocar a rede do computador (por exemplo, o roteador do celular) costuma resolver.';
+}
+
 async function resolverBackend(tok){
   if (BASE_RESOLVIDO) return BASE;
   if (await _mesmaOrigemEhBackend()) { BASE = ''; BASE_RESOLVIDO = true; return BASE; }
-  const candidatos = [...new Set([...(await _candidatosDaConta()), ...(await _candidatosDoHub())])];
-  for (const url of candidatos) {
-    if (!tok || await _tokenServe(url, tok)) { BASE = url; BASE_RESOLVIDO = true; return BASE; }
+  let candidatos = [];
+  // servidor ligando: o endereco publico leva alguns segundos para sair
+  for (let vez = 0; vez < 5; vez++) {
+    candidatos = [...new Set([...(await _candidatosDaConta()), ...(await _candidatosDoHub())])];
+    if (candidatos.length || !(CONTA_INFO && CONTA_INFO.abrindo)) break;
+    await new Promise((ok) => setTimeout(ok, 4000));
   }
-  if (candidatos.length) { BASE = candidatos[0]; BASE_RESOLVIDO = true; return BASE; }
-  throw new Error('Nenhum servidor Argos EPI disponível no momento. Verifique se o servidor está ligado.');
+  let respondeu = '';
+  for (const url of candidatos) {
+    const teste = tok ? await _tokenServe(url, tok) : 'ok';
+    if (teste === 'ok') { BASE = url; BASE_RESOLVIDO = true; return BASE; }
+    if (teste === 'recusou' && !respondeu) respondeu = url;
+  }
+  // nenhum aceitou o codigo, mas um respondeu: ele mesmo diz o que ha com o codigo
+  if (respondeu) { BASE = respondeu; BASE_RESOLVIDO = true; return BASE; }
+  if (candidatos.length) throw new Error('O servidor está ligado, mas o endereço de internet dele não respondeu. '
+    + 'Confira a internet do computador do servidor e toque em Iniciar de novo.');
+  throw new Error(_motivoSemServidor());
 }
 
 const modal = $('modal'), formToken = $('form-token'), tkInput = $('token-input');

@@ -208,6 +208,10 @@ def _definir_pausa(uid, valor=None) -> bool:
             paused_por_uid.pop(uid, None)
         return novo
 cloudflare_url = None
+# Como esta o endereco publico (tunel): parado | abrindo | ligado | falhou | bloqueado |
+# desligado | sem_programa. Sem ele o celular-camera e o painel de fora nao acham o servidor,
+# entao a janela do programa e o site mostram o motivo.
+tunel_estado = {'estado': 'parado', 'erro': ''}
 local_ip = None
 _device_global = 'cpu'
 # FIX remover câmera: conjunto de streams que o usuário explicitamente removeu
@@ -881,10 +885,34 @@ def get_local_ip():
         ip = s.getsockname()[0]; s.close(); return ip
     except: return "127.0.0.1"
 
+def _tunel(estado, erro=''):
+    """Guarda o estado do endereco publico e avisa o site quando ele muda."""
+    if tunel_estado['estado'] == estado and tunel_estado['erro'] == erro:
+        return
+    tunel_estado.update(estado=estado, erro=erro)
+    hub_event.set()
+    conta.sinal_agora()
+
+
+def _motivo_cf(linhas) -> str:
+    """Por que o cloudflared nao abriu o tunel, em palavras de quem usa o programa."""
+    texto = ' '.join(linhas).lower()
+    if not texto:
+        return 'O cloudflared fechou sem dizer o motivo.'
+    if '429' in texto or 'too many requests' in texto or '1015' in texto:
+        return ('A Cloudflare limitou os pedidos desta rede (muitos endereços abertos a partir '
+                'do mesmo ponto de internet). O servidor tenta de novo sozinho.')
+    if 'quick tunnel' in texto or 'trycloudflare' in texto:
+        return ('A rede deste computador não deixa chegar em trycloudflare.com '
+                '(sem internet, ou bloqueio da rede/firewall).')
+    return 'O cloudflared parou: ' + linhas[-1][:160]
+
+
 def _start_cf(port=8088):
     global cloudflare_url
     if not _ligado('ARGOS_TUNEL'):   # ARGOS_TUNEL=0: so rede local (testes, rede sem internet)
         print("[CF] Tunel desligado (ARGOS_TUNEL=0)")
+        _tunel('desligado')
         return
     cmds = [os.path.join(BASE_DIR,"bin","cloudflared.exe"),   # o programa instalado traz o seu
             os.path.join(BASE_DIR,"bin","cloudflared"),
@@ -897,30 +925,59 @@ def _start_cf(port=8088):
             if subprocess.run([c,"--version"],capture_output=True,timeout=8).returncode == 0:
                 cmd = c; break
         except: pass
-    if not cmd: print("[CF] cloudflared não encontrado"); return
+    if not cmd:
+        print("[CF] cloudflared não encontrado")
+        _tunel('sem_programa', 'O cloudflared não foi encontrado nesta instalação.')
+        return
     # api.trycloudflare.com aparece na mensagem de erro quando o tunel nao abre:
     # nao e o endereco do tunel e nao pode ir para o hub
     pat = re.compile(r"https://(?!api\.)[a-z0-9\-]+\.trycloudflare\.com")
     espera = 15
     while True:
         print(f"[CF] Iniciando tunnel → porta {port} (frontend)...")
-        proc = subprocess.Popen([cmd,"tunnel","--url",f"http://localhost:{port}"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        if tunel_estado['estado'] not in ('falhou', 'bloqueado'):
+            _tunel('abrindo')
+        # 127.0.0.1 e nao localhost: o servidor do programa instalado so escuta em IPv4
+        proc = subprocess.Popen([cmd,"tunnel","--url",f"http://127.0.0.1:{port}","--no-autoupdate"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+            encoding='utf-8', errors='replace')
+        url, erros, aberto_em = None, [], 0.0
         for line in iter(proc.stdout.readline,''):
-            print(f"[CF] {line.strip()}")
-            m = pat.search(line)
+            line = line.strip()
+            if ' ERR ' in line or 'error' in line.lower():
+                erros = (erros + [line.split(' ERR ', 1)[-1]])[-3:]
+            # depois de aberto, so o que importa vai para o Registro
+            if not url or ' ERR ' in line or 'Registered tunnel connection' in line:
+                print(f"[CF] {line}")
+            m = None if url else pat.search(line)
             if m:
-                cloudflare_url = m.group(0)
+                url = cloudflare_url = m.group(0)
+                aberto_em = time.time()
                 print(f"[CF] ✓ {cloudflare_url}")
-                hub_event.set()
-                conta.sinal_agora()   # o site guarda o endereco novo deste servidor
-                threading.Thread(target=lambda: [_ for _ in iter(proc.stdout.readline,'')], daemon=True).start()
-                return
-        # cloudflared encerrou sem tunel (sem internet, por exemplo): tenta de novo
+                _tunel('ligado')
+            elif url and 'hard_fail=true' in line:
+                # o endereco foi criado, mas a rede nao deixa o cloudflared falar com a Cloudflare:
+                # um endereco que nao responde nao pode ir para o site
+                cloudflare_url = None
+                _tunel('bloqueado', 'A rede deste computador bloqueia a conexão com a Cloudflare '
+                                    '(porta 7844). Peça a liberação ou use outra rede.')
+            elif url and not cloudflare_url and 'Registered tunnel connection' in line:
+                cloudflare_url = url
+                _tunel('ligado')
+        # o cloudflared fechou (sem internet, rede bloqueada, queda): tira o endereco que
+        # morreu do site e abre outro
         proc.wait()
-        print(f"[CF] Tunnel nao abriu; nova tentativa em {espera}s")
+        cloudflare_url = None
+        if url and time.time() - aberto_em > 120:   # funcionou um tempo e caiu: abre outro logo
+            print("[CF] O tunnel caiu; abrindo outro...")
+            espera = 15
+            _tunel('abrindo')
+            time.sleep(3)
+            continue
+        _tunel('falhou', _motivo_cf(erros))
+        print(f"[CF] Tunnel nao abriu ({tunel_estado['erro']}); nova tentativa em {espera}s")
         time.sleep(espera)
-        espera = min(espera * 2, 300)
+        espera = min(espera * 2, 120)
 
 def _sys_metrics():
     m = {"cpu": psutil.cpu_percent(0.1), "ram_pct": psutil.virtual_memory().percent,
@@ -1216,7 +1273,8 @@ def resumo_local():
     return jsonify(dict(conta.estado_publico(), versao='v20', docker=EM_DOCKER, porta=PORTA,
                         link_vincular=conta.link_vincular(PORTA_PUBLICADA), tipo=_server_kind(),
                         url_local=f'http://{local_ip}:{PORTA}' if local_ip else '',
-                        cloudflare_url=cloudflare_url, disponivel=_availability_score(metrics),
+                        cloudflare_url=cloudflare_url, tunel=dict(tunel_estado),
+                        disponivel=_availability_score(metrics),
                         maquina={'cpu': metrics.get('cpu'), 'ram_pct': metrics.get('ram_pct'),
                                  'ram_total': metrics.get('ram_total'), 'gpu_name': metrics.get('gpu_name'),
                                  'gpu_pct': metrics.get('gpu_pct'), 'cpu_count': psutil.cpu_count(logical=True)},
@@ -1389,7 +1447,7 @@ def _info_servidor():
                      'dispositivo': preferencia_dispositivo(), 'gpu': gpu_disponivel()},
         'estado': {'availability': _availability_score(metrics), 'active_streams': ativos,
                    'cpu': metrics.get('cpu'), 'ram_pct': metrics.get('ram_pct'),
-                   'malha': malha.estado()},
+                   'malha': malha.estado(), 'tunel': dict(tunel_estado)},
     }
 
 
@@ -3331,6 +3389,7 @@ def tunnels():
     return jsonify({
         "local_ip_url": f"http://{local_ip}:{PORTA}" if local_ip else None,
         "cloudflare_url": cloudflare_url,
+        "tunel": dict(tunel_estado),
         "frontend_local": f"http://{local_ip}:{PORTA}" if local_ip else None,
         "frontend_cloudflare": cloudflare_url
     })

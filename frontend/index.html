@@ -3665,6 +3665,9 @@ function App(){
               <p className="acoes"><button type="button" className="btn btn-gold" onClick={addToken}><Icon n="plus"/>Criar link</button></p>
             </Vazio>
           )}
+          {camTokens.length>0&&servidores.length>0&&!servidores.some(s=>s.online&&s.url)&&(
+            <p className="aviso" role="status"><Icon n="alert"/><span>Nenhum servidor da conta está com endereço de internet agora, então o link não abre a câmera no celular. {(((servidores.find(s=>s.online&&!s.url)||{}).estado||{}).tunel||{}).erro||'A rede do computador do servidor pode estar bloqueando o túnel.'} Veja a linha “Internet” na tela Início do programa do servidor.</span></p>
+          )}
           {camTokens.length>0&&(
             <ul className="cards" aria-label="Dispositivos com acesso">
               {camTokens.map(t=>(

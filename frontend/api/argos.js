@@ -362,9 +362,17 @@ async function removerServidor(req, id) {
 async function enderecosDaConta(contaId) {
   if (!/^[0-9a-f-]{36}$/i.test(String(contaId || ''))) falha(404, 'Conta não encontrada.');
   const lista = await sb('GET', `servidores?select=*&conta_id=eq.${q(contaId)}&order=visto_em.desc`);
-  const online = (lista || []).map(servidorPublico).filter((s) => s.online && s.url);
+  const todos = (lista || []).map(servidorPublico);
+  const ligados = todos.filter((s) => s.online);
+  const online = ligados.filter((s) => s.url);
+  // ligado mas sem link publico: o tunel nao abriu naquela rede. A pagina do celular
+  // explica isso em vez de dizer so que nao achou servidor.
+  const semLink = ligados.filter((s) => !s.url).map((s) => (s.estado || {}).tunel || {});
   return { servidores: online.map((s) => ({ id: s.id, url: s.url,
-    availability: Number((s.estado || {}).availability || 0) })) };
+    availability: Number((s.estado || {}).availability || 0) })),
+    vinculados: todos.length, ligados: ligados.length, sem_link: semLink.length,
+    abrindo: semLink.filter((t) => t.estado === 'abrindo').length,
+    motivo: texto((semLink.find((t) => t.erro) || {}).erro, 240) };
 }
 
 async function exigirServidor(req) {
