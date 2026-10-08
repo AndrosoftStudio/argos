@@ -43,6 +43,10 @@ DEFAULT_CONFIG = {
     'fall_sec': 1.5,       # tempo caido para alertar possivel queda
     'forget_sec': 5.0,     # descarta IDs que sumiram
     'memoria_encoberto_sec': 12.0,  # parte do corpo escondida mantem o ultimo estado conhecido
+    # validacao da falta: quem foi visto com o EPI ha pouco nao o perde por alguns quadros ruins
+    'historico_sec': 45.0,   # memoria longa das vezes em que o EPI foi visto na pessoa
+    'historico_min_pos': 4,  # vezes vistas nessa memoria para valer "estava usando"
+    'validacao_sec': 4.0,    # a falta precisa durar isto para valer contra esse historico
 }
 # altura minima da pessoa (px) para concluir que um EPI nao esta la sem uma deteccao negativa.
 # maos e pes pedem mais pixels que cabeca e tronco porque luva e calcado sao objetos pequenos;
@@ -442,11 +446,37 @@ def decide_state(previous, weights, cfg):
     return previous
 
 
+def validar_falta(t, anterior, novo, positivos, duvida_desde, pesos, cfg):
+    """Confere a passagem para 'faltando' contra a memoria longa da pessoa.
+
+    Em 10 quadros o modelo erra 3 ou 4: quem foi visto com o EPI varias vezes ha pouco nao o
+    tirou so porque uma rajada de quadros ruins dominou a janela curta. Nesse caso a falta fica
+    em validacao e so vale se durar validacao_sec (metade quando a ausencia foi VISTA de fato,
+    com classes como sem_capacete); se o EPI reaparece antes, foi engano do modelo.
+
+    positivos: horarios em que o EPI foi visto na pessoa. Devolve (estado, duvida_desde)."""
+    if novo != 'faltando' or anterior == 'faltando':
+        return novo, None
+    corte = t - cfg['window_sec']
+    if sum(1 for ts in positivos if ts < corte) < cfg['historico_min_pos']:
+        return novo, None           # sem historico de uso: vale a decisao da janela
+    desde = t if duvida_desde is None else duvida_desde
+    vistas = sum(1 for w in pesos if w <= WEIGHTS['ausencia_detectada'])
+    prazo = cfg['validacao_sec'] * (0.5 if vistas >= 3 and vistas * 2 >= len(pesos) else 1.0)
+    if t - desde >= prazo:
+        return novo, desde
+    return anterior, desde
+
+
 class _ItemState:
-    __slots__ = ('obs', 'state', 'missing_since', 'last_obs', 'last_neg', 'conf', 'source')
+    __slots__ = ('obs', 'state', 'missing_since', 'last_obs', 'last_neg', 'conf', 'source',
+                 'pos', 'duvida_desde', 'enganos')
 
     def __init__(self):
         self.obs = deque()
+        self.pos = deque()            # horarios em que o EPI foi visto (memoria longa)
+        self.duvida_desde = None      # falta em validacao desde quando
+        self.enganos = 0              # faltas descartadas porque o EPI reapareceu
         self.state = 'nao_visivel'
         self.missing_since = None
         self.last_obs = None
@@ -461,8 +491,12 @@ class _ItemState:
             self.last_obs, self.conf, self.source = t, conf, source
             if source == 'ausencia_detectada':
                 self.last_neg = t
+            elif weight > 0:
+                self.pos.append(t)
         while self.obs and t - self.obs[0][0] > cfg['window_sec']:
             self.obs.popleft()
+        while self.pos and t - self.pos[0] > cfg['historico_sec']:
+            self.pos.popleft()
         previous = self.state
         # atras de um objeto o EPI nao some: vale o ultimo estado visto por mais tempo
         memoria = cfg['memoria_encoberto_sec'] if encoberto else 3 * cfg['window_sec']
@@ -473,19 +507,33 @@ class _ItemState:
             sem_negativo = not any(w < 0 for _, w in self.obs)
             if previous == 'faltando' and sem_negativo and (self.last_neg is None or t - self.last_neg > memoria):
                 previous = self.state = 'verificando'
+        inicio_duvida = None
         if self.obs:
-            self.state = decide_state(previous, [w for _, w in self.obs], cfg)
+            pesos = [w for _, w in self.obs]
+            em_duvida = self.duvida_desde is not None
+            self.state, duvida = validar_falta(t, previous, decide_state(previous, pesos, cfg), self.pos,
+                                               self.duvida_desde, pesos, cfg)
+            if self.state == 'faltando':
+                inicio_duvida, duvida = duvida, None
+            elif em_duvida and duvida is None and self.state == 'ok':
+                self.enganos += 1     # o EPI reapareceu: a falta era engano do modelo
+            self.duvida_desde = duvida
         elif self.last_obs is None or t - self.last_obs > memoria:
             self.state = 'nao_visivel'
+            self.duvida_desde = None
         if self.state != 'faltando':
             self.missing_since = None
         elif previous != 'faltando':
-            self.missing_since = next((ts for ts, w in self.obs if w < 0), t)
+            primeiro = next((ts for ts, w in self.obs if w < 0), t)
+            self.missing_since = primeiro if inicio_duvida is None else min(primeiro, inicio_duvida)
 
     def snapshot(self, t, cfg):
         dur = t - self.missing_since if self.missing_since is not None else 0.0
-        return {'estado': self.state, 'fonte': self.source, 'confianca': round(self.conf, 3),
-                'faltando_ha': round(dur, 1), 'alerta': self.state == 'faltando' and dur >= cfg['alert_sec']}
+        validando = self.duvida_desde is not None and self.state != 'faltando'
+        return {'estado': 'verificando' if validando else self.state, 'fonte': self.source,
+                'confianca': round(self.conf, 3), 'faltando_ha': round(dur, 1),
+                'alerta': self.state == 'faltando' and dur >= cfg['alert_sec'],
+                'validando': validando, 'usava': len(self.pos) >= cfg['historico_min_pos']}
 
 
 class _Track:
@@ -555,9 +603,12 @@ class PPEAnalyzer:
         self.cfg = {**DEFAULT_CONFIG, **(config or {})}
         self.tracks = {}
         self._anon = 0
+        self._t_ant = None    # horario da analise anterior
+        self._dt = None       # intervalo medio entre analises (s)
 
     def reset(self):
         self.tracks.clear()
+        self._t_ant = self._dt = None
         self.pose.predictor = None  # recria o rastreador na proxima chamada
 
     def detect_people(self, frame):
@@ -573,6 +624,14 @@ class PPEAnalyzer:
                   for b, c, tid, k in zip(boxes, confs, ids, kpts)]
         return consolidar_pessoas(people, self.cfg['kp_conf'], self.tracks)
 
+    def _cfg_do_ritmo(self, t):
+        if self._t_ant is not None and 0 < t - self._t_ant < 30:
+            dt = t - self._t_ant
+            self._dt = dt if self._dt is None else 0.7 * self._dt + 0.3 * dt
+        self._t_ant = t
+        janela = janela_do_ritmo(self.cfg['window_sec'], self._dt)
+        return self.cfg if janela == self.cfg['window_sec'] else {**self.cfg, 'window_sec': janela}
+
     def analyze(self, frame, detections, required, supported, t=None, employees=None, people=None,
                 resolvedor=None):
         """Analisa um frame.
@@ -583,6 +642,7 @@ class PPEAnalyzer:
         Retorna o resultado serializavel e, em cada pessoa, 'evidencias' cruas (para revisao offline)."""
         t = time.time() if t is None else t
         h, w = frame.shape[:2]
+        cfg = self._cfg_do_ritmo(t)
         if people is None:
             people = self.detect_people(frame)
         for p in people:
@@ -618,8 +678,8 @@ class PPEAnalyzer:
             epis = {}
             for item, (source, conf) in evidence.items():
                 st = track.item(item)
-                st.update(t, source, conf, self.cfg, encoberto=tax.item_region(item) in encoberto)
-                epis[item] = st.snapshot(t, self.cfg)
+                st.update(t, source, conf, cfg, encoberto=tax.item_region(item) in encoberto)
+                epis[item] = st.snapshot(t, cfg)
 
             posture, arms_up, head, angle = posture_of(p['box'], p['kpts'], self.cfg['kp_conf'])
             track.update_motion(t, p['box'], posture)
@@ -658,6 +718,14 @@ class PPEAnalyzer:
         for tid in [k for k, tr in self.tracks.items() if t - tr.last_seen > self.cfg['forget_sec']]:
             del self.tracks[tid]
         return summarize(persons)
+
+
+def janela_do_ritmo(window_sec, dt):
+    """Janela da votacao para o ritmo de analise. A decisao pede min_obs observacoes dentro da janela:
+    num servidor lento (so processador, menos de 2 quadros analisados por segundo) a janela de 1,5 s
+    nunca juntava 3 e a pessoa sem EPI ficava como "nao visivel" (a camera mostrava Seguro). Com o
+    intervalo medio dt entre analises, a janela cresce o bastante para caber 3, ate 8 s."""
+    return window_sec if not dt or dt * 3.2 <= window_sec else min(8.0, dt * 3.2)
 
 
 def summarize(persons):

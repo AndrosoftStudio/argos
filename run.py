@@ -91,7 +91,9 @@ def main():
     # acessam, e o Windows nao pede permissao de firewall (que exige administrador).
     host = os.environ.get("ARGOS_HOST", "").strip() or "0.0.0.0"
     if host in ("127.0.0.1", "localhost"):
-        AM.local_ip = ""      # nao anuncia endereco de rede que ninguem alcanca
+        # nao anuncia endereco de rede que ninguem alcanca (ARGOS_LOCAL_IP: testes com dois
+        # servidores no mesmo computador)
+        AM.local_ip = os.environ.get("ARGOS_LOCAL_IP", "").strip()
         print("  URL local  : so este computador (rede local desligada nos Ajustes)")
     else:
         AM.local_ip = os.environ.get("ARGOS_LOCAL_IP", "").strip() or get_local_ip()

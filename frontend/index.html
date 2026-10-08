@@ -23,7 +23,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Outfit:wght@300;400;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="painel.css?v=20261002-servidores">
+<link rel="stylesheet" href="painel.css?v=20261007-b">
 </head>
 <body><div id="root"></div>
 <script type="text/babel">
@@ -201,6 +201,30 @@ function EpiSelos({itens,estado,sm,max=6,rotulos,titulo}){
       {lista.slice(0,max).map(k=><li key={k}><EpiSelo item={k} estado={estado} sm={sm} rotulo={rotulos&&rotulos[k]}/></li>)}
       {lista.length>max&&<li className="epi-mais">+{lista.length-max}</li>}
     </ul>
+  );
+}
+/* Botões de EPI: cada ícone liga ou desliga um EPI. Ligado = fiscalizado (na câmera ou na área).
+   São os mesmos desenhos que aparecem sobre as pessoas no vídeo. */
+function EpiBotoes({disponiveis,ativos,onToggle,titulo,sm,rotulos,desligado,comNomes}){
+  const lista=ordenarEpis(disponiveis);
+  if(!lista.length) return null;
+  const nomeDe=(k)=>(rotulos&&rotulos[k])||ArgosStream.itemLabel(k);
+  const ligados=lista.filter(k=>(ativos||[]).includes(k));
+  return(
+    <div className="epi-botoes-caixa">
+      <div className={"epi-botoes"+(sm?' sm':'')} role="group" aria-label={titulo}>
+        {lista.map(k=>{
+          const on=ligados.includes(k);
+          return(
+            <button key={k} type="button" className={"epi-botao"+(on?' on':'')} aria-pressed={on} disabled={desligado}
+              onClick={()=>onToggle(k,!on)} aria-label={nomeDe(k)} data-dica={nomeDe(k)+(on?' · fiscalizado':' · desligado')}>
+              <EpiGlifo item={k}/>
+            </button>
+          );
+        })}
+      </div>
+      {comNomes&&<p className="epi-botoes-nomes">{ligados.length?ligados.map(nomeDe).join(' · '):'Nenhum EPI ligado: sem alarme'}</p>}
+    </div>
   );
 }
 /* EPI cadastrado pelo usuário tem nome livre ("Farda SENAI", "Capacete azul"):
@@ -788,7 +812,7 @@ function BaixarServidor(){
   },[]);
   const placasSo=so==='linux'?['nvidia','cpu']:['nvidia','dml','cpu'];
   const placaOk=placasSo.includes(placa)?placa:'cpu';
-  let link=null,tamanho=0,nota='';
+  let link=null,tamanho=0,nota='',pendrive=[];
   if(man){
     if(so==='windows'){
       const w=man.windows||{};
@@ -798,7 +822,10 @@ function BaixarServidor(){
         const nomeSetup={nvidia:'nvidia',dml:'amd-intel',cpu:'cpu'}[placaOk];
         link=DOWNLOADS_URL+'ArgosEPI-Servidor-Setup-'+nomeSetup+'.exe';
         tamanho=(prog.tamanho||0)+(motor.tamanho||0)+((w.base||{}).tamanho||0);
-        nota=`O instalador é pequeno: ele baixa o programa já compilado (${tamTxt(tamanho)}), com os modelos de IA junto; depois de instalado nada mais é baixado. Não precisa de administrador.`;
+        nota=`O instalador é pequeno: ele baixa o programa já compilado (${tamTxt(tamanho)}) por várias conexões ao mesmo tempo e continua de onde parou se a internet cair. Os modelos de IA vêm junto; depois de instalado nada mais é baixado. Não precisa de administrador.`;
+        // instalar sem internet: o instalador usa os pacotes que estiverem ao lado dele (pasta win)
+        pendrive=[{nome:link.split('/').pop(),url:link,onde:''},{nome:'latest.json',url:DOWNLOADS_URL+'latest.json',onde:''},
+          ...[w.base,motor,prog].filter(Boolean).map(a=>({nome:a.url.split('/').pop(),url:DOWNLOADS_URL+a.url,onde:'win',tam:a.tamanho}))];
       }
     }else{
       const l=(man.linux||{})[placaOk];
@@ -826,6 +853,21 @@ function BaixarServidor(){
           ? <div className="baixar-acao">
               <a className="btn btn-gold btn-grande" href={link} download><Icon n="download"/>Baixar para {nomeSo} · {PLACAS[placaOk].txt}{tamanho?` (${tamTxt(tamanho)})`:''}</a>
               {nota&&<p className="dica-linha">{nota}</p>}
+              {pendrive.length>0&&(
+                <details className="baixar-offline">
+                  <summary><Icon n="upload"/>Internet lenta ou vários computadores? Instale por pendrive, sem internet</summary>
+                  <ol>
+                    <li>Num computador com internet boa, baixe os 5 arquivos abaixo (no <code>latest.json</code>: botão direito &gt; “Salvar link como”).</li>
+                    <li>No pendrive, crie uma pasta com o instalador e o <code>latest.json</code>; dentro dela, uma pasta chamada <code>win</code> com os 3 arquivos <code>.zip</code>.</li>
+                    <li>Em cada computador, abra o instalador direto do pendrive: ele instala dos arquivos ao lado, sem baixar nada.</li>
+                  </ol>
+                  <ul className="baixar-arquivos">
+                    {pendrive.map(a=>(
+                      <li key={a.nome}><a href={a.url} download>{a.onde?a.onde+' / ':''}{a.nome}</a>{a.tam?<span> · {tamTxt(a.tam)}</span>:null}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
               {so==='linux'&&(
                 <div className="baixar-linux">
                   <p className="dica-linha">Depois de baixar, no terminal:</p>
@@ -1099,6 +1141,7 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
     setInfo(d);
     if(d.config) setConfig(d.config);
     setStatus(prev=>({...(prev||{}),model:d.model,required_labels:d.required_labels,required_items:d.required_items,
+      epis_disponiveis:d.epis_disponiveis,epis_da_camera:d.epis_da_camera,
       classes:d.classes,pose:d.pose,camera:d.camera}));
   },[]);
 
@@ -1229,6 +1272,17 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
     }catch{}
   };
 
+  // EPIs fiscalizados nesta câmera: cada botão liga ou desliga um; vale na hora, sem reiniciar
+  const toggleEpi=(item,ligar)=>{
+    const novo=ligar?[...episAtivos.filter(k=>k!==item),item]:episAtivos.filter(k=>k!==item);
+    setStatus(prev=>({...(prev||{}),required_items:novo,epis_da_camera:true}));
+    changeConfig({epis:novo});
+  };
+  const episDoModelo=()=>{
+    setStatus(prev=>({...(prev||{}),epis_da_camera:false}));
+    changeConfig({epis:null});
+  };
+
   const changeModel=async(newModel)=>{
     manualModelRef.current=true;
     setStreamModel(newModel);
@@ -1258,6 +1312,10 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
   const estadoTxt=isPerigo?(fallOnly?'Possível queda':'Falta EPI'):isOk?'Seguro':st==='verificando'?'Verificando':st==='sem_pessoa'?'Sem pessoas':'Aguardando';
   const persons=(status&&status.persons)||[];
   const exigidos=(status&&status.required_items)||[];
+  // câmera desligada: os botões já aparecem com o que o modelo escolhido sabe procurar
+  const episAtivos=Array.isArray(config.epis)?config.epis:(status&&status.required_items)||getModelRequiredItems(selectedModel);
+  const episDisp=[...new Set([...((status&&status.epis_disponiveis)||getModelRequiredItems(selectedModel)),...episAtivos])];
+  const episProprios=Array.isArray(config.epis)||Boolean(status&&status.epis_da_camera);
   const pipe=(info&&info.pipeline)||{};
   const connLabel={ws:'WebSocket',http:'HTTP (reserva)',reconectando:'reconectando...',aguardando:'aguardando a câmera',erro:'erro'}[conn]||conn||'—';
   const hasImage=Boolean(playStats&&playStats.fps>0)||Boolean(status&&status.frame_w);
@@ -1295,6 +1353,8 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
           onFocus={e=>e.target.select()}/>
         {servidorNome&&<span className="cam-servidor" title="Servidor que processa esta câmera"><Icon n="server"/>{servidorNome}</span>}
         {usingCam&&<button type="button" className="ib sm perigo" onClick={stopCam} aria-label="Parar câmera" data-dica="Parar"><Icon n="stop"/></button>}
+        <button type="button" className="ib sm" onClick={()=>setShowZonas(true)}
+          aria-label={'Áreas desta câmera'+(zonasN>0?` (${zonasN} desenhada(s))`:'')} data-dica={zonasN>0?`Áreas (${zonasN})`:'Áreas'}><Icon n="map"/></button>
         <button type="button" className={"ib sm"+(ajustes?' ativo':'')} onClick={()=>setAjustes(v=>!v)}
           aria-expanded={ajustes} aria-controls={idAjustes} aria-label="Ajustes da câmera" data-dica="Ajustes"><Icon n="sliders"/></button>
         <button type="button" className="ib sm perigo" onClick={handleRemove} aria-label="Remover câmera" data-dica="Remover"><Icon n="trash"/></button>
@@ -1379,9 +1439,12 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
               {ArgosStream.RES_OPTIONS.map(r=><option key={r} value={r}>{r}p</option>)}
             </select>
           </div>
-          <div className="aj-linha">
-            <button type="button" className="btn btn-secondary btn-sm" onClick={()=>setShowZonas(true)}><Icon n="map"/>Áreas{zonasN>0?` (${zonasN})`:''}</button>
-            {exigidos.length>0&&<EpiSelos itens={exigidos} sm max={9} titulo="EPIs exigidos"/>}
+          <div className="aj-linha aj-epis">
+            <span className="aj-rot" data-dica="EPIs fiscalizados nesta câmera"><Icon n="helmet"/><span className="sr">EPIs fiscalizados nesta câmera</span></span>
+            {episDisp.length>0
+              ? <EpiBotoes disponiveis={episDisp} ativos={episAtivos} onToggle={toggleEpi} titulo="EPIs fiscalizados nesta câmera"/>
+              : <span className="dica-linha">Este modelo não reconhece EPIs</span>}
+            {episProprios&&<button type="button" className="chip" onClick={episDoModelo} title="Voltar aos EPIs padrão do modelo"><Icon n="undo"/>Padrão</button>}
           </div>
           <ul className="diag" aria-label="Diagnóstico">
             <li className="chip" title={cameraDisplay}><Icon n="video"/>{cameraDisplay}</li>
@@ -1389,6 +1452,8 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
             {pipe.atraso_ms!=null&&<li className="chip"><Icon n="clock"/>{pipe.atraso_ms} ms</li>}
             {pipe.fps_analise!=null&&<li className="chip" title="IA analisa / servidor recebe (quadros por segundo)"><Icon n="chip"/>{pipe.fps_analise}/{pipe.fps_entrada} q/s</li>}
             {pipe.sem_sinal&&<li className="chip alerta"><Icon n="video-off"/>sem sinal</li>}
+            {info&&info.ajuda&&<li className="chip" title={'Outro servidor da conta, na mesma rede, adianta parte da análise desta câmera: rostos '+info.ajuda.rosto+' q/s, EPIs '+info.ajuda.epi+' q/s'}><Icon n="server"/>ajuda de {(info.ajuda.pares||[]).join(', ')||'outro servidor'}</li>}
+            {pipe.enganos>0&&<li className="chip" title="Vezes em que o modelo deixou de ver o EPI por alguns quadros e o sistema não contou como falta, porque a pessoa tinha sido vista com ele e ele reapareceu"><Icon n="shield"/>{pipe.enganos} engano(s) ignorado(s)</li>}
             {usingCam&&net&&<li className="chip" title="Envio desta câmera"><Icon n="upload"/>{net.sentFps.toFixed(0)} q/s · {(net.kbps/1000).toFixed(1)} Mb/s</li>}
             {status&&status.classes&&status.classes.length>0&&<li className="chip" title={status.classes.join(', ')}><Icon n="helmet"/>{status.classes.length} classes</li>}
             {status&&status.pose===false&&<li className="chip">só detector</li>}
@@ -2450,6 +2515,15 @@ function FuncDesempenho({func,token,backendUrl,onClose}){
   const quando=(ts)=>new Date(ts*1000).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
   const dur=(s)=>!s?'—':s<60?Math.round(s)+'s':Math.floor(s/60)+'min '+Math.round(s%60)+'s';
   const urlFoto=(f)=>backendUrl+'/auditoria/evidencia/'+f+'?token='+token;
+  // "foi engano" / "foi falta mesmo": a decisão de quem olha vale sobre a do sistema e refaz os gráficos
+  const validar=async(ev,engano)=>{
+    try{
+      const r=await authFetch(backendUrl+'/auditoria/eventos/'+ev.id+'/validacao',token,{method:'POST',body:JSON.stringify({engano})});
+      if(!r.ok) throw new Error('Erro');
+      const d=await (await authFetch(backendUrl+'/funcionarios/'+func.id+'/desempenho?dias='+dias,token)).json();
+      setDados(d);
+    }catch(e){setErro(mensagemErro(e));}
+  };
 
   return(
     <Janela titulo={func.nome} ic="chart" onClose={onClose} tamanho="largo">
@@ -2467,6 +2541,13 @@ function FuncDesempenho({func,token,backendUrl,onClose}){
           <p className="aviso" title="O sistema viu alguém sem EPI, mas não reconheceu o rosto. Cadastre ao menos 3 fotos de rosto de cada funcionário.">
             <Icon n="scan-face"/>
             <span>{dados.nao_atribuidas} violação(ões) sem rosto reconhecido no período</span>
+          </p>
+        )}
+
+        {dados.enganos_descartados>0&&(
+          <p className="aviso neutro" title="Faltas curtas em que o modelo só deixou de achar o EPI e ele reapareceu logo depois. Ficam na linha do tempo, marcadas, e não entram nos gráficos.">
+            <Icon n="shield"/>
+            <span>{dados.enganos_descartados} registro(s) tratado(s) como provável engano do sistema: fora dos gráficos</span>
           </p>
         )}
 
@@ -2490,14 +2571,24 @@ function FuncDesempenho({func,token,backendUrl,onClose}){
             ? <p className="graf-vazio">Nada registrado em {dados.dias} dias</p>
             : <ol className="linha-tempo">
                 {dados.ultimos_eventos.map(ev=>(
-                  <li key={ev.id} className="evento">
+                  <li key={ev.id} className={"evento"+(ev.validacao==='engano'?' engano':'')}>
                     <time className="evento-quando" dateTime={isoDe(ev.ts)}>{quando(ev.ts)}</time>
                     <div className="evento-corpo">
                       <p className={"evento-tipo"+(ev.tipo==='queda'?' queda':'')}>
                         {ev.tipo==='queda'
                           ? <><Icon n="alert"/>Possível queda</>
                           : <>{ev.epi&&<EpiSelo item={ev.epi} estado="falta" sm rotulo={ev.epi_label}/>}Sem {String(ev.epi_label||ev.epi||'EPI').toLowerCase()}</>}
+                        {ev.validacao==='engano'&&<span className="selo-engano" title={ev.validacao_motivo||''}><Icon n="shield"/>Provável engano</span>}
+                        {ev.validacao==='confirmada'&&<span className="selo-confirmada"><Icon n="check"/>Conferida</span>}
                       </p>
+                      {ev.validacao==='engano'&&ev.validacao_motivo&&<p className="evento-motivo">{ev.validacao_motivo} Não entra nos gráficos.</p>}
+                      {ev.tipo==='violacao'&&(
+                        <p className="evento-acoes">
+                          {ev.validacao==='engano'
+                            ? <button type="button" className="chip" onClick={()=>validar(ev,false)}><Icon n="alert"/>Foi falta mesmo</button>
+                            : <button type="button" className="chip" onClick={()=>validar(ev,true)}><Icon n="shield"/>Foi engano do sistema</button>}
+                        </p>
+                      )}
                       <ul className="evento-meta">
                         {ev.area_nome&&<li><Icon n="map"/><span className="sr">Área: </span>{ev.area_nome}</li>}
                         {ev.stream_id&&<li><Icon n="camera"/><span className="sr">Câmera: </span>{ev.stream_id}</li>}
@@ -2547,10 +2638,11 @@ function AreaCard({area,episDisponiveis,onSalvar,onRemover,nivel=3}){
         <button type="button" className="ib sm perigo dica-dir" onClick={()=>onRemover(area)} aria-label={'Remover '+area.nome} data-dica="Remover"><Icon n="trash"/></button>
       </header>
 
+      {/* os mesmos botões da câmera: tocar num EPI liga ou desliga a exigência nesta área e já salva */}
       {!edit&&(
-        exigidos.length
-          ? <EpiSelos itens={exigidos} max={9} rotulos={rotulos} titulo="EPIs obrigatórios"/>
-          : <p className="area-vazia"><Icon n="bell-off"/>Área livre: sem alarme</p>
+        <EpiBotoes disponiveis={episDisponiveis.map(e=>e.key)} ativos={exigidos} rotulos={rotulos} comNomes
+          titulo={'EPIs obrigatórios em '+area.nome}
+          onToggle={(k,ligar)=>onSalvar({...area,epis_obrigatorios:ligar?[...exigidos.filter(x=>x!==k),k]:exigidos.filter(x=>x!==k)},true)}/>
       )}
 
       {edit&&(
@@ -2559,18 +2651,8 @@ function AreaCard({area,episDisponiveis,onSalvar,onRemover,nivel=3}){
             <Campo ic="text" rotulo="Nome da área"><input value={form.nome} onChange={e=>setForm(p=>({...p,nome:e.target.value}))} required/></Campo>
             <p className="field"><label className="sr" htmlFor={idTitulo+'-cor'}>Cor no vídeo</label><input id={idTitulo+'-cor'} type="color" value={form.cor} onChange={e=>setForm(p=>({...p,cor:e.target.value}))}/></p>
           </div>
-          <fieldset className="epi-opcoes">
-            <legend className="sr">EPIs obrigatórios nesta área</legend>
-            {episDisponiveis.map(e=>{
-              const on=(form.epis_obrigatorios||[]).includes(e.key);
-              return(
-                <label key={e.key} className={"epi-opcao"+(on?' on':'')}>
-                  <input type="checkbox" className="sr" checked={on} onChange={()=>toggle(e.key)}/>
-                  <span className="epi-b sm"><EpiGlifo item={e.key}/></span>{e.label}
-                </label>
-              );
-            })}
-          </fieldset>
+          <EpiBotoes disponiveis={episDisponiveis.map(e=>e.key)} ativos={form.epis_obrigatorios||[]} rotulos={rotulos} comNomes
+            titulo="EPIs obrigatórios nesta área" onToggle={k=>toggle(k)}/>
           <footer className="modal-actions" style={{marginTop:12}}>
             <button type="submit" className="btn btn-primary btn-sm"><Icon n="check"/>Salvar</button>
           </footer>
@@ -2605,14 +2687,15 @@ function AreasBoard({token,backendUrl,onToast}){
     }catch(e){onToast&&onToast(mensagemErro(e),'err');}
   };
 
-  const salvar=async(area)=>{
+  const salvar=async(area,quieto)=>{
+    if(quieto) setAreas(l=>l.map(a=>a.id===area.id?area:a));   // botão de EPI: a tela responde na hora
     try{
       const r=await authFetch(backendUrl+'/areas/'+area.id,token,{method:'PUT',headers:{'Content-Type':'application/json'},
         body:JSON.stringify(area)});
       const d=await r.json();
       if(!r.ok) throw new Error(d.error||'Erro');
-      carregar();onToast&&onToast('Área salva!');
-    }catch(e){onToast&&onToast(mensagemErro(e),'err');}
+      carregar();if(!quieto) onToast&&onToast('Área salva!');
+    }catch(e){carregar();onToast&&onToast(mensagemErro(e),'err');}
   };
 
   const remover=async(area)=>{
@@ -2649,6 +2732,8 @@ function AreasBoard({token,backendUrl,onToast}){
    A imagem da câmera se atualiza sozinha enquanto a janela está aberta.          */
 const CORES_AREA=['#e53935','#fb8c00','#fdd835','#43a047','#1e88e5','#8e24aa','#00acc1','#6d4c41'];
 const limitar01=(v)=>Math.min(Math.max(v,0),1);
+// "câmera inteira": a área que cobre o quadro todo, criada pelo botão (sem desenhar)
+const zonaInteira=(z)=>z.pontos.length===4&&z.pontos.every(p=>(p[0]===0||p[0]===1)&&(p[1]===0||p[1]===1));
 function centroDe(pts){
   if(!pts.length) return [0.5,0.5];
   const s=pts.reduce((a,p)=>[a[0]+p[0],a[1]+p[1]],[0,0]);
@@ -2669,6 +2754,7 @@ function ZonaEditor({streamId,token,backendUrl,onClose,onToast}){
   const [salvando,setSalvando]=useState(false);
   const [mudou,setMudou]=useState(false);
   const [novaArea,setNovaArea]=useState(null);     // formulário de área nova
+  const [prop,setProp]=useState(16/9);             // largura/altura da imagem: o palco usa a mesma proporção
   const svgRef=useRef();
   const nomeGrupo=useId();
 
@@ -2690,7 +2776,8 @@ function ZonaEditor({streamId,token,backendUrl,onClose,onToast}){
   // imagem ao vivo: um quadro novo a cada 1,5 s (pausa enquanto arrasta um ponto)
   useEffect(()=>{
     let vivo=true;
-    const buscar=()=>authFetch(backendUrl+'/frame?stream='+streamId,token)
+    // cru=1: a imagem limpa da câmera (sem caixas nem os desenhos antigos por cima), inteira
+    const buscar=()=>authFetch(backendUrl+'/frame?cru=1&stream='+streamId,token)
       .then(r=>r.status===204?null:r.json())
       .then(d=>{if(vivo&&d&&d.frame) setFrame('data:image/jpeg;base64,'+d.frame);})
       .catch(()=>{});
@@ -2730,7 +2817,11 @@ function ZonaEditor({streamId,token,backendUrl,onClose,onToast}){
     if(arraste&&arraste.moveu) return;     // fim de um arraste, não é clique
     if(e.detail>1) return;                 // o duplo clique fecha (abaixo), sem somar ponto
     if(pertoDoInicio(e)){fecharPoligono();return;}
-    if(selecionada&&!pontos.length){setSelecionada('');return;}   // clique fora tira a seleção
+    if(selecionada&&!pontos.length){
+      setSelecionada('');
+      // clique fora tira a seleção; com a câmera inteira selecionada não existe "fora": já começa o desenho
+      if(!(zonaSel&&zonaInteira(zonaSel))) return;
+    }
     setPontos(p=>[...p,posicao(e)]);
   };
   const duploClique=(e)=>{e.preventDefault();if(pontos.length>=3) fecharPoligono();};
@@ -2775,11 +2866,24 @@ function ZonaEditor({streamId,token,backendUrl,onClose,onToast}){
     setAreaAtual(id);
     if(selecionada){setZonas(l=>l.map(z=>z.id===selecionada?{...z,area_id:id}:z));setMudou(true);}
   };
+  // a câmera inteira como área: sem desenhar nada, todo mundo que aparece é cobrado pelos EPIs dela
   const telaInteira=()=>{
     if(!areaAtual){onToast&&onToast('Escolha ou crie a área antes.','err');return;}
     const id='z'+Date.now();
-    setZonas(z=>[...z,{id,area_id:areaAtual,pontos:[[0,0],[1,0],[1,1],[0,1]]}]);
+    setZonas(z=>[...z.filter(x=>!zonaInteira(x)),{id,area_id:areaAtual,pontos:[[0,0],[1,0],[1,1],[0,1]]}]);
     setPontos([]);setSelecionada(id);setMudou(true);
+  };
+  // EPIs da área escolhida, pelos mesmos botões da câmera (salva na hora)
+  const areaSel=areas.find(a=>a.id===areaAtual)||null;
+  const toggleEpiArea=async(k,ligar)=>{
+    if(!areaSel) return;
+    const atuais=areaSel.epis_obrigatorios||[];
+    const nova={...areaSel,epis_obrigatorios:ligar?[...atuais.filter(x=>x!==k),k]:atuais.filter(x=>x!==k)};
+    setAreas(l=>l.map(a=>a.id===nova.id?nova:a));
+    try{
+      const r=await authFetch(backendUrl+'/areas/'+nova.id,token,{method:'PUT',body:JSON.stringify(nova)});
+      if(!r.ok) throw new Error((await r.json()).error||'Erro');
+    }catch(e){carregarAreas(nova.id);onToast&&onToast(mensagemErro(e),'err');}
   };
 
   // teclado: Enter fecha, Esc cancela, Backspace desfaz, Delete apaga o desenho selecionado
@@ -2848,19 +2952,27 @@ function ZonaEditor({streamId,token,backendUrl,onClose,onToast}){
               :'Clique na imagem para começar a desenhar · clique num desenho para editar');
 
   return(
-    <Janela titulo="Mapear áreas" ic="map" onClose={fechar} tamanho="largo" fecharFora={false}>
-      {frame
-        ? <figure className="zona-palco">
-            <img src={frame} alt="Imagem atual da câmera" draggable={false}/>
+    <Janela titulo="Mapear áreas" ic="map" onClose={fechar} tamanho="tela" fecharFora={false}>
+     <div className="zona-editor">
+      <div className="zona-col-imagem">
+      {/* o palco tem a proporção da câmera e cabe inteiro na janela: nada é cortado, em pé ou deitada */}
+      <figure className={"zona-palco"+(frame?'':' vazio')} style={{'--prop':prop}}>
+        {frame
+          ? <img src={frame} alt="Imagem atual da câmera" draggable={false}
+              onLoad={e=>{const i=e.target;if(i.naturalWidth&&i.naturalHeight) setProp(i.naturalWidth/i.naturalHeight);}}/>
+          : <p className="zona-sem-frame"><Icon n="video-off"/>Câmera desligada: dá para usar “Câmera inteira” ou desenhar no escuro; ligue a câmera para ver a imagem</p>}
             <svg ref={svgRef} className={"zona-svg"+(arrastando?' arrastando':'')} viewBox="0 0 100 100" preserveAspectRatio="none"
               onClick={cliqueNoPalco} onDoubleClick={duploClique} onPointerMove={mover} onPointerUp={soltar} onPointerCancel={soltar}
               role="img" aria-label={'Desenho das áreas: '+zonas.length+' área(s), '+pontos.length+' ponto(s) no desenho atual'}>
               {zonas.map(z=>{
                 const sel=z.id===selecionada;
                 return(
-                  <polygon key={z.id} points={pathDe(z.pontos)} fill={corDe(z.area_id)} fillOpacity={sel?0.38:0.24}
+                  /* a câmera inteira fica por baixo e não pega o clique (senão não daria para desenhar outra
+                     área por cima dela); ela é selecionada pela lista de áreas desenhadas, embaixo */
+                  <polygon key={z.id} points={pathDe(z.pontos)} fill={corDe(z.area_id)} fillOpacity={zonaInteira(z)?(sel?0.2:0.1):(sel?0.38:0.24)}
                     stroke={sel?'#fff':corDe(z.area_id)} strokeWidth={sel?2.5:1.5} strokeDasharray={sel?'6 3':undefined}
-                    vectorEffect="non-scaling-stroke" className="zona-poligono" onClick={e=>selecionarZona(e,z)}/>
+                    vectorEffect="non-scaling-stroke" className="zona-poligono" pointerEvents={zonaInteira(z)?'none':undefined}
+                    onClick={e=>selecionarZona(e,z)}/>
                 );
               })}
               {pontos.length>1&&(
@@ -2874,15 +2986,15 @@ function ZonaEditor({streamId,token,backendUrl,onClose,onToast}){
               const c=centroDe(z.pontos);const a=areaPorId(z.area_id);
               return <span key={'r'+z.id} className="zona-rotulo" style={{left:(c[0]*100)+'%',top:(c[1]*100)+'%',background:corDe(z.area_id)}}>{(a||{}).nome||'Área removida'}</span>;
             })}
-            <button type="button" className={"zona-vivo"+(aoVivo?' on':'')} onClick={()=>setAoVivo(v=>!v)}
+            {frame&&<button type="button" className={"zona-vivo"+(aoVivo?' on':'')} onClick={()=>setAoVivo(v=>!v)}
               aria-pressed={aoVivo} title={aoVivo?'Congelar a imagem':'Voltar a atualizar a imagem'}>
               <Icon n={aoVivo?'pause':'play'}/>{aoVivo?'Ao vivo':'Congelada'}
-            </button>
-          </figure>
-        : <p className="zona-sem-frame"><Icon n="video-off"/>Ligue a câmera para desenhar sobre a imagem dela</p>}
-
+            </button>}
+      </figure>
       <p className="dica-linha" style={{marginTop:10}}><Icon n="pointer"/>{dica}</p>
+      </div>
 
+      <div className="zona-col-lado">
       <fieldset className="zona-areas">
         <legend className="sr">{selecionada?'Área do desenho selecionado':'Área que estou desenhando'}</legend>
         {areas.map(a=>(
@@ -2896,26 +3008,26 @@ function ZonaEditor({streamId,token,backendUrl,onClose,onToast}){
           aria-expanded={Boolean(novaArea)}><Icon n={novaArea?'x':'plus'}/>{novaArea?'Cancelar':'Nova área'}</button>
       </fieldset>
 
+      {areaSel&&!novaArea&&episDisp.length>0&&(
+        <div className="zona-epis">
+          <p className="dica-linha"><Icon n="helmet"/>EPIs exigidos em <strong>{areaSel.nome}</strong></p>
+          <EpiBotoes disponiveis={episDisp.map(e=>e.key)} ativos={areaSel.epis_obrigatorios||[]} onToggle={toggleEpiArea}
+            rotulos={Object.fromEntries(episDisp.map(e=>[e.key,e.label]))} titulo={'EPIs exigidos em '+areaSel.nome} comNomes/>
+        </div>
+      )}
+
       {novaArea&&(
         <form className="zona-nova" onSubmit={enviar(criarArea)} aria-label="Nova área">
           <div className="field-row">
             <Campo ic="text" rotulo="Nome da área"><input autoFocus value={novaArea.nome} placeholder="Nome (ex.: Solda, Andaime)" onChange={e=>setNovaArea(p=>({...p,nome:e.target.value}))}/></Campo>
             <p className="field"><label className="sr" htmlFor={nomeGrupo+'-cor'}>Cor</label><input id={nomeGrupo+'-cor'} type="color" value={novaArea.cor} onChange={e=>setNovaArea(p=>({...p,cor:e.target.value}))}/></p>
           </div>
-          {episDisp.length>0&&(
-            <fieldset className="epi-opcoes">
-              <legend className="dica-linha">EPIs obrigatórios nesta área (nenhum = área livre, sem alarme)</legend>
-              {episDisp.map(e=>{
-                const on=novaArea.epis.includes(e.key);
-                return(
-                  <label key={e.key} className={"epi-opcao"+(on?' on':'')}>
-                    <input type="checkbox" className="sr" checked={on} onChange={()=>setNovaArea(p=>({...p,epis:on?p.epis.filter(k=>k!==e.key):[...p.epis,e.key]}))}/>
-                    <span className="epi-b sm"><EpiGlifo item={e.key}/></span>{e.label}
-                  </label>
-                );
-              })}
-            </fieldset>
-          )}
+          {episDisp.length>0&&(<>
+            <p className="dica-linha">EPIs obrigatórios nesta área (nenhum = área livre, sem alarme)</p>
+            <EpiBotoes disponiveis={episDisp.map(e=>e.key)} ativos={novaArea.epis} comNomes
+              rotulos={Object.fromEntries(episDisp.map(e=>[e.key,e.label]))} titulo="EPIs obrigatórios na área nova"
+              onToggle={(k,ligar)=>setNovaArea(p=>({...p,epis:ligar?[...p.epis,k]:p.epis.filter(x=>x!==k)}))}/>
+          </>)}
           <p className="acoes"><button type="submit" className="btn btn-primary btn-sm" disabled={!novaArea.nome.trim()}><Icon n="check"/>Criar área</button></p>
         </form>
       )}
@@ -2928,7 +3040,8 @@ function ZonaEditor({streamId,token,backendUrl,onClose,onToast}){
               <button type="button" className="btn btn-secondary btn-sm" onClick={()=>setPontos([])}><Icon n="x"/>Cancelar desenho</button>
             </>
           : <>
-              <button type="button" className="btn btn-secondary btn-sm" onClick={telaInteira} disabled={!areaAtual||!frame}><Icon n="maximize"/>Imagem inteira</button>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={telaInteira} disabled={!areaAtual}
+                title="Usa a câmera inteira como área, sem desenhar"><Icon n="maximize"/>Câmera inteira</button>
               {zonaSel&&<button type="button" className="btn btn-danger btn-sm" onClick={apagarSelecionada}><Icon n="trash"/>Apagar desenho</button>}
             </>}
       </div>
@@ -2947,12 +3060,14 @@ function ZonaEditor({streamId,token,backendUrl,onClose,onToast}){
         </ul>
       )}
 
-      <p className="dica-linha" style={{marginTop:10}}><Icon n="user"/>A pessoa conta como dentro da área pelo ponto dos pés. Fora de todas as áreas valem os EPIs da câmera.</p>
+      <p className="dica-linha" style={{marginTop:10}}><Icon n="user"/>A pessoa conta como dentro da área pelo ponto dos pés. Onde duas áreas se cruzam vale a menor (a mais específica). Fora de todas valem os EPIs ligados nos botões da câmera.</p>
 
       <footer className="modal-actions">
         <button type="button" className="btn btn-secondary" onClick={fechar}>Cancelar</button>
         <button type="button" className="btn btn-primary" onClick={salvar} disabled={salvando}><Icon n="check"/>{salvando?'Salvando...':'Salvar'}</button>
       </footer>
+      </div>
+     </div>
     </Janela>
   );
 }

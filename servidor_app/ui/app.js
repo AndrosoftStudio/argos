@@ -39,6 +39,7 @@ const ICONES = {
   'video-off': '<path d="M10.5 6h3.5a1.5 1.5 0 0 1 1.5 1.5v3l5.3-3a.5.5 0 0 1 .7.4v8.2a.5.5 0 0 1-.4.5"/><path d="M15.5 15.5v1a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 16.5v-9A1.5 1.5 0 0 1 4 6h1"/><path d="m3 3 18 18"/>',
   tray: '<path d="M3.5 13.5h5l1.5 2.5h4l1.5-2.5h5"/><path d="M5.5 5h13l2 8.5V18a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 18v-4.5z"/>',
   hash: '<path d="M5 9h15M4 15h15M10 3.5 8 20.5M16 3.5l-2 17"/>',
+  unlink: '<path d="M13.5 6.5l1-1a4.5 4.5 0 0 1 6.4 6.4l-1 1"/><path d="M10.5 17.5l-1 1a4.5 4.5 0 0 1-6.4-6.4l1-1"/><path d="m4 4 16 16"/>',
 };
 const ic = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONES[n] || ''}</svg>`;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -154,7 +155,8 @@ function blocoConta(r) {
         <div><p class="conta-nome">${esc(c.nome || 'Conta do Argos EPI')}</p><p class="conta-email">${esc(c.email || '')}</p>
         <p class="selo-ok">${ic('check')}Servidor vinculado${srv.nome ? ' como “' + esc(srv.nome) + '”' : ''}</p></div></div>
       <p class="texto" style="margin-top:12px">As câmeras desta conta podem rodar neste computador. Os EPIs, a equipe e as áreas chegam sozinhos pela malha${r.pares ? ` (${r.pares} outro(s) servidor(es))` : ''}.</p>
-      <div class="acoes"><button type="button" class="btn btn-primary" data-acao="painel">${ic('globe')}Abrir o painel</button></div>
+      <div class="acoes"><button type="button" class="btn btn-primary" data-acao="painel">${ic('globe')}Abrir o painel</button>
+        <button type="button" class="btn btn-secondary" data-desvincular-abrir>${ic('unlink')}Desvincular da conta</button></div>
     </section>`;
   }
   const exp = r.expira_em ? Math.max(0, Math.round((r.expira_em * 1000 - Date.now()) / 60000)) : 0;
@@ -189,6 +191,7 @@ function blocoServidor() {
       ${mq.cpu_count ? `<li>${ic('gauge')}<span>${mq.cpu_count} núcleos · ${gb(mq.ram_total)} de memória</span></li>` : ''}
       ${r && r.url_local ? `<li>${ic('wifi')}<span>Na rede: <a data-acao="link" data-url="${esc(r.url_local)}">${esc(r.url_local)}</a></span></li>` : ''}
       ${r && r.cloudflare_url ? `<li>${ic('globe')}<span>Internet: <a data-acao="link" data-url="${esc(r.cloudflare_url)}">${esc(r.cloudflare_url)}</a></span></li>` : ''}
+      ${blocoAjuda(r)}
     </ul>
     ${r ? `<div class="medidores">${medidor('Processador', pct(mq.cpu))}${medidor('Memória', pct(mq.ram_pct))}${medidor('Livre p/ câmeras', pct(r.disponivel))}</div>` : ''}
     <div class="acoes">
@@ -197,6 +200,19 @@ function blocoServidor() {
                : `<button type="button" class="btn btn-primary" data-acao="ligar" ${s.estado === 'parando' ? 'disabled' : ''}>${ic('play')}Ligar</button>`}
     </div>
   </section>`;
+}
+
+/* servidores da mesma conta e da mesma rede dividem o trabalho das câmeras (rostos e EPIs) */
+function blocoAjuda(r) {
+  if (!r) return '';
+  const pares = (r.ajuda || []).filter(p => p.disponivel);
+  const usados = pares.filter(p => (p.usados.rosto || 0) + (p.usados.epi || 0) > 0);
+  const feitos = r.ajudou ? (r.ajudou.rosto || 0) + (r.ajudou.epi || 0) : 0;
+  let h = '';
+  if (usados.length) h += `<li>${ic('users')}<span>Divide o trabalho das câmeras com ${usados.map(p => esc(p.nome)).join(', ')}</span></li>`;
+  else if (pares.length) h += `<li>${ic('users')}<span>${pares.map(p => esc(p.nome)).join(', ')} na mesma rede: ajuda quando for mais rápido que este</span></li>`;
+  if (feitos) h += `<li>${ic('zap')}<span>Já adiantou ${feitos.toLocaleString('pt-BR')} quadro(s) para outros servidores da conta</span></li>`;
+  return h;
 }
 
 function blocoCamerasResumo() {
@@ -375,7 +391,7 @@ function paginaAjustes() {
         <fieldset class="seg"><legend class="sr">Tema</legend>${radio('tema', 'sistema', 'Auto', 'monitor')}${radio('tema', 'claro', 'Claro', 'sun')}${radio('tema', 'escuro', 'Escuro', 'moon')}</fieldset>
       </li>
       <li><span class="pref-ico">${ic('wifi')}</span><div class="pref-txt"><p class="pref-nome">Aceitar conexões da rede local</p>
-          <p class="pref-dica">Desligado, só este computador e o endereço seguro do site falam com o servidor, e ${win ? 'o Windows não pede permissão de firewall (administrador)' : 'nenhuma porta fica aberta na rede'}. Ligue só se outro servidor Argos da mesma rede precisar acessar direto.</p></div>
+          <p class="pref-dica">Desligado, só este computador e o endereço seguro do site falam com o servidor, e ${win ? 'o Windows não pede permissão de firewall (administrador)' : 'nenhuma porta fica aberta na rede'}. Ligue para outro servidor Argos da mesma rede dividir o trabalho das câmeras com este.</p></div>
         <label class="switch"><input type="checkbox" role="switch" data-cfg="rede_local" ${c.rede_local ? 'checked' : ''} aria-label="Aceitar conexões da rede local"><span class="switch-trilho"></span><span class="switch-bolha"></span></label>
       </li>
     </ul></section>
@@ -404,6 +420,7 @@ function assinatura() {
     const r = E.resumo;
     return JSON.stringify([E.servidor, E.banco.estado, E.banco.erro, E.modelos, E.app.etapa, E.atualizacao,
       r && [r.vinculado, r.conta, r.servidor, r.codigo, r.erro, r.url_local, r.cloudflare_url, r.pares, r.tipo,
+        (r.ajuda || []).map(p => [p.nome, p.disponivel, (p.usados.rosto || 0) + (p.usados.epi || 0) > 0]), r.ajudou && Math.floor(((r.ajudou.rosto || 0) + (r.ajudou.epi || 0)) / 500),
         r.maquina, r.disponivel, (r.cameras || []).map(c => [c.id, c.ativa, (c.faltando || []).length])],
       Math.floor(Date.now() / 30000)]);
   }
@@ -464,6 +481,7 @@ document.addEventListener('click', (ev) => {
     return;
   }
   if (ev.target.closest('[data-sair]')) { ev.preventDefault(); sair(); return; }
+  if (ev.target.closest('[data-desvincular-abrir]')) { ev.preventDefault(); perguntarDesvincular(); return; }
   if (ev.target.closest('#reg-copiar')) {
     const txt = [...document.querySelectorAll('#registro > div:not([hidden])')].map(d => d.textContent).join('\n');
     navigator.clipboard.writeText(txt).then(() => aviso('Registro copiado.'), () => aviso('Não consegui copiar.'));
@@ -529,6 +547,31 @@ dlg.addEventListener('click', async (ev) => {
   }
   if (escolha === 'sair') sair();
   else if (host) host.enviar({ tipo: 'esconder' });
+});
+
+/* desvincular da conta: so depois de confirmar */
+const dlgDesv = $('#dlg-desvincular');
+function perguntarDesvincular() {
+  if (dlgDesv.open) return;
+  const c = (E && E.resumo && E.resumo.conta) || {};
+  const cams = ((E && E.resumo && E.resumo.cameras) || []).filter(x => x.ativa).length;
+  $('#dlg-desvincular-txt').textContent =
+    `O servidor sai da conta${c.nome || c.email ? ' de ' + (c.nome || c.email) : ''}` +
+    (cams ? ` e ${cams === 1 ? 'a câmera ligada nele para' : 'as ' + cams + ' câmeras ligadas nele param'}` : '') +
+    '. Os funcionários, EPIs e o histórico continuam guardados neste computador. Depois é só vincular de novo, na mesma conta ou em outra.';
+  dlgDesv.showModal();
+}
+dlgDesv.addEventListener('click', async (ev) => {
+  const b = ev.target.closest('[data-desvincular]');
+  if (!b) { if (ev.target === dlgDesv) dlgDesv.close(); return; }
+  dlgDesv.close();
+  if (b.dataset.desvincular !== 'sim') return;
+  aviso('Desvinculando...');
+  try {
+    await api('/api/acao', { acao: 'desvincular' });
+    aviso('Servidor desvinculado da conta.');
+  } catch { aviso('Não consegui desvincular: o servidor está ligado?'); }
+  ciclo();
 });
 
 if (host) host.ouvir((m) => {

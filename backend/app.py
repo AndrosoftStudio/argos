@@ -45,6 +45,7 @@ import face_id
 import seguranca
 import users as user_mgr
 import areas as areas_mod
+import ajuda
 import auditoria
 import conta
 import malha
@@ -1219,7 +1220,8 @@ def resumo_local():
                         maquina={'cpu': metrics.get('cpu'), 'ram_pct': metrics.get('ram_pct'),
                                  'ram_total': metrics.get('ram_total'), 'gpu_name': metrics.get('gpu_name'),
                                  'gpu_pct': metrics.get('gpu_pct'), 'cpu_count': psutil.cpu_count(logical=True)},
-                        hardware=_hardware_servidor(), cameras=cameras))
+                        hardware=_hardware_servidor(), cameras=cameras, ajuda=ajuda.resumo(),
+                        ajudou=ajuda.capacidades().get('atendidos')))
 
 
 def _hardware_servidor() -> dict:
@@ -1253,6 +1255,7 @@ def _trocar_dispositivo(valor):
     valor = _definir_dispositivo(valor)
     d = resolve_device('auto')
     _device_global = 'cpu' if d == 'cpu' else ('0' if str(d) == '0' else 'dml')
+    ajuda.esquecer_detectores()
     with streams_lock:
         procs = [p for p in streams.values() if getattr(p, 'running', False) and getattr(p, 'model_path', None)]
 
@@ -1261,7 +1264,7 @@ def _trocar_dispositivo(valor):
             if str(p.device) == str(resolve_device('auto')):
                 continue
             try:
-                p.update_settings(p.model_path, 'auto', required_items=list(p.required_items or []) or None)
+                p.update_settings(p.model_path, 'auto', required_items=list(p.required_modelo or []) or None)
             except Exception as e:
                 print(f'[hardware] nao recarregou {p.client_id}: {e}')
     if procs:
@@ -1296,6 +1299,29 @@ def local_hardware():
             return jsonify({'error': 'Escolha auto, gpu ou cpu.'}), 400
     return jsonify(_hardware_servidor())
 
+@app.route('/local/desvincular', methods=['POST'])
+def local_desvincular():
+    """Janela do programa do servidor: tira este computador da conta. As cameras param;
+    funcionarios, EPIs e historico continuam no banco daqui."""
+    if not _pedido_local():
+        return jsonify({'error':'Disponível só no próprio servidor.'}), 403
+    if not conta.vinculado():
+        return jsonify({'ok': True, 'vinculado': False})
+    with streams_lock:
+        procs = list(streams.values())
+        streams.clear()
+    with user_streams_lock:
+        user_streams.clear()
+    for p in procs:
+        try:
+            p.close()
+        except Exception:
+            pass
+    r = conta.sair_da_conta()
+    print(f"[conta] Servidor desvinculado pela janela do programa ({len(procs)} câmera(s) paradas).", flush=True)
+    return jsonify(dict(r, vinculado=False))
+
+
 @app.route('/local/quadro/<sid>', methods=['GET'])
 def quadro_local(sid):
     """Miniatura da camera para a janela do programa do servidor."""
@@ -1320,6 +1346,20 @@ def malha_mudancas():
     except ValueError:
         return jsonify({'error':'Parâmetros inválidos.'}), 400
     return jsonify(malha.mudancas(conta.conta_id(), desde, limite))
+
+
+@app.route('/malha/ajuda', methods=['GET', 'POST'])
+def malha_ajuda():
+    """Outro servidor da mesma conta pede que este adiante parte da analise de um quadro
+    (rostos ou detector de EPIs). GET: o que este servidor sabe fazer. Ver ajuda.py."""
+    if not malha.par_autorizado(_token()):
+        return jsonify({'error':'Servidor não autorizado.'}), 401
+    if request.method == 'GET':
+        return jsonify(ajuda.capacidades())
+    if (request.content_length or 0) > ajuda.MAX_JPEG:
+        return jsonify({'erro': 'quadro invalido'}), 413
+    tarefas = [t for t in (request.args.get('t') or '').split(',') if t in ('rosto', 'epi')]
+    return jsonify(ajuda.atender(request.get_data(cache=False), tarefas, request.args))
 
 
 @app.route('/malha/arquivo', methods=['GET'])
@@ -1353,6 +1393,28 @@ def _info_servidor():
     }
 
 
+_livre_cache = [0.0, 100]
+
+
+def _livre_para_ajudar() -> int:
+    """Quanto do processador e da placa de video sobra (0..100), medido no maximo uma vez por
+    segundo: cada pedido de ajuda de outro servidor consulta isto. Memoria ocupada e numero de
+    cameras nao entram: o que atrasaria as cameras daqui e processador ou placa no limite."""
+    agora = time.monotonic()
+    if agora - _livre_cache[0] > 1.0:
+        _livre_cache[0] = agora
+
+        def medir():   # a medida leva 0,1 s: fora do pedido, que tem prazo curto
+            try:
+                m = _sys_metrics()
+                gpu = m.get('gpu_pct')
+                _livre_cache[1] = int(100 - max(float(m.get('cpu') or 0), float(gpu if gpu is not None else 0)))
+            except Exception:
+                pass
+        threading.Thread(target=medir, daemon=True, name='ajuda-livre').start()
+    return _livre_cache[1]
+
+
 def _ao_mudar_conta():
     """A conta do site ganha uma copia na tabela usuarios (as tabelas daqui apontam para ela)."""
     if not conta.vinculado():
@@ -1383,6 +1445,9 @@ def start_conta_e_malha(abrir_navegador=False):
     conta.iniciar(_info_servidor, abrir_navegador=abrir_navegador, porta=PORTA_PUBLICADA)
     _ao_mudar_conta()
     malha.iniciar()
+    # servidores da mesma conta, na mesma rede, dividem o trabalho das cameras
+    ajuda.configurar(MODELS_DIR, lambda: resolve_device('auto'), _livre_para_ajudar)
+    ajuda.iniciar()
 
 # ═══════════════════════════════════════════════════════════════
 # MODELOS disponíveis
@@ -1624,7 +1689,11 @@ def get_frame():
     if not _stream_permitido(u, sid): return _stream_negado()
     p = _stream(sid, u['id'])
     if not p: return ('', 204)
-    fb = p.get_frame_b64()
+    if request.args.get('cru'):   # editor de areas: a imagem limpa, sem caixas nem desenhos por cima
+        jpeg = p.pipeline.ultimo_jpeg
+        fb = base64.b64encode(jpeg).decode() if jpeg else None
+    else:
+        fb = p.get_frame_b64()
     if not fb: return ('', 204)
     st = p.get_status(); st["paused"] = _pausado(u['id'])
     return jsonify({"frame":fb,"status":st})
@@ -1693,7 +1762,7 @@ def _ensure_external_stream_ready(u, sid: str):
         return p
     mp, req = _default_model_for(owner_uid)
     if p and p.model_path and os.path.exists(p.model_path):  # mantem o modelo escolhido no painel
-        mp, req = p.model_path, p.required_items or req
+        mp, req = p.model_path, p.required_modelo or req
     p = _stream(sid, owner_uid)
     if p:
         p.update_settings(mp, 'auto', camera_source='webcam', required_items=req,
@@ -1745,6 +1814,8 @@ def _stream_info(p, sid):
     st = p.get_status()
     return {'stream_id': sid, 'config': p.public_config(), 'model': p.model_name, 'arquitetura': st.get('arquitetura'),
             'required_items': st['required_items'], 'required_labels': st['required_labels'],
+            'epis_disponiveis': st['epis_disponiveis'], 'epis_da_camera': st['epis_da_camera'],
+            'ajuda': st.get('ajuda'),
             'classes': st['classes'], 'pose': st['pose'], 'pipeline': st['pipeline'],
             'runtime_backend': st['runtime_backend'], 'camera': st['camera'],
             'paused': _pausado(getattr(p, 'owner_uid', None))}
@@ -3117,6 +3188,18 @@ def auditoria_eventos():
         ate=a.get('ate', type=float),
         limite=min(a.get('limite', default=200, type=int), 1000),
         offset=a.get('offset', default=0, type=int))})
+
+
+@app.route('/auditoria/eventos/<int:evento_id>/validacao', methods=['POST'])
+def auditoria_validar(evento_id):
+    """Quem usa o painel decide: a falta foi engano do sistema ou aconteceu mesmo."""
+    u, err = _auth()
+    if err: return err
+    if '_cam_session' in u: return jsonify({'error': 'Câmeras não alteram o histórico.'}), 403
+    engano = bool((request.get_json(force=True, silent=True) or {}).get('engano'))
+    if not auditoria.validar(u['id'], evento_id, engano):
+        return jsonify({'error': 'Evento não encontrado.'}), 404
+    return jsonify({'ok': True, 'validacao': 'engano' if engano else 'confirmada'})
 
 
 @app.route('/auditoria/evidencia/<path:relativo>', methods=['GET'])

@@ -10,9 +10,9 @@
 # container (ext4), uma placa por vez e sem cache do uv, e o .tar.gz sai direto na pasta de saida (D:),
 # para o disco do Docker no C: quase nao crescer:
 #   docker run --rm -v "<pasta v20>:/fonte:ro" -v D:\argos-build\saida:/saida \
-#     -e VERSAO=20.2.0 -e PLACAS="cpu nvidia" ubuntu:22.04 bash /fonte/servidor_app/build/empacotar_linux.sh
+#     -e VERSAO=20.3.0 -e PLACAS="cpu nvidia" ubuntu:22.04 bash /fonte/servidor_app/build/empacotar_linux.sh
 set -euo pipefail
-VERSAO="${VERSAO:-20.2.0}"
+VERSAO="${VERSAO:-20.3.0}"
 PLACAS="${PLACAS:-cpu nvidia}"
 FONTE="${FONTE:-/fonte}"
 SAIDA="${SAIDA:-/saida}"

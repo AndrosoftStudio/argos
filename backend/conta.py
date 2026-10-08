@@ -169,6 +169,20 @@ def desvincular():
     _acordar.set()
 
 
+def sair_da_conta() -> dict:
+    """Pedido de quem esta no computador: tira este servidor da conta, no site e aqui.
+    Sem internet o vinculo sai so daqui (no site ele fica como desligado ate ser removido la)."""
+    cred = credencial()
+    avisou = False
+    if cred:
+        try:
+            avisou = _post('/servidores/desvincular', {}, token=cred, timeout=10).status_code in (200, 401)
+        except requests.RequestException:
+            pass
+    desvincular()
+    return {'ok': True, 'site_avisado': avisou}
+
+
 # ── Conversa com a API do site ──────────────────────────────────────
 
 def _post(caminho, corpo, token=None, timeout=15):

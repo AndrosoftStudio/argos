@@ -49,6 +49,15 @@
   </footer>
 </dialog>
 
+<dialog class="janela" id="dlg-desvincular" aria-labelledby="dlg-desvincular-t">
+  <header class="janela-topo"><span class="janela-ico"><svg class="ic" data-ic="unlink"></svg></span><h2 id="dlg-desvincular-t">Desvincular este servidor?</h2></header>
+  <p class="janela-texto" id="dlg-desvincular-txt">O servidor sai da conta e as câmeras ligadas nele param. Os funcionários, EPIs e o histórico continuam guardados neste computador. Depois é só vincular de novo, na mesma conta ou em outra.</p>
+  <footer class="janela-acoes">
+    <button type="button" class="btn btn-secondary" data-desvincular="nao" autofocus>Cancelar</button>
+    <button type="button" class="btn btn-danger" data-desvincular="sim"><svg class="ic" data-ic="unlink"></svg>Desvincular</button>
+  </footer>
+</dialog>
+
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script src="app.js"></script>
 </body>

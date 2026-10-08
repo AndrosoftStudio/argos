@@ -176,6 +176,13 @@ def ponto_em_poligono(x: float, y: float, pontos) -> bool:
     return dentro
 
 
+def area_do_poligono(pontos) -> float:
+    """Area (formula do cadarco) em coordenadas normalizadas: 1.0 = a imagem inteira."""
+    n = len(pontos)
+    return abs(sum(pontos[i][0] * pontos[(i + 1) % n][1] - pontos[(i + 1) % n][0] * pontos[i][1]
+                   for i in range(n))) / 2.0 if n >= 3 else 0.0
+
+
 def ponto_de_apoio(box, largura: int, altura: int):
     """Onde a pessoa esta pisando, normalizado 0..1."""
     x1, y1, x2, y2 = box
@@ -194,6 +201,9 @@ class ResolvedorDeArea:
             area = areas_por_id.get(z.get('area_id'))
             if area is not None:      # zona apontando para area apagada: ignora
                 self.zonas.append((z, area))
+        # onde duas zonas se cruzam vale a menor: a "Solda" desenhada dentro de uma area que cobre a
+        # camera inteira e mais especifica que ela
+        self.zonas.sort(key=lambda par: area_do_poligono(par[0].get('pontos') or []))
 
     @property
     def ativo(self) -> bool:

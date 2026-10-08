@@ -27,7 +27,8 @@ from collections import deque
 import cv2
 import numpy as np
 
-from ppe_analyzer import WEIGHTS, DEFAULT_CONFIG, activity_text, decide_state, summarize
+from ppe_analyzer import (WEIGHTS, DEFAULT_CONFIG, activity_text, decide_state, janela_do_ritmo, summarize,
+                          validar_falta)
 import ppe_taxonomy as tax
 
 MODOS = {
@@ -55,6 +56,11 @@ def normalizar_config(cfg, base=None):
     cfg = cfg or {}
     if cfg.get('modo') in MODOS:
         out['modo'] = cfg['modo']
+    # EPIs fiscalizados nesta camera (botoes do painel). Sem a chave (ou None): os do modelo.
+    if 'epis' in cfg:
+        epis = cfg['epis']
+        out['epis'] = tax.normalize_required(epis)[:32] if isinstance(epis, (list, tuple)) else None
+    out.setdefault('epis', None)
     for chave, opcoes in (('fps', FPS_OPCOES), ('resolucao', RES_OPCOES)):
         try:
             v = int(cfg.get(chave, out[chave]))
@@ -185,9 +191,17 @@ class _Revisor:
         self.estado = {}      # (tid, item) -> estado decidido no ultimo quadro exibido
         self.ultimo_nz = {}   # (tid, item) -> ultimo t exibido com evidencia na janela
         self.desde = {}       # (tid, item) -> t em que comecou a faltar
+        self.pos = {}         # (tid, item) -> deque[t] das vezes em que o EPI foi visto (memoria longa)
+        self.duvida = {}      # (tid, item) -> t em que a falta entrou em validacao
+        self.enganos = 0      # faltas descartadas: o EPI reapareceu antes de a falta valer
+        self.t_ant = None     # horario do quadro-chave anterior
+        self.dt = None        # intervalo medio entre quadros-chave (s): servidor lento alarga a janela
 
     def adicionar(self, t, analysis):
         with self.lock:
+            if self.t_ant is not None and 0 < t - self.t_ant < 30:
+                self.dt = (t - self.t_ant) if self.dt is None else 0.7 * self.dt + 0.3 * (t - self.t_ant)
+            self.t_ant = t if self.t_ant is None else max(self.t_ant, t)
             for p in analysis.get('persons', []):
                 tid = p.get('track_id')
                 if tid is None:
@@ -196,10 +210,18 @@ class _Revisor:
                     peso = WEIGHTS.get(fonte, 0.0)
                     if peso:
                         self.ev.setdefault((tid, item), deque()).append((t, peso))
+                    if peso > 0:
+                        self.pos.setdefault((tid, item), deque(maxlen=512)).append(t)
 
     def aplicar(self, persons, t):
         cfg = self.cfg
         with self.lock:
+            # poucos quadros-chave por segundo: a janela cresce para caber as 3 observacoes da decisao
+            janela = janela_do_ritmo(cfg['window_sec'], self.dt)
+            passado = self.passado
+            if janela != cfg['window_sec']:
+                cfg = {**cfg, 'window_sec': janela}
+                passado = max(passado, janela)
             for p in persons:
                 tid = p.get('track_id')
                 if tid is None:
@@ -208,34 +230,50 @@ class _Revisor:
                 for item, s in p['epis'].items():
                     chave = (tid, item)
                     dq = self.ev.get(chave)
-                    while dq and dq[0][0] < t - self.passado:
+                    while dq and dq[0][0] < t - passado:
                         dq.popleft()
                     janela = [w for ti, w in dq if ti <= t + self.futuro] if dq else []
                     anterior = self.estado.get(chave, 'nao_visivel')
+                    inicio = None
                     if janela:
-                        estado = decide_state(anterior, janela, cfg)
+                        pos = self.pos.get(chave)
+                        while pos and pos[0] < t - cfg['historico_sec']:
+                            pos.popleft()
+                        em_duvida = chave in self.duvida
+                        estado, duvida = validar_falta(t, anterior, decide_state(anterior, janela, cfg), pos or (),
+                                                       self.duvida.get(chave), janela, cfg)
+                        if estado == 'faltando':
+                            inicio, duvida = duvida, None
+                        elif em_duvida and duvida is None and estado == 'ok':
+                            self.enganos += 1   # o EPI reapareceu: a falta era engano do modelo
+                        if duvida is None:
+                            self.duvida.pop(chave, None)
+                        else:
+                            self.duvida[chave] = duvida
                         self.ultimo_nz[chave] = t
                     elif t - self.ultimo_nz.get(chave, -1e9) > 3 * cfg['window_sec']:
                         estado = 'nao_visivel'
+                        self.duvida.pop(chave, None)
                     else:
                         estado = anterior
                     self.estado[chave] = estado
                     if estado == 'faltando':
-                        desde = self.desde.setdefault(chave, t)
+                        desde = self.desde.setdefault(chave, t if inicio is None else inicio)
                         faltando.append(item)
                     else:
                         self.desde.pop(chave, None)
                         desde = None
                     dur = t - desde if desde is not None else 0.0
-                    s.update(estado=estado, faltando_ha=round(dur, 1),
-                             alerta=estado == 'faltando' and dur >= cfg['alert_sec'])
+                    validando = chave in self.duvida
+                    s.update(estado='verificando' if validando else estado, faltando_ha=round(dur, 1),
+                             alerta=estado == 'faltando' and dur >= cfg['alert_sec'], validando=validando)
                 quedas = [a for a in p.get('alertas', []) if a == 'Possível queda']
                 p['faltando'] = faltando
                 p['alertas'] = [f"Sem {tax.item_label(i).lower()} há {p['epis'][i]['faltando_ha']:.0f}s"
                                 for i in faltando if p['epis'][i]['alerta']] + quedas
             vivos = {p.get('track_id') for p in persons}
             for chave in [c for c, v in self.ultimo_nz.items() if c[0] not in vivos and t - v > cfg['forget_sec'] * 4]:
-                for d in (self.ev, self.estado, self.ultimo_nz, self.desde):
+                for d in (self.ev, self.estado, self.ultimo_nz, self.desde, self.pos, self.duvida):
                     d.pop(chave, None)
         return persons
 
@@ -315,7 +353,7 @@ class LivePipeline:
     LIMITE_QUADROS = 720
 
     def __init__(self, analisar, reiniciar_rastreio=None, nome='', log=print):
-        """analisar(img, t, perfil) -> (analysis, deteccoes, funcionarios)."""
+        """analisar(img, t, perfil, jpeg) -> (analysis, deteccoes, funcionarios)."""
         self.analisar = analisar
         self._reiniciar = reiniciar_rastreio or (lambda: None)
         self._reset_pendente = False
@@ -342,6 +380,8 @@ class LivePipeline:
         self.geracao = getattr(self, 'geracao', 0) + 1
         self.quadros, self.ts = [], []
         self.chaves, self.chaves_t = [], []
+        # faltas descartadas pela validacao desde que a camera ligou (o revisor recomeca a cada linha do tempo)
+        self.enganos_antes = getattr(self, 'enganos_antes', 0) + (self.revisor.enganos if hasattr(self, 'revisor') else 0)
         self.revisor = _Revisor(self.perfil)
         self.base = None            # horario_local - t (menor atraso de rede visto)
         self.base_alvo = None
@@ -592,7 +632,8 @@ class LivePipeline:
                 if img is None:
                     continue
                 t0 = time.perf_counter()
-                analysis, dets, employees = self.analisar(img, q.t, perfil)
+                # o JPEG original vai junto: outro servidor da conta pode adiantar parte do trabalho
+                analysis, dets, employees = self.analisar(img, q.t, perfil, q.jpeg)
                 fim = time.perf_counter()
             except Exception as ex:  # nunca derruba o stream por causa de um quadro
                 self.log(f"erro na analise: {ex}")
@@ -718,6 +759,7 @@ class LivePipeline:
                 'buffer': len(self.quadros),
                 'pulados': self.pulados,
                 'intervalo_chave_ms': round(self.intervalo * 1000),
+                'enganos': self.enganos_antes + self.revisor.enganos,
                 'sem_sinal': bool(self.ultima_entrada) and agora - self.ultima_entrada > self.SEM_SINAL_S,
                 'ultima_entrada_s': round(agora - self.ultima_entrada, 1) if self.ultima_entrada else None,
             }

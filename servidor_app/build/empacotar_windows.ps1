@@ -9,9 +9,9 @@
 # O motor e a base so sao refeitos/baixados quando o conteudo muda (o id e o hash dos arquivos):
 # uma atualizacao comum do programa baixa so o argos-programa (dezenas de MB).
 # Requisitos: Windows 10/11 (csc do .NET Framework, curl, tar) e internet na primeira vez.
-# Uso: powershell -ExecutionPolicy Bypass -File empacotar_windows.ps1 -Versao 20.2.0 [-Placas cpu,nvidia,dml] [-SoJanela]
+# Uso: powershell -ExecutionPolicy Bypass -File empacotar_windows.ps1 -Versao 20.3.0 [-Placas cpu,nvidia,dml] [-SoJanela]
 param(
-  [string]$Versao = "20.2.0",
+  [string]$Versao = "20.3.0",
   [string[]]$Placas = @("cpu", "nvidia", "dml"),
   [string]$Trabalho = "D:\argos-build",
   [string]$Notas = "",
@@ -59,6 +59,32 @@ function IdDaPasta($pasta, $fora = @()) {
     $_.FullName.Substring($pasta.Length + 1).ToLower() + ":" + (Get-FileHash $_.FullName -Algorithm SHA256).Hash }
   $sha = [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($linhas -join "`n"))
   (($sha[0..4] | ForEach-Object { $_.ToString("x2") }) -join "")
+}
+# conteudo de um .zip (nome + SHA-256 de cada arquivo, em ordem de nome): igual para zips com os mesmos arquivos
+function ConteudoDoZip($caminho) {
+  $z = [IO.Compression.ZipFile]::OpenRead($caminho)
+  try {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    ($z.Entries | Sort-Object FullName | ForEach-Object {
+      $s = $_.Open(); try { $_.FullName + ":" + [BitConverter]::ToString($sha.ComputeHash($s)) } finally { $s.Dispose() } }) -join "`n"
+  } finally { $z.Dispose() }
+}
+# O PyInstaller grava o base_library.zip numa ordem que muda a cada compilacao (mesmos arquivos, bytes
+# diferentes), o que trocaria o id do motor sem nada ter mudado. Se o conteudo for o mesmo do pacote ja
+# publicado, fica o arquivo de la: o id continua igual e quem atualiza nao baixa as bibliotecas de novo.
+function ManterBaseLibrary($zipPublicado, $novo) {
+  $antigo = "$novo.publicado"
+  $z = [IO.Compression.ZipFile]::OpenRead($zipPublicado)
+  try {
+    $e = $z.Entries | Where-Object { ($_.FullName -replace '\\', '/') -eq "motor/base_library.zip" } | Select-Object -First 1
+    if (-not $e) { return }
+    [IO.Compression.ZipFileExtensions]::ExtractToFile($e, $antigo, $true)
+  } finally { $z.Dispose() }
+  if ((Sha $antigo) -ne (Sha $novo) -and (ConteudoDoZip $antigo) -eq (ConteudoDoZip $novo)) {
+    Copy-Item $antigo $novo -Force
+    Write-Host "   base_library.zip: mesmo conteudo do pacote publicado, mantido o de la"
+  }
+  Remove-Item $antigo -Force
 }
 function Zipar($pasta, $zip) {
   if (Test-Path $zip) { Remove-Item $zip }
@@ -180,8 +206,11 @@ foreach ($placa in $Placas) {
   $pyi = Join-Path $palco "pyi-$placa"
   New-Item -ItemType Directory -Force $pyi | Out-Null
   $env:ARGOS_RAIZ = $raiz; $env:ARGOS_PLACA = $placa
+  $env:PYTHONHASHSEED = "1"                   # compilacao repetivel (recomendado pelo PyInstaller)
   & $py -m PyInstaller --noconfirm --log-level WARN --distpath "$pyi\dist" --workpath "$pyi\work" "$PSScriptRoot\motor.spec"
-  if ($LASTEXITCODE) { throw "falha ao compilar o motor ($placa)" }
+  $codigo = $LASTEXITCODE
+  Remove-Item Env:\PYTHONHASHSEED
+  if ($codigo) { throw "falha ao compilar o motor ($placa)" }
   $motor = "$pyi\dist\motor"
   foreach ($dll in $VCRT) { if (Test-Path "$env:WINDIR\System32\$dll") { Copy-Item "$env:WINDIR\System32\$dll" $motor -Force } }
   # so serve para compilar extensoes em C++ (e scripts de exemplo das bibliotecas): nao vai para o usuario
@@ -212,6 +241,8 @@ foreach ($placa in $Placas) {
   }
 
   # --- bibliotecas do motor (tudo menos o executavel): so mudam quando muda uma dependencia
+  $publicado = Get-ChildItem "$saida\win" -Filter "argos-motor-$placa-*.zip" | Select-Object -First 1
+  if ($publicado) { ManterBaseLibrary $publicado.FullName "$motor\base_library.zip" }
   $idMotor = IdDaPasta $motor @("ArgosMotor.exe", "argos-motor-id.txt")
   Set-Content -Encoding ascii "$motor\argos-motor-id.txt" $idMotor
   if ($temTrt) {

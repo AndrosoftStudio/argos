@@ -610,6 +610,21 @@ class Supervisor:
             threading.Thread(target=_r, daemon=True).start()
         elif nome == 'vincular':
             _abrir(r.get('link_vincular') or f'{SITE}/parear.html?porta={b.porta or 8088}')
+        elif nome == 'desvincular':
+            if not b.porta or b.estado != 'ligado':
+                return False
+            try:
+                pedido = urllib.request.Request(f'http://127.0.0.1:{b.porta}/local/desvincular', method='POST',
+                                                data=b'{}', headers={'Content-Type': 'application/json'})
+                with urllib.request.urlopen(pedido, timeout=20) as resp:
+                    d = json.loads(resp.read().decode('utf-8'))
+            except Exception as e:
+                log(f'Nao consegui desvincular: {e}')
+                return False
+            log('Servidor desvinculado da conta.' + ('' if d.get('site_avisado') else
+                ' O site nao respondeu: remova este servidor tambem em Ajustes > Servidores, no painel.'))
+            if isinstance(b.resumo, dict):   # a tela ja mostra "Vincule a sua conta"
+                b.resumo.update(vinculado=False, conta=None, servidor=None, pares=0, codigo='', cameras=[])
         elif nome == 'painel':
             _abrir(SITE)
         elif nome == 'painel_local':

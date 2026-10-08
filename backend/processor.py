@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(__file__))
+import ajuda
 import areas as areas_mod
 import auditoria
 import face_id
@@ -22,7 +23,7 @@ import ppe_taxonomy as tax
 from epi_detector import (MODELS_DIR, EpiDetector, info_do_modelo, is_cuda, merge_detections, modelo_de_reforco,
                           pose_model_path, resolve_device, run_employee_model)
 from reforco import Reforco
-from live_pipeline import CONFIG_PADRAO, MODOS, LivePipeline, config_publica, normalizar_config
+from live_pipeline import CONFIG_PADRAO, MODOS, LivePipeline, _Taxa, config_publica, normalizar_config
 from ppe_analyzer import PPEAnalyzer, draw_analysis
 from yolo_runtime import precision_kwargs
 
@@ -35,7 +36,8 @@ class VideoProcessor:
         self.analyzers = {}  # (nivel da pose, imgsz) -> PPEAnalyzer
         self.analyzer_lock = threading.RLock()
         self.running = False
-        self.required_items = []
+        self.required_items = []     # EPIs cobrados nesta camera (o que vale na analise)
+        self.required_modelo = []    # os que o modelo traz como padrao
         self.device = 'cpu'
         self.thread = None
         self.camera_source = 0
@@ -61,6 +63,10 @@ class VideoProcessor:
         self.pipeline = LivePipeline(self._analyze_key, self._reset_tracking, nome=client_id, log=self._log)
         self._annot = (-1, None)
         self._annot_lock = threading.Lock()
+        # tempos medidos aqui (ms, media movel) e o que outro servidor da conta adiantou (ver ajuda.py)
+        self._ms = {}
+        self._n_epi = 0
+        self._ajudou = {'rosto': _Taxa(), 'epi': _Taxa()}
 
     def _log(self, msg):
         print(f"[Processor:{self.client_id}] {msg}")
@@ -127,14 +133,18 @@ class VideoProcessor:
             epis = p.get('epis') or {}
             # so o que ja passou do tempo de alerta vira registro: evita falso positivo
             confirmados = [i for i in p.get('faltando') or [] if (epis.get(i) or {}).get('alerta')]
-            if not confirmados and 'Possível queda' not in (p.get('alertas') or []):
-                continue
-            func_id, func_nome = self._identificar(p)
             # o episodio segue a pessoa rastreada (track), nao o nome: o rosto costuma
             # ser reconhecido so depois do alerta, e trocar a chave no meio abria
             # outro episodio e deixava o primeiro sem dono
             tid = p.get('track_id')
+            func_id, func_nome = self._identificar(p)
             chave = f"track:{tid}" if tid is not None else (func_id or 'sem_track')
+            # EPI visto de novo logo depois de uma falta curta: o historico marca "provavel engano"
+            vistos = [i for i, s in epis.items() if s.get('estado') == 'ok' and s.get('fonte') == 'detectado']
+            if vistos:
+                auditoria.viu_com_epi(self.owner_uid, self.client_id, chave, vistos)
+            if not confirmados and 'Possível queda' not in (p.get('alertas') or []):
+                continue
             # o t do pipeline e relogio de desempenho (perf_counter), nao data: gravado
             # assim, o episodio saia em 1970, a faxina apagava e cada quadro abria outro
             comum = dict(stream_id=self.client_id, chave_pessoa=chave, func_id=func_id,
@@ -144,7 +154,8 @@ class VideoProcessor:
             for item in confirmados:
                 try:
                     auditoria.episodio(self.dados_dir, self.owner_uid, tipo='violacao',
-                                       epi=item, epi_label=tax.item_label(item), **comum)
+                                       epi=item, epi_label=tax.item_label(item),
+                                       forte=(epis.get(item) or {}).get('fonte') == 'ausencia_detectada', **comum)
                 except Exception as e:
                     self._log(f"auditoria (violacao) falhou: {e}")
             if 'Possível queda' in (p.get('alertas') or []):
@@ -170,6 +181,7 @@ class VideoProcessor:
         if novo != self.config:
             self.config = novo
             self.config_version += 1
+            self._aplicar_epis()
         self.pipeline.configurar(novo['modo'])
         if self.running and self.pose_ok:
             threading.Thread(target=self._analyzer_for, args=(MODOS[novo['modo']],), daemon=True).start()
@@ -177,6 +189,22 @@ class VideoProcessor:
 
     def public_config(self):
         return config_publica(self.config)
+
+    def _aplicar_epis(self):
+        """EPIs cobrados nesta camera: os escolhidos nos botoes do painel; sem escolha, os do modelo.
+        Vale no proximo quadro-chave, sem reiniciar a camera."""
+        epis = self.config.get('epis')
+        if epis is None or self.detector is None:
+            self.required_items = list(self.required_modelo)
+        else:
+            self.required_items = self.detector.clean_required(list(epis))
+
+    def epis_disponiveis(self):
+        """EPIs que este modelo sabe procurar (os botoes que o painel mostra na camera)."""
+        if self.detector is None:
+            return list(self.required_modelo)
+        itens = tax.default_required(self.detector.names)
+        return itens + [i for i in self.required_modelo if i not in itens]
 
     def _analyzer_for(self, perfil):
         chave = (perfil['pose'], perfil['imgsz'])
@@ -217,8 +245,9 @@ class VideoProcessor:
             self.runtime_backend = self.detector.backend
             self.model_name = os.path.basename(self.detector.runtime_path)
             self.model_classes = self.detector.class_names
-            self.required_items = self.detector.clean_required(
+            self.required_modelo = self.detector.clean_required(
                 tax.normalize_required(required_items) if required_items else tax.default_required(self.detector.names))
+            self._aplicar_epis()
             self.reforco = Reforco(self.detector, self._detector_extra(model_path))
             self.pose_ok = True
             self._analyzer_for(MODOS[self.mode])
@@ -355,19 +384,43 @@ class VideoProcessor:
                 pass
         return employees
 
-    def _reconhecer_rostos(self, img):
+    def _medir(self, chave, t0):
+        ms = (time.perf_counter() - t0) * 1000
+        antes = self._ms.get(chave)
+        self._ms[chave] = ms if antes is None else antes * 0.8 + ms * 0.2
+
+    def _detectar(self, img, imgsz, conf):
+        """Detector de EPIs neste servidor, cronometrado (o par so ajuda se for mais rapido que isto)."""
+        t0 = time.perf_counter()
+        dets = self.detector.detect(img, imgsz, conf)
+        self._medir(('det', imgsz), t0)
+        return dets
+
+    def _reconhecer_rostos(self, img, pedido=None):
         """Acha os rostos do quadro e compara cada um com a galeria de funcionarios.
 
         Mesmo caminho do projeto DEEPFAKE: o embedding do rosto vira um vetor
         unitario e a identidade sai da menor distancia. Quem nao bate com
-        ninguem volta sem nome -- a caixa ainda aparece, so nao e atribuida."""
+        ninguem volta sem nome -- a caixa ainda aparece, so nao e atribuida.
+
+        pedido: os rostos deste quadro ja foram pedidos a outro servidor da conta. Se a resposta
+        chegou (ou chega em menos tempo do que achar os rostos aqui), usa; senao faz aqui."""
         if self.galeria is None or self.galeria.vazia:
             return []
-        try:
-            rostos = face_id.detectar(img, self.device)
-        except Exception as e:
-            self._log(f'reconhecimento de rosto falhou: {e}')
-            return []
+        rostos = None
+        if pedido is not None and pedido.contar:
+            d = pedido.resultado(esperar_s=0.8 * self._ms.get('rosto', 0.0) / 1000)
+            if d is not None:
+                rostos = ajuda.rostos_da_resposta(d)
+                self._ajudou['rosto'].marcar(time.perf_counter())
+        if rostos is None:
+            t0 = time.perf_counter()
+            try:
+                rostos = face_id.detectar(img, self.device)
+            except Exception as e:
+                self._log(f'reconhecimento de rosto falhou: {e}')
+                return []
+            self._medir('rosto', t0)
         saida = []
         for r in rostos:
             fid, nome, dist = self.galeria.identificar(r['embedding'])
@@ -387,18 +440,42 @@ class VideoProcessor:
                 'missing_items': missing, 'missing': [tax.item_label(i) for i in missing], 'alerts': [],
                 '_sem_pose': True}
 
-    def _analyze_key(self, img, t, perfil):
+    def _analyze_key(self, img, t, perfil, jpeg=None):
         det = self.detector
         h, w = img.shape[:2]
+        inicio = time.perf_counter()
+        imgsz = perfil['imgsz']
         resolvedor = self._resolvedor(w, h)
         # com zonas, o detector precisa procurar tudo que qualquer area possa exigir
         required = resolvedor.todos_os_itens() if resolvedor is not None else list(self.required_items)
         analyzer = self._analyzer_for(perfil) if self.pose_ok else None
         run_det = det.useful_for(required)
+        # Outro servidor da conta, na mesma rede, adianta o que nao tem memoria: os rostos (em paralelo
+        # com a analise daqui) e o detector de EPIs (so quando ele tem respondido mais rapido que o daqui).
+        # O rastreio das pessoas e a votacao ficam sempre neste servidor.
+        p_rosto = p_epi = None
+        ms_det = self._ms.get(('det', imgsz))
+        if jpeg is not None and ajuda.ativa():
+            if self.galeria is not None and not self.galeria.vazia and 'rosto' in self._ms:
+                p_rosto = ajuda.pedir_rostos(jpeg, self._ms.get('pre', 0.0) + 0.8 * self._ms['rosto'])
+            if run_det and ms_det is not None:
+                self._n_epi += 1
+                if self._n_epi % 120:   # de vez em quando roda so aqui: mantem a medida do detector local em dia
+                    p_epi = ajuda.pedir_epis(jpeg, self.model_path, imgsz, perfil['conf'], 0.75 * ms_det)
+        contar_epi = p_epi is not None and p_epi.contar
         # detector e pose rodam juntos na GPU (modelos diferentes, threads diferentes)
-        fut = self._pool.submit(det.detect, img, perfil['imgsz'], perfil['conf']) if run_det else None
+        fut = self._pool.submit(self._detectar, img, imgsz, perfil['conf']) if run_det and not contar_epi else None
         people = analyzer.detect_people(img) if analyzer is not None else None
-        dets = fut.result() if fut is not None else []
+        if contar_epi:
+            # espera o par ate o tempo que o detector daqui levaria; passou disso, roda aqui
+            d = p_epi.resultado(esperar_s=ms_det * 1.1 / 1000 - (time.perf_counter() - inicio))
+            if d is not None:
+                dets = ajuda.dets_da_resposta(d)
+                self._ajudou['epi'].marcar(time.perf_counter())
+            else:
+                dets = self._detectar(img, imgsz, perfil['conf'])
+        else:
+            dets = fut.result() if fut is not None else []
         if perfil['recortes'] and people and run_det:
             dets = merge_detections(dets, det.detect_crops(img, [p['box'] for p in people], imgsz=640,
                                                             conf=perfil['conf']))
@@ -407,7 +484,8 @@ class VideoProcessor:
             dets = self.reforco.aplicar(img, people, dets, required, t, ja_recortou=perfil['recortes'],
                                         conf=perfil['conf'])
         employees = self._run_extra_models(img, dets)
-        employees += self._reconhecer_rostos(img)
+        self._medir('pre', inicio)
+        employees += self._reconhecer_rostos(img, p_rosto)
         if analyzer is not None:
             analysis = analyzer.analyze(img, dets, required, det.supported, t=t, employees=employees,
                                         people=people, resolvedor=resolvedor)
@@ -491,6 +569,11 @@ class VideoProcessor:
             'classes': list(self.model_classes),
             'required_items': list(self.required_items),
             'required_labels': [tax.item_label(i) for i in self.required_items],
+            'epis_disponiveis': self.epis_disponiveis(),
+            'ajuda': self.ajuda_status(),
+            # quanto cada etapa leva neste servidor (ms): e com isto que se decide se o par compensa
+            'tempos_ms': {('detector' if isinstance(k, tuple) else k): round(v) for k, v in self._ms.items()},
+            'epis_da_camera': self.config.get('epis') is not None,   # False = seguindo o padrao do modelo
             'zonas': list(self.zonas),
             'areas': [self._areas_por_id().get(z['area_id']) for z in self.zonas
                       if self._areas_por_id().get(z['area_id'])],
@@ -503,6 +586,15 @@ class VideoProcessor:
             'frames_recebidos': len(self.pipeline.taxa_entrada.ts),
             'frames_descartados': stats['pulados'],
         }
+
+    def ajuda_status(self):
+        """Quadros por segundo que outro servidor da conta esta adiantando para esta camera (None = nenhum)."""
+        agora = time.perf_counter()
+        rosto, epi = self._ajudou['rosto'].valor(agora), self._ajudou['epi'].valor(agora)
+        if not (rosto or epi):
+            return None
+        return {'rosto': rosto, 'epi': epi,
+                'pares': [p['nome'] for p in ajuda.resumo() if sum(p['usados'].values())]}
 
     def stop(self):
         self.running = False

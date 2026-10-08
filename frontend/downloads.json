@@ -1,12 +1,12 @@
 {
-    "versao":  "20.2.0",
-    "data":  "2026-10-03",
-    "notas":  "",
+    "versao":  "20.3.0",
+    "data":  "2026-10-08",
+    "notas":  "Botoes de EPI por camera, editor de areas maior, validacao de falso sem-EPI, download mais rapido, desvincular pela janela e servidores dividindo o trabalho.",
     "windows":  {
                     "setup":  {
                                   "url":  "ArgosEPI-Servidor-Setup.exe",
-                                  "tamanho":  123904,
-                                  "sha256":  "8c5bdab21dbbbac090449bb6158c7760a1f24ea6da268beda852e411a0da3805"
+                                  "tamanho":  133120,
+                                  "sha256":  "aec01b61232b1a76f99242c0c66e1d22250871d8995026d64d1baf2da97764f7"
                               },
                     "base":  {
                                  "id":  "3335d94196",
@@ -17,22 +17,22 @@
                              },
                     "programa":  {
                                      "nvidia":  {
-                                                    "url":  "win/argos-programa-20.2.0-nvidia.zip",
-                                                    "tamanho":  48643822,
-                                                    "sha256":  "5370d0e9ac622299c7b633a5f2d73cd9e5ddccb0692e17701428202f67965182",
-                                                    "descompactado":  49695250
+                                                    "url":  "win/argos-programa-20.3.0-nvidia.zip",
+                                                    "tamanho":  48676712,
+                                                    "sha256":  "7e1f6ec17fab442ad566d221eb60b4b086546336a26e1cca5f7668316b96ffd7",
+                                                    "descompactado":  49727287
                                                 },
                                      "dml":  {
-                                                 "url":  "win/argos-programa-20.2.0-dml.zip",
-                                                 "tamanho":  38983637,
-                                                 "sha256":  "fb43b9fb7ae5e42e59d2b746ca6240bdef1f71a2d4106d0fbaa945a024ab0c17",
-                                                 "descompactado":  39997660
+                                                 "url":  "win/argos-programa-20.3.0-dml.zip",
+                                                 "tamanho":  39015338,
+                                                 "sha256":  "c64d1bccb3b25aeeaa7be5405f0b8f442483cc046642278eb1ba777615694f19",
+                                                 "descompactado":  40029697
                                              },
                                      "cpu":  {
-                                                 "url":  "win/argos-programa-20.2.0-cpu.zip",
-                                                 "tamanho":  47973967,
-                                                 "sha256":  "5281d18751381563bf0dd7c9dffa0ea06d1b7a3117cc38eb4ce8ca3c1735f0d5",
-                                                 "descompactado":  49011869
+                                                 "url":  "win/argos-programa-20.3.0-cpu.zip",
+                                                 "tamanho":  48006027,
+                                                 "sha256":  "bdd6f8b194163a056f8a494e8fb98f36688e781eaa2c96a560d4c9e75e17aac8",
+                                                 "descompactado":  49043906
                                              }
                                  },
                     "motor":  {

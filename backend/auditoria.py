@@ -30,6 +30,13 @@ INTERVALO_FOTO_S = 12.0    # espacamento minimo entre fotos do mesmo episodio
 RETENCAO_DIAS = 7          # evidencias sao temporarias
 RETENCAO_EVENTOS_DIAS = 365
 MARGEM_RECORTE = 0.12      # folga ao redor da caixa, para pegar o funcionario todo
+# Validacao: falta curta, que o modelo so deduziu (nao achou o EPI) e que terminou com o EPI
+# visto de novo na mesma pessoa, e marcada como "provavel engano" e sai dos graficos.
+ENGANO_MAX_S = 8.0         # duracao maxima do episodio para ser tratado como engano
+ENGANO_VOLTA_S = 8.0       # o EPI precisa reaparecer ate este tempo depois da ultima falta
+ENGANO_OK_MIN = 3          # vezes em que o EPI foi visto de novo
+# so entra nos graficos e no ranking o que nao foi marcado como engano
+VALIDAS = "(validacao IS NULL OR validacao <> 'engano')"
 
 BASE_DIR = pastas.RAIZ
 # Fuso usado para separar os dias nos graficos. Antes era 'localtime', que o
@@ -97,7 +104,7 @@ def salvar_evidencia(dados_dir: str, uid: str, img, box) -> str:
 
 def episodio(dados_dir, uid, *, stream_id, chave_pessoa, tipo, epi=None, epi_label=None,
              func_id=None, func_nome=None, track_id=None, area_id=None, area_nome=None,
-             detalhe=None, img=None, box=None, t=None):
+             detalhe=None, img=None, box=None, t=None, forte=False):
     """Abre ou mantem um episodio. Chamar a cada quadro-chave em que a violacao existe."""
     t = time.time() if t is None else t
     chave = (uid, stream_id, str(chave_pessoa), tipo, epi or '')
@@ -108,7 +115,8 @@ def episodio(dados_dir, uid, *, stream_id, chave_pessoa, tipo, epi=None, epi_lab
             if est is not None:
                 _encerrar(est)
             est = {'uid': uid, 'dados_dir': dados_dir, 'inicio': t, 'visto': t,
-                   'fotos': [], 'ultima_foto': 0.0, 'rowid': None, 'func_id': func_id}
+                   'fotos': [], 'ultima_foto': 0.0, 'rowid': None, 'func_id': func_id,
+                   'tipo': tipo, 'quadros': 0, 'fortes': 0, 'ok_depois': 0, 'ok_em': None}
             _episodios[chave] = est
             est['rowid'] = registrar(uid, {
                 'ts': t, 'tipo': tipo, 'func_id': func_id, 'func_nome': func_nome,
@@ -116,6 +124,10 @@ def episodio(dados_dir, uid, *, stream_id, chave_pessoa, tipo, epi=None, epi_lab
                 'stream_id': stream_id, 'area_id': area_id, 'area_nome': area_nome,
                 'epi': epi, 'epi_label': epi_label, 'detalhe': detalhe, 'fotos': []})
         est['visto'] = t
+        # forte = a ausencia foi vista de fato (classe sem_capacete...), nao so deduzida
+        est['quadros'] += 1
+        est['fortes'] += 1 if forte else 0
+        est['ok_depois'], est['ok_em'] = 0, None
         # o alerta costuma disparar antes de o rosto ser reconhecido: o episodio
         # abria sem dono e a falta nunca chegava ao desempenho do funcionario.
         # Quando a identidade aparece no mesmo episodio, a linha ganha o dono.
@@ -145,12 +157,50 @@ def episodio(dados_dir, uid, *, stream_id, chave_pessoa, tipo, epi=None, epi_lab
     return est
 
 
+def viu_com_epi(uid, stream_id, chave_pessoa, itens, t=None):
+    """A pessoa esta com estes EPIs agora. So interessa a quem tem episodio aberto do mesmo EPI."""
+    t = time.time() if t is None else t
+    with _ep_lock:
+        for item in itens:
+            est = _episodios.get((uid, stream_id, str(chave_pessoa), 'violacao', item or ''))
+            if est is not None and t > est['visto']:
+                est['ok_depois'] += 1
+                if est['ok_em'] is None:
+                    est['ok_em'] = t
+
+
+def avaliar(est):
+    """(validacao, motivo) de um episodio que terminou. ('', '') = falta normal."""
+    if est.get('tipo') != 'violacao' or not est.get('quadros'):
+        return '', ''
+    dur = max(est['visto'] - est['inicio'], 0.0)
+    voltou = (est['ok_depois'] >= ENGANO_OK_MIN and est['ok_em'] is not None
+              and est['ok_em'] - est['visto'] <= ENGANO_VOLTA_S)
+    deduzida = est['fortes'] * 2 < est['quadros']
+    if dur <= ENGANO_MAX_S and voltou and deduzida:
+        return 'engano', (f"Falta de {dur:.0f} s em que o modelo só não achou o EPI "
+                          f"({est['quadros'] - est['fortes']} de {est['quadros']} quadros) e o EPI "
+                          f"apareceu de novo {max(est['ok_em'] - est['visto'], 0):.0f} s depois.")
+    return '', ''
+
+
 def _encerrar(est):
     if est and est.get('rowid'):
         try:
             _fechar_linha(est['uid'], est['rowid'], est['visto'], est['inicio'], est['fotos'])
+            validacao, motivo = avaliar(est)
+            if validacao:     # quem ja decidiu na mao (validacao preenchida) nao e contrariado
+                db.executar('UPDATE auditoria SET validacao=%s, validacao_motivo=%s'
+                            ' WHERE id=%s AND uid=%s AND validacao IS NULL',
+                            (validacao, motivo, est['rowid'], est['uid']))
         except Exception:
             pass
+
+
+def validar(uid: str, evento_id: int, engano: bool) -> bool:
+    """Decisao de quem usa o painel: 'foi engano' ou 'foi falta mesmo'. Vale sobre a do sistema."""
+    return db.executar('UPDATE auditoria SET validacao=%s, validacao_motivo=%s WHERE id=%s AND uid=%s',
+                       ('engano' if engano else 'confirmada', 'Marcado no painel.', int(evento_id), uid)) > 0
 
 
 def encerrar_vencidos(t=None):
@@ -234,6 +284,11 @@ def desempenho(uid: str, func_id=None, dias=30) -> dict:
     onde, args = ["uid = %s", "tipo = 'violacao'", 'ts >= %s'], [uid, desde]
     if func_id:
         onde.append('func_id = %s'); args.append(func_id)
+    # faltas que a validacao tratou como engano do sistema: ficam no historico, fora dos graficos
+    l = db.consultar_um('SELECT COUNT(*) AS n FROM auditoria WHERE ' + ' AND '.join(onde) +
+                        " AND validacao = 'engano'", args)
+    enganos = int(l['n']) if l else 0
+    onde.append(VALIDAS)
     filtro = ' WHERE ' + ' AND '.join(onde)
 
     por_dia = [{'dia': str(l['dia']), 'violacoes': int(l['n']), 'segundos': round(float(l['s'] or 0), 1)}
@@ -268,16 +323,17 @@ def desempenho(uid: str, func_id=None, dias=30) -> dict:
     # episodio. Sem este numero a ficha de quem nunca foi identificado mostra
     # "tudo certo" enquanto o sistema registrou gente sem EPI no mesmo periodo.
     l = db.consultar_um("SELECT COUNT(*) AS n FROM auditoria WHERE uid = %s AND tipo = 'violacao'"
-                        ' AND ts >= %s AND func_id IS NULL', (uid, desde))
+                        ' AND ts >= %s AND func_id IS NULL AND ' + VALIDAS, (uid, desde))
     nao_atribuidas = int(l['n']) if l else 0
     l = db.consultar_um("SELECT COUNT(*) AS n FROM auditoria WHERE uid = %s AND tipo = 'violacao'"
-                        ' AND ts >= %s', (uid, desde))
+                        ' AND ts >= %s AND ' + VALIDAS, (uid, desde))
     violacoes_no_periodo = int(l['n']) if l else 0
 
     return {'dias': dias, 'total_violacoes': total, 'segundos_em_violacao': round(seg, 1),
             'media_por_dia': round(media, 2), 'indice_conformidade': conformidade,
             'dias_observados': len(por_dia), 'sem_registros': total == 0,
             'nao_atribuidas': nao_atribuidas, 'violacoes_no_periodo': violacoes_no_periodo,
+            'enganos_descartados': enganos,
             'por_dia': por_dia, 'por_epi': por_epi, 'por_area': por_area,
             'por_hora': [{'hora': h, 'violacoes': n} for h, n in enumerate(por_hora)]}
 
@@ -288,7 +344,7 @@ def ranking(uid: str, dias=30, limite=20) -> list:
              'violacoes': int(l['n']), 'segundos': round(float(l['s'] or 0), 1)}
             for l in db.consultar(
                 "SELECT func_id, func_nome, COUNT(*) AS n, SUM(duracao) AS s FROM auditoria"
-                " WHERE uid=%s AND tipo='violacao' AND ts >= %s"
+                " WHERE uid=%s AND tipo='violacao' AND ts >= %s AND " + VALIDAS +
                 ' GROUP BY func_id, func_nome ORDER BY n DESC LIMIT %s', (uid, desde, int(limite)))]
 
 

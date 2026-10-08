@@ -164,6 +164,10 @@ CREATE TABLE IF NOT EXISTS auditoria (
 CREATE INDEX IF NOT EXISTS ix_auditoria_func ON auditoria(uid, func_id, ts DESC);
 CREATE INDEX IF NOT EXISTS ix_auditoria_ts   ON auditoria(uid, ts DESC);
 CREATE INDEX IF NOT EXISTS ix_auditoria_tipo ON auditoria(uid, tipo, ts DESC);
+-- validacao: NULL = falta normal; 'engano' = o sistema (ou a pessoa) concluiu que o EPI estava la;
+-- 'confirmada' = a pessoa conferiu e foi falta mesmo. So 'engano' sai dos graficos.
+ALTER TABLE auditoria ADD COLUMN IF NOT EXISTS validacao TEXT;
+ALTER TABLE auditoria ADD COLUMN IF NOT EXISTS validacao_motivo TEXT;
 """
 
 

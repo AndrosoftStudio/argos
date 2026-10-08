@@ -375,6 +375,13 @@ async function exigirServidor(req) {
   return s;
 }
 
+// O proprio servidor pede para sair da conta (botao "Desvincular" na janela do programa)
+async function desvincularServidor(req) {
+  const s = await exigirServidor(req);
+  await sb('DELETE', `servidores?id=eq.${q(s.id)}`);
+  return { ok: true, message: 'Servidor desvinculado da conta.' };
+}
+
 // O servidor avisa que esta vivo, diz o endereco atual e recebe a lista dos pares da malha
 async function sinalServidor(req) {
   const s = await exigirServidor(req);
@@ -507,6 +514,7 @@ async function rotear(req, caminho) {
   if (a === 'servidores') {
     if (!b && m === 'GET') return listarServidores(req);
     if (b === 'sinal' && m === 'POST') return sinalServidor(req);
+    if (b === 'desvincular' && m === 'POST') return desvincularServidor(req);
     if (b && !c && m === 'PATCH') return renomearServidor(req, b);
     if (b && !c && m === 'DELETE') return removerServidor(req, b);
   }

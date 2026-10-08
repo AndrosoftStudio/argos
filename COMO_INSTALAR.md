@@ -23,6 +23,14 @@ compilado** para a placa escolhida, com os modelos de IA junto. Na pasta instala
 instalado nada mais é baixado. Instalar por cima de uma versão antiga limpa a pasta: ficam só
 `dados\`, `.env`, `models\` e `uploads\`. Não pede administrador em nenhum momento.
 
+O download vem por 8 conexões ao mesmo tempo e continua de onde parou se a internet cair ou a
+janela for fechada (uma conexão que fica lenta é trocada sozinha). **Internet lenta ou vários
+computadores (laboratório):** instale por pendrive, sem internet. No site, em "Baixar o programa
+do servidor", abra "Instale por pendrive" e baixe os 5 arquivos; ponha o instalador e o
+`latest.json` numa pasta e os 3 `.zip` numa subpasta `win`. Aberto dessa pasta, o instalador usa
+os arquivos ao lado e não baixa nada. (Quem tem a pasta de build monta isso com
+`servidor_app\build\montar_pendrive.ps1 -Destino E:\ArgosEPI -Placas cpu`.)
+
 **Linux x64:** baixe o `.tar.gz` (NVIDIA ou CPU) e, no terminal, sem sudo:
 
 ```bash
@@ -45,6 +53,30 @@ rosto) já vêm na instalação. Na versão NVIDIA, a conversão para TensorRT �
 (3 GB de DLLs): o botão "Instalar dependências do TensorRT", no cartão do modelo, baixa o pacote
 já compilado para dentro da pasta do programa.
 Os dados ficam em `dados\` dentro da pasta do programa e nunca são apagados ao atualizar.
+
+## Vários servidores na mesma conta
+
+Cada câmera tem um servidor dono (o painel sugere o mais livre ao adicionar). Além disso,
+servidores da mesma conta que estejam **na mesma rede local** dividem o trabalho de uma câmera:
+o dono continua com o rastreio das pessoas e a decisão sobre os EPIs, e o outro adianta o que é
+pesado e não depende de memória (achar os rostos e rodar o detector de EPIs, quando ele tem o
+mesmo arquivo de modelo). O dono cronometra cada resposta e só conta com o outro quando ele
+responde em menos tempo do que o trabalho levaria aqui; se a resposta atrasa, faz sozinho e
+deixa o outro de fora por um tempo. Para isso o servidor que ajuda precisa aceitar a rede local
+(programa: **Ajustes → Aceitar conexões da rede local**; no Docker já aceita). O quadro da
+câmera nunca viaja pela internet para isso. `ARGOS_AJUDA=0` desliga.
+
+## EPIs por câmera, áreas e validação
+
+- **Câmera:** em Ajustes da câmera, cada ícone de EPI é um botão. Ligado = aquela câmera cobra
+  esse EPI de quem aparece. "Padrão" volta aos EPIs do modelo.
+- **Áreas:** o botão de mapa no topo da câmera abre o editor (imagem grande e inteira). Dá para
+  desenhar ou usar **Câmera inteira**; os EPIs de cada área são os mesmos botões. Onde duas
+  áreas se cruzam vale a menor; fora de todas valem os EPIs da câmera.
+- **Validação:** quem foi visto com o EPI há pouco não o "perde" por alguns quadros em que o
+  modelo falhou: a falta fica em verificação e só vale se durar 4 s. No histórico, a falta curta
+  que o modelo só deduziu e que terminou com o EPI de volta é marcada como **provável engano** e
+  sai dos gráficos (dá para desfazer, ou marcar outra na mão, na ficha do funcionário).
 
 ## Placa de vídeo ou processador
 
@@ -140,8 +172,10 @@ As contas ficam no site. Cada servidor (Docker, `iniciar.bat` ou `iniciar.sh`) �
 a **uma** conta e só processa para ela. Depois do vínculo, ele aparece no site em
 **Servidores** e o painel o encontra sozinho, sem `HUB_API_KEY` e sem configurar nada.
 
-- Trocar a conta do servidor: no site, **Servidores → Desvincular**. Em até 1 minuto
-  ele volta a pedir vínculo (no site: **Servidores → Adicionar este computador**).
+- Trocar a conta do servidor: na janela do programa, **Início → Desvincular da conta** (as
+  câmeras dele param; funcionários, EPIs e histórico continuam guardados no computador), ou no
+  site, **Servidores → Desvincular**. Em até 1 minuto ele volta a pedir vínculo (no site:
+  **Servidores → Adicionar este computador**).
 - O vínculo é feito no site, **no próprio computador do servidor**: a página
   `argosepi.vercel.app/parear.html` lê o código direto do servidor em
   `http://127.0.0.1:8088` (ou na próxima porta até 8097). O servidor só entrega o código

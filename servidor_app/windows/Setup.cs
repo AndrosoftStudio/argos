@@ -6,6 +6,9 @@
 //                                             nvidia (CUDA + TensorRT), dml (AMD/Intel com DirectML) ou cpu
 //   win/argos-base-<id>.zip                   modelos (YOLO e rosto), PostgreSQL e cloudflared
 // O motor e a base so sao baixados de novo quando mudam (id): atualizar costuma baixar so o programa.
+// Download rapido: cada arquivo vem por 8 conexoes ao mesmo tempo (a que fica lenta perde o resto do
+// trecho para as rapidas) e continua de onde parou. Sem internet boa: copie o instalador, o latest.json e a
+// pasta win\ para um pendrive (montar_pendrive.ps1) e abra o instalador de la: ele instala dos arquivos ao lado.
 // Atualizar = rodar de novo (ou o botao "Atualizar" do programa, que chama com --atualizar <pasta>).
 // Instalar por cima limpa a pasta: so ficam dados\ (banco, rostos, gravacoes), .env, models\ e uploads\;
 // o resto (inclusive o Python solto e o codigo das versoes antigas) e apagado.
@@ -38,10 +41,19 @@ namespace ArgosEPI.Instalador
         static void Main(string[] args)
         {
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | (SecurityProtocolType)12288; // TLS 1.2 e 1.3
+            ServicePointManager.DefaultConnectionLimit = 32;   // o padrao (2) anularia o download em paralelo
+            ServicePointManager.Expect100Continue = false;
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            string fonte = Arg(args, "--fonte") ?? FontePadrao;
-            if (!fonte.EndsWith("/")) fonte += "/";
+            string fonte = Arg(args, "--fonte");
+            if (fonte == null)
+            {
+                // pendrive ou pasta da rede: com o latest.json e a pasta win\ ao lado, instala dali (sem internet)
+                var aqui = Path.GetDirectoryName(Application.ExecutablePath);
+                fonte = File.Exists(Path.Combine(aqui, "latest.json")) && Directory.Exists(Path.Combine(aqui, "win")) ? aqui : FontePadrao;
+            }
+            if (fonte.Contains("://")) { if (!fonte.EndsWith("/")) fonte += "/"; }
+            else fonte = Path.GetFullPath(fonte).TrimEnd('\\') + "\\";
             // --portatil: so poe os arquivos na pasta (sem atalhos, sem registro no Windows e sem abrir no fim)
             Application.Run(new Tela(fonte, Arg(args, "--atualizar"), Arg(args, "--variante")) { Portatil = args.Contains("--portatil") });
         }
@@ -220,7 +232,11 @@ namespace ArgosEPI.Instalador
         {
             try
             {
-                var txt = await Task.Run(() => { using (var wc = new WebClient { Encoding = Encoding.UTF8 }) return wc.DownloadString(fonte + "latest.json?n=" + DateTime.UtcNow.Ticks); });
+                var txt = await Task.Run(() =>
+                {
+                    if (FonteLocal) return File.ReadAllText(fonte + "latest.json", Encoding.UTF8);
+                    using (var wc = new WebClient { Encoding = Encoding.UTF8 }) return wc.DownloadString(fonte + "latest.json?n=" + DateTime.UtcNow.Ticks);
+                });
                 manifesto = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(txt);
                 lblVersao.Text = "Versão " + Str(manifesto, "versao") + " · servidor de câmeras com IA para EPIs";
                 var w = Obj(manifesto, "windows");
@@ -238,7 +254,8 @@ namespace ArgosEPI.Instalador
             }
             catch (Exception ex)
             {
-                lblVersao.Text = "Sem acesso aos arquivos de instalação. Confira a internet e abra de novo.";
+                lblVersao.Text = FonteLocal ? "Não consegui ler os arquivos de instalação desta pasta (latest.json)."
+                                            : "Sem acesso aos arquivos de instalação. Confira a internet e abra de novo.";
                 lblVersao.ForeColor = Perigo;
                 Log("latest.json: " + ex.Message);
             }
@@ -324,7 +341,7 @@ namespace ArgosEPI.Instalador
             var basePac = Obj(w, "base");
             var cache = Path.Combine(Path.GetTempPath(), "ArgosEPI-Setup");
             Directory.CreateDirectory(cache);
-            Log("Pasta: " + pasta + " | placa: " + variante + " | fonte: " + fonte);
+            Log("Pasta: " + pasta + " | placa: " + variante + " | fonte: " + fonte + (FonteLocal ? " (arquivos locais)" : ""));
             if (!PastaServe(pasta)) throw new Exception("A pasta escolhida já tem outros arquivos: escolha uma pasta vazia.");
 
             // 1. o que baixar (bibliotecas do motor e base so quando mudam: as atualizacoes ficam pequenas)
@@ -341,16 +358,28 @@ namespace ArgosEPI.Instalador
             arquivos.Add(prog); nomes[prog] = "o programa";
             long total = arquivos.Sum(a => Num(a, "tamanho")), feitoAntes = 0;
             var baixados = new Dictionary<Dictionary<string, object>, string>();
+            var temporarios = new List<string>();   // so o que foi baixado e apagado no fim (o pendrive fica intacto)
             foreach (var a in arquivos)
             {
                 var nome = Path.GetFileName(Str(a, "url"));
-                Etapa("Baixando " + nomes[a], 0);
-                var dest = Path.Combine(cache, nome);
                 long antes = feitoAntes;
-                Baixar(Url(Str(a, "url")), dest, Num(a, "tamanho"), Str(a, "sha256"), (feito, vel) =>
-                    Etapa(null, (int)(700.0 * (antes + feito) / Math.Max(1, total)), Tam(antes + feito) + " de " + Tam(total) + (vel > 0 ? " · " + Tam((long)vel) + "/s" : "")), ct);
                 feitoAntes += Num(a, "tamanho");
+                var local = FonteLocal ? fonte + Str(a, "url").Replace('/', '\\') : null;
+                if (local != null && File.Exists(local) && new FileInfo(local).Length == Num(a, "tamanho"))
+                {
+                    Etapa("Lendo " + nomes[a], (int)(700.0 * feitoAntes / Math.Max(1, total)), "da pasta do instalador");
+                    Log("arquivo local: " + local);
+                    baixados[a] = local;
+                    continue;
+                }
+                // pacote que nao esta na pasta (outra placa, por exemplo): vem da internet
+                if (FonteLocal) Log(nome + " não está na pasta do instalador: baixando da internet");
+                Etapa("Baixando " + nomes[a], -1);
+                var dest = Path.Combine(cache, nome);
+                Baixar(FonteLocal ? Principal.FontePadrao + Str(a, "url") : Url(Str(a, "url")), dest, Num(a, "tamanho"), Str(a, "sha256"), (feito, vel) =>
+                    Etapa(null, (int)(700.0 * (antes + feito) / Math.Max(1, total)), Tam(antes + feito) + " de " + Tam(total) + (vel > 0 ? " · " + Tam((long)vel) + "/s" + Falta(total - antes - feito, vel) : "")), ct);
                 baixados[a] = dest;
+                temporarios.Add(dest);
             }
 
             // 2. fecha o programa aberto (e o banco dele) antes de trocar os arquivos
@@ -397,7 +426,8 @@ namespace ArgosEPI.Instalador
 
             // 5. Windows: WebView2, atalhos, desinstalar, iniciar com o Windows
             Etapa("Preparando o Windows", 960, "");
-            GarantirWebView2(cache);
+            try { GarantirWebView2(cache); }
+            catch (Exception ex) { Log("! Não consegui instalar o WebView2 (" + ex.Message + "). Sem internet? Instale depois o \"Microsoft Edge WebView2 Runtime\": a janela do programa precisa dele."); }
             var exe = Path.Combine(pasta, "ArgosEPI.exe");
             if (!Portatil)
             {
@@ -410,7 +440,7 @@ namespace ArgosEPI.Instalador
             File.WriteAllText(Path.Combine(pasta, "instalacao.json"), new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
                 { "versao", Str(manifesto, "versao") }, { "variante", variante }, { "motor_id", Str(motor, "id") }, { "base_id", Str(basePac, "id") },
                 { "instalado_em", DateTime.Now.ToString("s") } }));
-            foreach (var b in baixados.Values) try { File.Delete(b); } catch { }
+            foreach (var b in temporarios) try { File.Delete(b); } catch { }
             Log("OK");
         }
 
@@ -447,52 +477,295 @@ namespace ArgosEPI.Instalador
             }
         }
 
+        bool FonteLocal { get { return !fonte.Contains("://"); } }
+
         string Url(string u) { return u.Contains("://") ? u : fonte + u; }
 
-        // download com retomada (Range) e conferencia do SHA-256
+        static string Falta(long bytes, double vel)
+        {
+            if (vel < 1024 || bytes <= 0) return "";
+            double s = bytes / vel;
+            return " · falta " + (s < 90 ? Math.Max(1, (int)s) + " s" : s < 5400 ? (int)Math.Round(s / 60) + " min" : (s / 3600).ToString("0.0") + " h");
+        }
+
+        const int Conexoes = 8;
+        const long MinDividir = 256L << 10;   // um trecho com menos de 512 KB pela frente nao e dividido
+
+        // trecho do arquivo que uma conexao esta baixando: [pos, fim)
+        sealed class Trecho { public long pos, fim; public bool emUso; }
+
+        // Download em paralelo, como um gerenciador de downloads: o arquivo comeca dividido em 8 trechos,
+        // um por conexao; quem termina o seu pega a metade final do maior trecho que ainda falta. Redes que
+        // limitam a velocidade por conexao (escola, empresa) somam as 8, e uma conexao que ficou lenta vai
+        // perdendo o que falta para as rapidas e e trocada por uma conexao nova (o endereco publico do R2 as
+        // vezes entrega uma conexao a 100 KB/s ao lado de outras a 8 MB/s). O arquivo .mapa guarda o que
+        // falta: fechar e abrir continua.
+        void BaixarEmBlocos(string url, string parte, long tamanho, Action<long, double> progresso, CancellationToken ct)
+        {
+            var mapaArq = parte + ".mapa";
+            var trechos = new List<Trecho>();
+            long antigo = File.Exists(parte) ? new FileInfo(parte).Length : -1;
+            bool retomou = false;
+            if (antigo == tamanho && File.Exists(mapaArq))
+            {
+                try
+                {
+                    var linhas = File.ReadAllLines(mapaArq);
+                    if (linhas.Length > 0 && linhas[0] == "tamanho " + tamanho)
+                    {
+                        foreach (var l in linhas.Skip(1))
+                        {
+                            var p = l.Split(' ');
+                            long a = long.Parse(p[0]), b = long.Parse(p[1]);
+                            if (a < 0 || b > tamanho || a >= b) throw new FormatException();
+                            trechos.Add(new Trecho { pos = a, fim = b });
+                        }
+                        retomou = true;
+                    }
+                }
+                catch { trechos.Clear(); retomou = false; }
+            }
+            if (!retomou)
+            {
+                // sobra de um instalador antigo (baixava em sequencia, sem mapa): o comeco ja baixado vale
+                long de = antigo > 0 && antigo < tamanho && !File.Exists(mapaArq) ? antigo : 0;
+                long cada = Math.Max(MinDividir, (tamanho - de + Conexoes - 1) / Conexoes);
+                for (long a = de; a < tamanho; a += cada) trechos.Add(new Trecho { pos = a, fim = Math.Min(tamanho, a + cada) });
+            }
+            using (var f = new FileStream(parte, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite)) f.SetLength(tamanho);
+
+            var trava = new object();
+            int ativos = 0;
+            long feito = tamanho - trechos.Sum(t => t.fim - t.pos);
+            long inicio = feito;
+            Exception falha = null;
+            var parar = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var relogio = Stopwatch.StartNew();
+            var recebido = new long[Conexoes];     // bytes por conexao, para achar a que ficou lenta
+            var pedidoDesde = new long[Conexoes];  // quando o pedido atual da conexao comecou (0 = parada)
+            var trocar = new bool[Conexoes];       // conexao lenta demais: fecha e abre outra
+            int trocas = 0;
+            Action salvarMapa = () =>
+            {
+                try
+                {
+                    string txt;
+                    lock (trava) txt = "tamanho " + tamanho + "\n" + string.Join("\n", trechos.Where(t => t.pos < t.fim).Select(t => t.pos + " " + t.fim));
+                    File.WriteAllText(mapaArq, txt);
+                }
+                catch { }
+            };
+            // proximo trecho para uma conexao livre: um que ninguem pegou ou a metade final do maior em andamento
+            Func<Trecho> pegar = () =>
+            {
+                lock (trava)
+                {
+                    trechos.RemoveAll(t => t.pos >= t.fim && !t.emUso);
+                    var livre = trechos.FirstOrDefault(t => !t.emUso && t.pos < t.fim);
+                    if (livre != null) { livre.emUso = true; return livre; }
+                    var maior = trechos.Where(t => t.emUso).OrderByDescending(t => t.fim - t.pos).FirstOrDefault();
+                    if (maior == null || maior.fim - maior.pos < 2 * MinDividir) return null;
+                    long meio = maior.pos + (maior.fim - maior.pos) / 2;
+                    var novo = new Trecho { pos = meio, fim = maior.fim, emUso = true };
+                    maior.fim = meio;
+                    trechos.Add(novo);
+                    return novo;
+                }
+            };
+
+            ParameterizedThreadStart trabalho = (indice) =>
+            {
+                int k = (int)indice;
+                var buf = new byte[128 << 10];
+                try
+                {
+                    using (var fs = new FileStream(parte, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+                    {
+                        Trecho t;
+                        while (!parar.IsCancellationRequested && (t = pegar()) != null)
+                        {
+                            int erros = 0;
+                            while (true)
+                            {
+                                long de, ate;
+                                lock (trava) { de = t.pos; ate = t.fim; }
+                                if (de >= ate) break;
+                                bool andou = false, trocada = false;
+                                try
+                                {
+                                    Volatile.Write(ref trocar[k], false);
+                                    Interlocked.Exchange(ref pedidoDesde[k], Math.Max(1, relogio.ElapsedMilliseconds));
+                                    var req = (HttpWebRequest)WebRequest.Create(url);
+                                    req.UserAgent = "ArgosEPI-Setup";
+                                    req.Timeout = 30000; req.ReadWriteTimeout = 20000;
+                                    req.AddRange(de, ate - 1);
+                                    using (var resp = (HttpWebResponse)req.GetResponse())
+                                    {
+                                        if (resp.StatusCode != HttpStatusCode.PartialContent && !(de == 0 && ate == tamanho))
+                                            throw new NotSupportedException("o servidor não aceita download em partes");
+                                        using (var rs = resp.GetResponseStream())
+                                        {
+                                            fs.Position = de;
+                                            while (true)
+                                            {
+                                                parar.Token.ThrowIfCancellationRequested();
+                                                if (Volatile.Read(ref trocar[k])) { trocada = true; break; }
+                                                int max;
+                                                lock (trava) max = (int)Math.Min(buf.Length, t.fim - t.pos);   // o fim encolhe quando outra conexao leva a metade
+                                                if (max <= 0) break;
+                                                int lido = rs.Read(buf, 0, max);
+                                                if (lido <= 0) break;
+                                                lock (trava) lido = (int)Math.Min(lido, t.fim - t.pos);
+                                                if (lido <= 0) break;
+                                                // grava e so depois avanca a posicao: o mapa nunca diz "pronto" para o que nao foi
+                                                // para o disco. (Quem divide o trecho deixa pelo menos MinDividir, mais que este
+                                                // bloco, entao o fim nao passa para tras do que acabou de ser gravado.)
+                                                fs.Write(buf, 0, lido);
+                                                fs.Flush();
+                                                lock (trava) t.pos += lido;
+                                                Interlocked.Add(ref feito, lido);
+                                                Interlocked.Add(ref recebido[k], lido);
+                                                andou = true;
+                                            }
+                                            // saiu antes do fim da resposta (outra conexao levou a metade, ou esta ficou lenta): fecha e abre outra
+                                            bool cortado;
+                                            lock (trava) cortado = t.fim < ate;
+                                            if (cortado || trocada) try { req.Abort(); } catch { }
+                                        }
+                                    }
+                                    fs.Flush();
+                                }
+                                catch (OperationCanceledException) { return; }
+                                catch (Exception ex)
+                                {
+                                    if (parar.IsCancellationRequested) return;
+                                    bool acabou;
+                                    lock (trava) acabou = t.pos >= t.fim;
+                                    if (acabou) break;   // o erro veio de fechar a resposta no meio: o trecho esta completo
+                                    if (trocada) continue;   // fechada de proposito por estar lenta: pede de novo ja
+                                    erros = andou ? 1 : erros + 1;
+                                    if (ex is NotSupportedException || erros >= 6) { lock (trava) { if (falha == null) falha = ex; } parar.Cancel(); return; }
+                                    if (parar.Token.WaitHandle.WaitOne(1000 * erros)) return;
+                                }
+                            }
+                            lock (trava) t.emUso = false;
+                            Interlocked.Exchange(ref pedidoDesde[k], 0);
+                        }
+                    }
+                }
+                catch (Exception ex) { lock (trava) { if (falha == null) falha = ex; } parar.Cancel(); }
+                finally { Interlocked.Exchange(ref pedidoDesde[k], 0); Interlocked.Decrement(ref ativos); }
+            };
+
+            int quantos = feito >= tamanho ? 0 : Conexoes;
+            ativos = quantos;
+            for (int k = 0; k < quantos; k++) new Thread(trabalho) { IsBackground = true, Name = "baixar-" + k }.Start(k);
+
+            // velocidade = media dos ultimos 4 segundos (a de uma conexao sozinha oscila muito)
+            var amostras = new Queue<Tuple<long, long>>();
+            var porConexao = new Queue<Tuple<long, long[]>>();
+            long ultimoMapa = 0;
+            double pico = 0;   // melhor velocidade de uma conexao nos ultimos segundos (cai 5% por segundo)
+            while (Volatile.Read(ref ativos) > 0)
+            {
+                if (ct.IsCancellationRequested) parar.Cancel();
+                Thread.Sleep(200);
+                long agora = relogio.ElapsedMilliseconds, f = Interlocked.Read(ref feito);
+                amostras.Enqueue(Tuple.Create(agora, f));
+                while (amostras.Count > 2 && agora - amostras.Peek().Item1 > 4000) amostras.Dequeue();
+                var a0 = amostras.Peek();
+                progresso(Math.Min(f, tamanho), agora > a0.Item1 ? Math.Max(0, f - a0.Item2) * 1000.0 / (agora - a0.Item1) : 0);
+                if (agora - ultimoMapa > 1000)
+                {
+                    ultimoMapa = agora;
+                    salvarMapa();
+                    // Conexao que ha 3 s rende menos de 1/4 da melhor: troca por uma nova. A comparacao e com a
+                    // melhor (e nao com a media) porque as lentas tendem a virar maioria: as rapidas terminam logo
+                    // e a cada pedido novo podem cair numa lenta. Se a rede toda e lenta, todas rendem parecido
+                    // e ninguem e trocado.
+                    porConexao.Enqueue(Tuple.Create(agora, (long[])recebido.Clone()));
+                    while (porConexao.Count > 1 && agora - porConexao.Peek().Item1 > 3500) porConexao.Dequeue();
+                    var velha = porConexao.Peek();
+                    if (agora - velha.Item1 >= 2500)
+                    {
+                        pico *= 0.95;
+                        var vel = new List<Tuple<int, double>>();
+                        for (int k = 0; k < quantos; k++)
+                        {
+                            double v = (Interlocked.Read(ref recebido[k]) - velha.Item2[k]) * 1000.0 / (agora - velha.Item1);
+                            pico = Math.Max(pico, v);
+                            long desde = Interlocked.Read(ref pedidoDesde[k]);
+                            if (desde > 0 && desde <= velha.Item1) vel.Add(Tuple.Create(k, v));   // no mesmo pedido a janela inteira
+                        }
+                        foreach (var v in vel)
+                            if (pico > 96 * 1024 && v.Item2 < pico * 0.25) { Volatile.Write(ref trocar[v.Item1], true); trocas++; }
+                    }
+                }
+            }
+            salvarMapa();
+            ct.ThrowIfCancellationRequested();
+            if (falha != null) throw falha;
+            bool falta;
+            lock (trava) falta = trechos.Any(t => t.pos < t.fim);
+            if (falta) throw new IOException("download incompleto");
+            double seg = Math.Max(0.001, relogio.Elapsed.TotalSeconds);
+            if (quantos > 0) Log("  " + Tam(feito - inicio) + " em " + seg.ToString("0") + " s (" + Tam((long)((feito - inicio) / seg)) + "/s, " + quantos + " conexões" +
+                (trocas > 0 ? ", " + trocas + " conexão(ões) lenta(s) trocada(s)" : "") + ")");
+        }
+
+        // um arquivo so, em sequencia: para servidores que nao aceitam download em partes
+        void BaixarSimples(string url, string parte, long tamanho, Action<long, double> progresso, CancellationToken ct)
+        {
+            var req = (HttpWebRequest)WebRequest.Create(url);
+            req.UserAgent = "ArgosEPI-Setup";
+            req.Timeout = 30000; req.ReadWriteTimeout = 60000;
+            using (var resp = (HttpWebResponse)req.GetResponse())
+            using (var rs = resp.GetResponseStream())
+            using (var fs = new FileStream(parte, FileMode.Create, FileAccess.Write))
+            {
+                var buf = new byte[1 << 20];
+                var relogio = Stopwatch.StartNew();
+                long ja = 0, ultimo = 0;
+                int lido;
+                while ((lido = rs.Read(buf, 0, buf.Length)) > 0)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    fs.Write(buf, 0, lido);
+                    ja += lido;
+                    if (relogio.ElapsedMilliseconds - ultimo > 250)
+                    {
+                        ultimo = relogio.ElapsedMilliseconds;
+                        progresso(ja, ja / Math.Max(0.001, relogio.Elapsed.TotalSeconds));
+                    }
+                }
+            }
+        }
+
+        // download com retomada e conferencia do SHA-256
         void Baixar(string url, string dest, long tamanho, string sha, Action<long, double> progresso, CancellationToken ct)
         {
             if (File.Exists(dest) && new FileInfo(dest).Length == tamanho && Sha256(dest) == sha) { Log("já baixado: " + Path.GetFileName(dest)); progresso(tamanho, 0); return; }
             var parte = dest + ".parte";
+            bool emBlocos = true;
             for (int tentativa = 1; ; tentativa++)
             {
                 try
                 {
-                    long ja = File.Exists(parte) ? new FileInfo(parte).Length : 0;
-                    if (ja > tamanho) { File.Delete(parte); ja = 0; }
-                    if (ja < tamanho)
+                    if (File.Exists(parte) && new FileInfo(parte).Length > tamanho) { File.Delete(parte); try { File.Delete(parte + ".mapa"); } catch { } }
+                    if (emBlocos)
                     {
-                        var req = (HttpWebRequest)WebRequest.Create(url);
-                        req.UserAgent = "ArgosEPI-Setup";
-                        req.Timeout = 30000; req.ReadWriteTimeout = 60000;
-                        if (ja > 0) req.AddRange(ja);
-                        using (var resp = (HttpWebResponse)req.GetResponse())
-                        {
-                            if (ja > 0 && resp.StatusCode != HttpStatusCode.PartialContent) ja = 0;
-                            using (var rs = resp.GetResponseStream())
-                            using (var fs = new FileStream(parte, ja > 0 ? FileMode.Append : FileMode.Create, FileAccess.Write))
-                            {
-                                var buf = new byte[1 << 20];
-                                var relogio = Stopwatch.StartNew();
-                                long inicio = ja, ultimo = 0;
-                                int n;
-                                while ((n = rs.Read(buf, 0, buf.Length)) > 0)
-                                {
-                                    ct.ThrowIfCancellationRequested();
-                                    fs.Write(buf, 0, n);
-                                    ja += n;
-                                    if (relogio.ElapsedMilliseconds - ultimo > 250)
-                                    {
-                                        ultimo = relogio.ElapsedMilliseconds;
-                                        progresso(ja, (ja - inicio) / Math.Max(0.001, relogio.Elapsed.TotalSeconds));
-                                    }
-                                }
-                            }
-                        }
+                        try { BaixarEmBlocos(url, parte, tamanho, progresso, ct); }
+                        catch (NotSupportedException) { emBlocos = false; Log("  o servidor não aceita download em partes: baixando em sequência"); }
                     }
+                    if (!emBlocos) BaixarSimples(url, parte, tamanho, progresso, ct);
                     if (new FileInfo(parte).Length != tamanho) throw new IOException("download incompleto");
                     Etapa(null, -1, "Conferindo o arquivo...");
-                    if (!string.IsNullOrEmpty(sha) && Sha256(parte) != sha) { File.Delete(parte); throw new IOException("o arquivo veio corrompido (SHA-256 diferente)"); }
+                    if (!string.IsNullOrEmpty(sha) && Sha256(parte) != sha)
+                    {
+                        File.Delete(parte); try { File.Delete(parte + ".mapa"); } catch { }
+                        throw new IOException("o arquivo veio corrompido (SHA-256 diferente)");
+                    }
+                    try { File.Delete(parte + ".mapa"); } catch { }
                     if (File.Exists(dest)) File.Delete(dest);
                     File.Move(parte, dest);
                     Log("baixado: " + Path.GetFileName(dest));
@@ -701,7 +974,16 @@ namespace ArgosEPI.Instalador
         void Log(string s)
         {
             if (InvokeRequired) { try { BeginInvoke(new Action(() => Log(s))); } catch { } return; }
-            txtLog.AppendText(DateTime.Now.ToString("HH:mm:ss ") + s + Environment.NewLine);
+            var linha = DateTime.Now.ToString("HH:mm:ss ") + s + Environment.NewLine;
+            txtLog.AppendText(linha);
+            // copia em %TEMP%\ArgosEPI-Setup\instalador.log: da para conferir depois de fechar a janela
+            try
+            {
+                var pasta = Path.Combine(Path.GetTempPath(), "ArgosEPI-Setup");
+                Directory.CreateDirectory(pasta);
+                File.AppendAllText(Path.Combine(pasta, "instalador.log"), linha, Encoding.UTF8);
+            }
+            catch { }
         }
 
         static string Rotulo(string v) { return v == "nvidia" ? "NVIDIA" : v == "dml" ? "AMD/Intel" : "CPU"; }
