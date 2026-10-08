@@ -71,7 +71,8 @@ def main():
     w = m['windows']
     arquivos = [w['setup']['url'], w['base']['url']]
     arquivos += [p['url'] for p in (w.get('motor') or {}).values()]
-    arquivos += [p['url'] for p in (w.get('programa') or {}).values()]
+    arquivos += [p['url'] for p in (w.get('nucleo') or {}).values()]
+    arquivos += [p['url'] for p in (w.get('programa2') or {}).values()]
     arquivos += [p['url'] for p in (m.get('linux') or {}).values() if isinstance(p, dict) and p.get('url')]
     for so in (w, m.get('linux') or {}):      # pacotes opcionais (TensorRT)
         for extra in ((so.get('extras') or {}) if isinstance(so, dict) else {}).values():

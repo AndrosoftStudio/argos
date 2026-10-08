@@ -5,7 +5,13 @@
 # Chamado pelo empacotar_windows.ps1 / empacotar_linux.sh com:
 #   ARGOS_RAIZ   pasta do projeto (v20)
 #   ARGOS_PLACA  cpu | dml | nvidia
+# Windows (ARGOS_CODIGO_FORA=1): o executavel leva so as bibliotecas; o codigo do Argos sai para o
+# codigo.pak (montar_codigo.py), e a atualizacao de uma versao para outra baixa so esse arquivo pequeno.
+#   ARGOS_CODIGO_LISTA  onde gravar a lista dos modulos do Argos (entrada do montar_codigo.py)
+#   ARGOS_NUCLEO_ID     onde gravar o id do executavel (muda so quando muda uma biblioteca ou a receita)
 import glob
+import hashlib
+import json
 import os
 import sys
 
@@ -15,6 +21,7 @@ from PyInstaller.utils.hooks import (collect_data_files, collect_dynamic_libs, c
 RAIZ = os.environ['ARGOS_RAIZ']
 PLACA = os.environ.get('ARGOS_PLACA', 'cpu')
 WIN = sys.platform == 'win32'
+CODIGO_FORA = os.environ.get('ARGOS_CODIGO_FORA') == '1'
 
 
 def metadados(*pacotes):
@@ -64,7 +71,8 @@ if PLACA == 'nvidia':
     dados += metadados('onnx', 'tensorrt-cu12', 'tensorrt-cu12-libs', 'tensorrt-cu12-bindings', 'protobuf')
 
 a = Analysis(
-    [os.path.join(RAIZ, 'servidor_app', 'motor.py')],
+    # com o codigo fora, a entrada e o nucleo.py: ele importa o motor.py, que vem do codigo.pak
+    [os.path.join(RAIZ, 'servidor_app', 'build', 'nucleo.py' if CODIGO_FORA else 'motor.py')],
     pathex=[RAIZ, os.path.join(RAIZ, 'backend'), os.path.join(RAIZ, 'scripts'), os.path.join(RAIZ, 'servidor_app')],
     binaries=binarios,
     datas=dados,
@@ -79,6 +87,37 @@ a = Analysis(
     module_collection_mode={'torch': 'pyz', 'torchvision': 'pyz', 'ultralytics': 'pyz', 'onnx': 'pyz'},
     noarchive=False,
 )
+if CODIGO_FORA:
+    import PyInstaller
+
+    def _do_argos(fonte):
+        # pastas sem __init__.py (pacotes de espaco de nomes) aparecem com '-' no lugar do arquivo
+        return os.path.isfile(fonte) and \
+            os.path.normcase(os.path.abspath(fonte)).startswith(os.path.normcase(os.path.abspath(RAIZ)) + os.sep)
+
+    def _sha(arquivo):
+        try:
+            with open(arquivo, 'rb') as f:
+                return hashlib.sha256(f.read()).hexdigest()
+        except OSError:
+            return str(arquivo)
+
+    nossos = sorted((m[0], m[1]) for m in a.pure if _do_argos(m[1]))
+    # as pastas do Argos (backend) saem junto: se ficassem no executavel, ele procuraria backend.app dentro dele
+    pastas_nossas = {nome.rsplit('.', i)[0] for nome, _ in nossos for i in range(1, nome.count('.') + 1)}
+    a.pure = [m for m in a.pure if not _do_argos(m[1]) and not (m[1] == '-' and m[0] in pastas_nossas)]
+    if not any(nome == 'motor' for nome, _ in nossos):
+        raise SystemExit('motor.spec: o PyInstaller nao achou o codigo do Argos a partir do nucleo.py')
+    with open(os.environ['ARGOS_CODIGO_LISTA'], 'w', encoding='utf-8') as f:
+        json.dump([{'nome': nome, 'fonte': fonte, 'pacote': os.path.basename(fonte).startswith('__init__.')}
+                   for nome, fonte in nossos], f, indent=1)
+    # id do executavel: o que entra nele (bibliotecas em Python, scripts de partida, PyInstaller, Python).
+    # O arquivo em si muda a cada compilacao; o id so muda quando muda o que foi compilado.
+    partes = [PyInstaller.__version__, sys.version, PLACA, 'console utf8 sem-upx']
+    partes += sorted(m[0] + ':' + _sha(m[1]) for m in a.pure)
+    partes += [m[0] + ':' + _sha(m[1]) for m in a.scripts]
+    with open(os.environ['ARGOS_NUCLEO_ID'], 'w') as f:
+        f.write(hashlib.sha256('|'.join(partes).encode('utf-8')).hexdigest())
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz,

@@ -507,8 +507,14 @@ class Atualizacao:
             with urllib.request.urlopen(req, timeout=20) as r:
                 m = json.loads(r.read().decode('utf-8'))
             self.manifesto = m
-            if _num_versao(m.get('versao')) > _num_versao(VERSAO):
-                self.disponivel = {'versao': m.get('versao'), 'notas': m.get('notas') or ''}
+            nova = m.get('versao')
+            if not WIN:
+                # o pacote do Linux pode estar numa versao anterior a do Windows: vale a do arquivo dele
+                url = ((m.get('linux') or {}).get(VARIANTE) or {}).get('url') or ''
+                achada = re.search(r'servidor-(\d+(?:\.\d+)+)-', url)
+                nova = achada.group(1) if achada else nova
+            if _num_versao(nova) > _num_versao(VERSAO):
+                self.disponivel = {'versao': nova, 'notas': m.get('notas') or ''}
         except Exception:
             pass
 

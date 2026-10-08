@@ -1,13 +1,14 @@
 # Gera o Argos EPI Servidor para Windows ja compilado (so .exe, .dll/.pyd e arquivos de modelo; nenhum
 # codigo-fonte vai para a instalacao), pronto para subir ao R2:
 #   <Saida>\ArgosEPI-Servidor-Setup.exe (+ copias -nvidia, -amd-intel, -cpu: o site baixa a da placa escolhida)
-#   <Saida>\win\argos-programa-<versao>-<placa>.zip   janela (ArgosEPI.exe), motor\ArgosMotor.exe e recursos.pak
+#   <Saida>\win\argos-programa-<versao>-<placa>.zip   janela (ArgosEPI.exe), codigo.pak (o Argos compilado) e recursos.pak
+#   <Saida>\win\argos-nucleo-<placa>-<id>.zip         motor\ArgosMotor.exe (Python + bibliotecas em Python, sem o codigo do Argos)
 #   <Saida>\win\argos-motor-<placa>-<id>.zip          bibliotecas do motor (.dll/.pyd: Python, PyTorch, OpenCV...)
 #   <Saida>\win\argos-base-<id>.zip                   modelos (YOLO e rosto), PostgreSQL e cloudflared
 #   <Saida>\win\argos-tensorrt-nvidia-<id>.zip        opcional (NVIDIA): DLLs do TensorRT, baixadas pelo botao do painel
 #   <Saida>\latest.json                               o que o instalador e o programa leem
-# O motor e a base so sao refeitos/baixados quando o conteudo muda (o id e o hash dos arquivos):
-# uma atualizacao comum do programa baixa so o argos-programa (dezenas de MB).
+# O nucleo, o motor e a base so sao refeitos/baixados quando o conteudo muda (id):
+# uma atualizacao comum do programa baixa so o argos-programa (~3 MB).
 # Requisitos: Windows 10/11 (csc do .NET Framework, curl, tar) e internet na primeira vez.
 # Uso: powershell -ExecutionPolicy Bypass -File empacotar_windows.ps1 -Versao 20.3.0 [-Placas cpu,nvidia,dml] [-SoJanela]
 param(
@@ -162,7 +163,7 @@ if (-not (Test-Path $zipBase)) {
 $descBase = Descrever $zipBase "win/argos-base-$idBase.zip" $b $idBase
 
 # ---------------------------------------------------------------- motor e programa, por placa
-$programas = @{}; $motores = @{}; $trts = @{}
+$programas = @{}; $nucleos = @{}; $motores = @{}; $trts = @{}
 foreach ($placa in $Placas) {
   $t = $TORCH[$placa]
   # --- Python de montagem (fica so na maquina de build; o usuario recebe o motor compilado)
@@ -206,12 +207,18 @@ foreach ($placa in $Placas) {
   $pyi = Join-Path $palco "pyi-$placa"
   New-Item -ItemType Directory -Force $pyi | Out-Null
   $env:ARGOS_RAIZ = $raiz; $env:ARGOS_PLACA = $placa
+  # o codigo do Argos fica fora do executavel (codigo.pak): ver motor.spec
+  $env:ARGOS_CODIGO_FORA = "1"; $env:ARGOS_CODIGO_LISTA = "$pyi\codigo.json"; $env:ARGOS_NUCLEO_ID = "$pyi\nucleo-id.txt"
   $env:PYTHONHASHSEED = "1"                   # compilacao repetivel (recomendado pelo PyInstaller)
   & $py -m PyInstaller --noconfirm --log-level WARN --distpath "$pyi\dist" --workpath "$pyi\work" "$PSScriptRoot\motor.spec"
   $codigo = $LASTEXITCODE
-  Remove-Item Env:\PYTHONHASHSEED
+  Remove-Item Env:\PYTHONHASHSEED, Env:\ARGOS_CODIGO_FORA, Env:\ARGOS_CODIGO_LISTA, Env:\ARGOS_NUCLEO_ID
   if ($codigo) { throw "falha ao compilar o motor ($placa)" }
   $motor = "$pyi\dist\motor"
+  # o motor procura o codigo.pak na pasta acima da dele, como na instalacao
+  $pak = "$pyi\dist\codigo.pak"
+  & $py "$PSScriptRoot\montar_codigo.py" "$pyi\codigo.json" $pak
+  if ($LASTEXITCODE) { throw "falha ao montar o codigo.pak ($placa)" }
   foreach ($dll in $VCRT) { if (Test-Path "$env:WINDIR\System32\$dll") { Copy-Item "$env:WINDIR\System32\$dll" $motor -Force } }
   # so serve para compilar extensoes em C++ (e scripts de exemplo das bibliotecas): nao vai para o usuario
   Get-ChildItem $motor -Recurse -Include *.lib, *.h, *.hpp, *.cmake, *.pyi, *.pdb, *.sh, *.js, *.html, *.ipynb | Remove-Item -Force -ErrorAction SilentlyContinue
@@ -245,6 +252,32 @@ foreach ($placa in $Placas) {
   if ($publicado) { ManterBaseLibrary $publicado.FullName "$motor\base_library.zip" }
   $idMotor = IdDaPasta $motor @("ArgosMotor.exe", "argos-motor-id.txt")
   Set-Content -Encoding ascii "$motor\argos-motor-id.txt" $idMotor
+  # --- nucleo (o executavel): o id vem do que foi compilado nele (motor.spec) e das bibliotecas com que foi testado
+  $sha = [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes((Get-Content "$pyi\nucleo-id.txt" -Raw).Trim() + ":" + $idMotor))
+  $idNucleo = (($sha[0..4] | ForEach-Object { $_.ToString("x2") }) -join "")
+  $zipNucleo = Join-Path $saida "win\argos-nucleo-$placa-$idNucleo.zip"
+  $pn = Join-Path $palco "nucleo-$placa"
+  if (Test-Path $pn) { Remove-Item $pn -Recurse -Force }
+  New-Item -ItemType Directory -Force "$pn\motor" | Out-Null
+  if (-not (Test-Path $zipNucleo)) {
+    Passo "Empacotando o nucleo do motor ($placa, $idNucleo)"
+    Get-ChildItem "$saida\win" -Filter "argos-nucleo-$placa-*.zip" | Remove-Item -Force
+    Copy-Item "$motor\ArgosMotor.exe" "$pn\motor\"
+    Set-Content -Encoding ascii "$pn\motor\argos-nucleo-id.txt" $idNucleo
+    Zipar $pn $zipNucleo
+  } else {
+    # mesmo id: quem ja instalou fica com o executavel publicado. O codigo novo e testado com ele.
+    Write-Host "   nucleo $placa ($idNucleo) ja pronto: conferindo o codigo novo com ele"
+    [IO.Compression.ZipFile]::ExtractToDirectory($zipNucleo, $pn)
+    Copy-Item "$pn\motor\ArgosMotor.exe" "$motor\ArgosMotor.exe" -Force
+    $env:INSIGHTFACE_ROOT = "$b\models\insightface"
+    & "$motor\ArgosMotor.exe" conferir --rosto --detectar "$b\models\yolo26n.pt"
+    $codigo = $LASTEXITCODE
+    Remove-Item Env:\INSIGHTFACE_ROOT
+    if ($codigo) { throw "o codigo novo nao abre com o nucleo ja publicado ($placa)" }
+  }
+  $nucleos[$placa] = Descrever $zipNucleo "win/argos-nucleo-$placa-$idNucleo.zip" $pn $idNucleo
+  Remove-Item $pn -Recurse -Force
   if ($temTrt) {
     $idTrt = IdDaPasta "$pt\motor"
     Set-Content -Encoding ascii "$pt\motor\argos-trt-id.txt" $idTrt
@@ -274,13 +307,13 @@ foreach ($placa in $Placas) {
                            descompactado = (Tamanho $motor) - (Get-Item "$motor\ArgosMotor.exe").Length }
   $motores[$placa] = $descMotor
 
-  # --- programa: janela, motor (executavel) e recursos
+  # --- programa: janela, codigo do Argos (compilado) e recursos. E o que muda de uma versao para outra.
   Passo "Montando o programa $Versao ($placa)"
   $p = Join-Path $palco "programa-$placa"
   if (Test-Path $p) { Remove-Item $p -Recurse -Force }
-  New-Item -ItemType Directory -Force "$p\motor" | Out-Null
+  New-Item -ItemType Directory -Force $p | Out-Null
   Copy-Item $exeApp, "$sdk\*.dll" $p
-  Copy-Item "$motor\ArgosMotor.exe" "$p\motor\"
+  Copy-Item $pak $p
   & $py "$PSScriptRoot\montar_recursos.py" $raiz "$p\recursos.pak"
   if ($LASTEXITCODE) { throw "falha ao montar o recursos.pak" }
   Set-Content -Encoding ascii "$p\VERSAO.txt" $Versao
@@ -302,11 +335,11 @@ Get-ChildItem "$saida\win" -Include "argos-app-*.zip", "python-*.zip", "python-*
 Passo "latest.json"
 $manifesto = Join-Path $saida "latest.json"
 $atual = if (Test-Path $manifesto) { Get-Content $manifesto -Raw | ConvertFrom-Json } else { $null }
-$prog = [ordered]@{}; $mot = [ordered]@{}; $trt = [ordered]@{}
+$prog = [ordered]@{}; $nuc = [ordered]@{}; $mot = [ordered]@{}; $trt = [ordered]@{}
 foreach ($k in "nvidia", "dml", "cpu") {
-  if ($programas.ContainsKey($k)) { $prog[$k] = $programas[$k]; $mot[$k] = $motores[$k]; if ($trts.ContainsKey($k)) { $trt[$k] = $trts[$k] } }
-  elseif ($atual -and $atual.versao -eq $Versao -and $atual.windows.programa.$k) {
-    $prog[$k] = $atual.windows.programa.$k; $mot[$k] = $atual.windows.motor.$k
+  if ($programas.ContainsKey($k)) { $prog[$k] = $programas[$k]; $nuc[$k] = $nucleos[$k]; $mot[$k] = $motores[$k]; if ($trts.ContainsKey($k)) { $trt[$k] = $trts[$k] } }
+  elseif ($atual -and $atual.versao -eq $Versao -and $atual.windows.programa2.$k) {
+    $prog[$k] = $atual.windows.programa2.$k; $nuc[$k] = $atual.windows.nucleo.$k; $mot[$k] = $atual.windows.motor.$k
     if ($atual.windows.extras.tensorrt.$k) { $trt[$k] = $atual.windows.extras.tensorrt.$k }
   }
 }
@@ -318,7 +351,8 @@ $m = [ordered]@{
   windows = [ordered]@{
     setup = [ordered]@{ url = "ArgosEPI-Servidor-Setup.exe"; tamanho = (Get-Item $setup).Length; sha256 = (Sha $setup) }
     base = $descBase
-    programa = $prog
+    programa2 = $prog                           # chave nova: instalador antigo nao instala o formato novo pela metade
+    nucleo = $nuc
     motor = $mot
     extras = [ordered]@{ tensorrt = $trt }      # opcional: baixado pelo botao do painel (so NVIDIA)
   }

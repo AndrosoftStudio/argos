@@ -16,8 +16,8 @@ $m = Get-Content (Join-Path $Saida "latest.json") -Raw | ConvertFrom-Json
 New-Item -ItemType Directory -Force (Join-Path $Destino "win") | Out-Null
 $arquivos = @("latest.json", "ArgosEPI-Servidor-Setup.exe", $m.windows.base.url)
 foreach ($p in $Placas) {
-  if (-not $m.windows.programa.$p) { throw "placa desconhecida ou nao empacotada: $p (use cpu, dml ou nvidia)" }
-  $arquivos += $m.windows.programa.$p.url, $m.windows.motor.$p.url
+  if (-not $m.windows.programa2.$p) { throw "placa desconhecida ou nao empacotada: $p (use cpu, dml ou nvidia)" }
+  $arquivos += $m.windows.programa2.$p.url, $m.windows.nucleo.$p.url, $m.windows.motor.$p.url
 }
 $total = 0
 foreach ($a in $arquivos) {

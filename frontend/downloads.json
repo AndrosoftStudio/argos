@@ -1,12 +1,12 @@
 {
-    "versao":  "20.3.1",
+    "versao":  "20.3.2",
     "data":  "2026-10-08",
-    "notas":  "O programa mostra quando esta sem endereco de internet (tunel) e por que; o tunel reabre sozinho se cair.",
+    "notas":  "Atualizar ficou bem mais rapido: daqui em diante cada versao nova baixa so uns 3 MB (esta primeira ainda baixa cerca de 45 MB). O programa mostra quando esta sem endereco de internet e por que.",
     "windows":  {
                     "setup":  {
                                   "url":  "ArgosEPI-Servidor-Setup.exe",
-                                  "tamanho":  133120,
-                                  "sha256":  "8a658dbf7423cf33c3ea423f74a6ac7ffd3b9008a25065d2da52cedbb77f71aa"
+                                  "tamanho":  134144,
+                                  "sha256":  "b2b9ff7e2a934589df241e5f7e80158ab70b10e9655cf851ab5732c02cae3325"
                               },
                     "base":  {
                                  "id":  "3335d94196",
@@ -15,26 +15,49 @@
                                  "sha256":  "0bceecd7605601e638111cfaf5bdb76d87e580acae3b5e9686203fa4553b1765",
                                  "descompactado":  479695260
                              },
-                    "programa":  {
-                                     "nvidia":  {
-                                                    "url":  "win/argos-programa-20.3.1-nvidia.zip",
-                                                    "tamanho":  48679323,
-                                                    "sha256":  "2ee0a9a23b4ac1798223461b5ac73bac34ab2dedd9b6f7fbe42455053eed2c3d",
-                                                    "descompactado":  49729979
-                                                },
-                                     "dml":  {
-                                                 "url":  "win/argos-programa-20.3.1-dml.zip",
-                                                 "tamanho":  39018205,
-                                                 "sha256":  "98eea6139f8ae4046ecd7c2af491f5c2665fce996434a2ddf4b8517b45428f25",
-                                                 "descompactado":  40032389
-                                             },
-                                     "cpu":  {
-                                                 "url":  "win/argos-programa-20.3.1-cpu.zip",
-                                                 "tamanho":  48008982,
-                                                 "sha256":  "0de5856dc3a5d265ac5f6133712aa2a9e3c15782e5e19a71cc823ad0b86df592",
-                                                 "descompactado":  49046598
-                                             }
-                                 },
+                    "programa2":  {
+                                      "nvidia":  {
+                                                     "url":  "win/argos-programa-20.3.2-nvidia.zip",
+                                                     "tamanho":  2565699,
+                                                     "sha256":  "75e0650921989a10c249254bc573fba5a56ddfa625cdc4d0f1e0fc811447d83e",
+                                                     "descompactado":  3235856
+                                                 },
+                                      "dml":  {
+                                                  "url":  "win/argos-programa-20.3.2-dml.zip",
+                                                  "tamanho":  2565699,
+                                                  "sha256":  "442666810720f4d26004c32ad928b72b23e5523814963e1bc6aa032e41d86dbc",
+                                                  "descompactado":  3235856
+                                              },
+                                      "cpu":  {
+                                                  "url":  "win/argos-programa-20.3.2-cpu.zip",
+                                                  "tamanho":  2565699,
+                                                  "sha256":  "69daf7391b5bc7f36968de88dd49e3e8d75faaed400d2cccbc19918dcf67b527",
+                                                  "descompactado":  3235856
+                                              }
+                                  },
+                    "nucleo":  {
+                                   "nvidia":  {
+                                                  "id":  "ce84850711",
+                                                  "url":  "win/argos-nucleo-nvidia-ce84850711.zip",
+                                                  "tamanho":  46116452,
+                                                  "sha256":  "641671d1aa6c75f319ed0f7860f02334cdc7be1479dab89004b922cee276ad64",
+                                                  "descompactado":  46497412
+                                              },
+                                   "dml":  {
+                                               "id":  "6a646c7cf1",
+                                               "url":  "win/argos-nucleo-dml-6a646c7cf1.zip",
+                                               "tamanho":  36455527,
+                                               "sha256":  "65c778403b7ee9500a39bf8a17fba92ad3b111d94c725e3628222ba8f0352646",
+                                               "descompactado":  36799822
+                                           },
+                                   "cpu":  {
+                                               "id":  "a9bdcdeeb6",
+                                               "url":  "win/argos-nucleo-cpu-a9bdcdeeb6.zip",
+                                               "tamanho":  45446188,
+                                               "sha256":  "525de2faf9f146a71e740ab682b9d631fcb2799b3f90b76e03ffc40a70c39845",
+                                               "descompactado":  45814031
+                                           }
+                               },
                     "motor":  {
                                   "nvidia":  {
                                                  "id":  "2d198de5c3",

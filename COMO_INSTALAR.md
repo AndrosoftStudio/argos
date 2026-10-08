@@ -54,6 +54,11 @@ rosto) já vêm na instalação. Na versão NVIDIA, a conversão para TensorRT �
 já compilado para dentro da pasta do programa.
 Os dados ficam em `dados\` dentro da pasta do programa e nunca são apagados ao atualizar.
 
+**Atualizar** (botão do programa, no Windows) não instala tudo de novo: bibliotecas, modelos e
+banco ficam como estão e só o programa em si é trocado (cerca de 3 MB a partir da 20.3.2; a
+passagem de uma versão anterior para a 20.3.2 ainda baixa uns 45 MB, uma vez só). As bibliotecas
+só voltam a ser baixadas quando uma delas muda de versão.
+
 ## Vários servidores na mesma conta
 
 Cada câmera tem um servidor dono (o painel sugere o mais livre ao adicionar). Além disso,

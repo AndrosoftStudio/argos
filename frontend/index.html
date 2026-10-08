@@ -816,16 +816,16 @@ function BaixarServidor(){
   if(man){
     if(so==='windows'){
       const w=man.windows||{};
-      // programa compilado: janela + motor (.exe), bibliotecas do motor (.dll) e base (modelos, banco)
-      const prog=(w.programa||{})[placaOk], motor=(w.motor||{})[placaOk];
+      // programa compilado: janela + código (pequeno), núcleo do motor (.exe), bibliotecas do motor (.dll) e base (modelos, banco)
+      const prog=(w.programa2||w.programa||{})[placaOk], nucleo=(w.nucleo||{})[placaOk], motor=(w.motor||{})[placaOk];
       if(prog&&motor){
         const nomeSetup={nvidia:'nvidia',dml:'amd-intel',cpu:'cpu'}[placaOk];
         link=DOWNLOADS_URL+'ArgosEPI-Servidor-Setup-'+nomeSetup+'.exe';
-        tamanho=(prog.tamanho||0)+(motor.tamanho||0)+((w.base||{}).tamanho||0);
+        tamanho=(prog.tamanho||0)+((nucleo||{}).tamanho||0)+(motor.tamanho||0)+((w.base||{}).tamanho||0);
         nota=`O instalador é pequeno: ele baixa o programa já compilado (${tamTxt(tamanho)}) por várias conexões ao mesmo tempo e continua de onde parou se a internet cair. Os modelos de IA vêm junto; depois de instalado nada mais é baixado. Não precisa de administrador.`;
         // instalar sem internet: o instalador usa os pacotes que estiverem ao lado dele (pasta win)
         pendrive=[{nome:link.split('/').pop(),url:link,onde:''},{nome:'latest.json',url:DOWNLOADS_URL+'latest.json',onde:''},
-          ...[w.base,motor,prog].filter(Boolean).map(a=>({nome:a.url.split('/').pop(),url:DOWNLOADS_URL+a.url,onde:'win',tam:a.tamanho}))];
+          ...[w.base,motor,nucleo,prog].filter(Boolean).map(a=>({nome:a.url.split('/').pop(),url:DOWNLOADS_URL+a.url,onde:'win',tam:a.tamanho}))];
       }
     }else{
       const l=(man.linux||{})[placaOk];

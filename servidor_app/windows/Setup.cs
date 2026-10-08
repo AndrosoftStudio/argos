@@ -1,11 +1,14 @@
 // Argos EPI Servidor - instalador (ArgosEPI-Servidor-Setup.exe). Nao precisa de administrador.
 // Pequeno: le o latest.json da pasta de downloads (R2) e baixa so o que a maquina precisa, tudo ja compilado
 // (so .exe, .dll/.pyd e arquivos de modelo; nenhum codigo-fonte e nada para baixar depois de instalado):
-//   win/argos-programa-<versao>-<placa>.zip   janela (ArgosEPI.exe), motor\ArgosMotor.exe e recursos.pak
-//   win/argos-motor-<placa>-<id>.zip          bibliotecas do motor (Python, PyTorch, OpenCV... em .dll), por placa:
+//   win/argos-programa-<versao>-<placa>.zip   janela (ArgosEPI.exe), codigo.pak (o Argos compilado) e recursos.pak: ~3 MB
+//   win/argos-nucleo-<placa>-<id>.zip         motor\ArgosMotor.exe: o Python e as bibliotecas em Python, sem o codigo do Argos
+//   win/argos-motor-<placa>-<id>.zip          bibliotecas do motor (PyTorch, OpenCV... em .dll), por placa:
 //                                             nvidia (CUDA + TensorRT), dml (AMD/Intel com DirectML) ou cpu
 //   win/argos-base-<id>.zip                   modelos (YOLO e rosto), PostgreSQL e cloudflared
-// O motor e a base so sao baixados de novo quando mudam (id): atualizar costuma baixar so o programa.
+// O nucleo, o motor e a base so sao baixados de novo quando mudam (id): atualizar baixa so o programa (~3 MB).
+// No latest.json o programa fica em windows.programa2: a chave antiga (programa) trazia o ArgosMotor.exe
+// dentro, e um instalador antigo lendo o formato novo instalaria pela metade; sem ela, ele pede o instalador novo.
 // Download rapido: cada arquivo vem por 8 conexoes ao mesmo tempo (a que fica lenta perde o resto do
 // trecho para as rapidas) e continua de onde parou. Sem internet boa: copie o instalador, o latest.json e a
 // pasta win\ para um pendrive (montar_pendrive.ps1) e abra o instalador de la: ele instala dos arquivos ao lado.
@@ -240,11 +243,11 @@ namespace ArgosEPI.Instalador
                 manifesto = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(txt);
                 lblVersao.Text = "Versão " + Str(manifesto, "versao") + " · servidor de câmeras com IA para EPIs";
                 var w = Obj(manifesto, "windows");
-                if (Obj(w, "programa") == null || Obj(w, "base") == null)
+                if (Obj(w, "programa2") == null || Obj(w, "nucleo") == null || Obj(w, "base") == null)
                     throw new Exception("este instalador é de outra versão: baixe o instalador de novo pelo site");
                 foreach (var kv in radios)
                 {
-                    if (Obj(Obj(w, "programa"), kv.Key) == null || Obj(Obj(w, "motor"), kv.Key) == null) { kv.Value.Enabled = false; continue; }
+                    if (Obj(Obj(w, "programa2"), kv.Key) == null || Obj(Obj(w, "nucleo"), kv.Key) == null || Obj(Obj(w, "motor"), kv.Key) == null) { kv.Value.Enabled = false; continue; }
                     kv.Value.Text += "  ·  " + Tam(Soma(kv.Key, "tamanho"));
                 }
                 if (!radios[variante].Enabled) radios.Values.First(r => r.Enabled).Checked = true;
@@ -283,11 +286,12 @@ namespace ArgosEPI.Instalador
             lblEspaco.Text = "Baixa " + Tam(baixar) + " e ocupa cerca de " + Tam(ocupa) + livre;
         }
 
-        // programa + bibliotecas do motor + base, para a placa escolhida
+        // programa + nucleo + bibliotecas do motor + base, para a placa escolhida
         long Soma(string placa, string campo)
         {
             var w = Obj(manifesto, "windows");
-            return Num(Obj(Obj(w, "programa"), placa), campo) + Num(Obj(Obj(w, "motor"), placa), campo) + Num(Obj(w, "base"), campo);
+            return Num(Obj(Obj(w, "programa2"), placa), campo) + Num(Obj(Obj(w, "nucleo"), placa), campo)
+                 + Num(Obj(Obj(w, "motor"), placa), campo) + Num(Obj(w, "base"), campo);
         }
 
         // so instala em pasta vazia ou onde o Argos ja esta (a limpeza apagaria arquivos de outra coisa)
@@ -336,7 +340,8 @@ namespace ArgosEPI.Instalador
         void Executar(string pasta, bool iniciar, bool atalho, CancellationToken ct)
         {
             var w = Obj(manifesto, "windows");
-            var prog = Obj(Obj(w, "programa"), variante);
+            var prog = Obj(Obj(w, "programa2"), variante);
+            var nucleo = Obj(Obj(w, "nucleo"), variante);
             var motor = Obj(Obj(w, "motor"), variante);
             var basePac = Obj(w, "base");
             var cache = Path.Combine(Path.GetTempPath(), "ArgosEPI-Setup");
@@ -344,9 +349,11 @@ namespace ArgosEPI.Instalador
             Log("Pasta: " + pasta + " | placa: " + variante + " | fonte: " + fonte + (FonteLocal ? " (arquivos locais)" : ""));
             if (!PastaServe(pasta)) throw new Exception("A pasta escolhida já tem outros arquivos: escolha uma pasta vazia.");
 
-            // 1. o que baixar (bibliotecas do motor e base so quando mudam: as atualizacoes ficam pequenas)
+            // 1. o que baixar (nucleo, bibliotecas do motor e base so quando mudam: as atualizacoes ficam pequenas)
             bool precisaMotor = Marca(Path.Combine(pasta, "motor", "argos-motor-id.txt")) != Str(motor, "id");
             bool precisaBase = Marca(Path.Combine(pasta, "bin", "argos-base-id.txt")) != Str(basePac, "id");
+            // o nucleo mora dentro de motor\: volta junto quando o motor e trocado
+            bool precisaNucleo = precisaMotor || Marca(Path.Combine(pasta, "motor", "argos-nucleo-id.txt")) != Str(nucleo, "id");
             var arquivos = new List<Dictionary<string, object>>();
             var nomes = new Dictionary<Dictionary<string, object>, string>();
             if (precisaBase) { arquivos.Add(basePac); nomes[basePac] = "os modelos e o banco de dados"; } else Log("Modelos e banco já instalados: não precisa baixar de novo.");
@@ -355,6 +362,7 @@ namespace ArgosEPI.Instalador
             var trt = Obj(Obj(Obj(w, "extras"), "tensorrt"), variante);
             bool refazTrt = precisaMotor && trt != null && File.Exists(Path.Combine(pasta, "motor", "argos-trt-id.txt"));
             if (refazTrt) { arquivos.Add(trt); nomes[trt] = "o TensorRT (já estava instalado)"; }
+            if (precisaNucleo) { arquivos.Add(nucleo); nomes[nucleo] = "o núcleo do motor"; } else Log("Núcleo " + Str(nucleo, "id") + " já instalado: não precisa baixar de novo.");
             arquivos.Add(prog); nomes[prog] = "o programa";
             long total = arquivos.Sum(a => Num(a, "tamanho")), feitoAntes = 0;
             var baixados = new Dictionary<Dictionary<string, object>, string>();
@@ -420,6 +428,12 @@ namespace ArgosEPI.Instalador
                 var f = faixa(trt);
                 Extrair(baixados[trt], pasta, f[0], f[1], ct);
             }
+            if (precisaNucleo)
+            {
+                Etapa("Instalando o núcleo do motor", -1, "");
+                var f = faixa(nucleo);
+                Extrair(baixados[nucleo], pasta, f[0], f[1], ct);
+            }
             Etapa("Instalando o programa", -1, "");
             var fp = faixa(prog);
             Extrair(baixados[prog], pasta, fp[0], fp[1], ct);
@@ -438,7 +452,7 @@ namespace ArgosEPI.Instalador
                 if (iniciar) IniciarComWindows(pasta, exe);
             }
             File.WriteAllText(Path.Combine(pasta, "instalacao.json"), new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
-                { "versao", Str(manifesto, "versao") }, { "variante", variante }, { "motor_id", Str(motor, "id") }, { "base_id", Str(basePac, "id") },
+                { "versao", Str(manifesto, "versao") }, { "variante", variante }, { "motor_id", Str(motor, "id") }, { "nucleo_id", Str(nucleo, "id") }, { "base_id", Str(basePac, "id") },
                 { "instalado_em", DateTime.Now.ToString("s") } }));
             foreach (var b in temporarios) try { File.Delete(b); } catch { }
             Log("OK");
