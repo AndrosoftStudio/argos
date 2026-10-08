@@ -73,16 +73,16 @@
                 },
     "linux":  {
                   "cpu":  {
-                              "url":  "linux/argos-epi-servidor-20.2.0-cpu.tar.gz",
-                              "tamanho":  802515307,
-                              "sha256":  "1dc66eaa060a4f10c3d9cee44308ef5ee2c3759e687de53c7e051ed24e1cbb49",
-                              "descompactado":  1737559714
+                              "url":  "linux/argos-epi-servidor-20.3.0-cpu.tar.gz",
+                              "tamanho":  802616045,
+                              "sha256":  "cea08bf12a319fcab4547423bf0a952c9b737dc828cddda099a370ff32a84ce0",
+                              "descompactado":  1737583261
                           },
                   "nvidia":  {
-                                 "url":  "linux/argos-epi-servidor-20.2.0-nvidia.tar.gz",
-                                 "tamanho":  4417949585,
-                                 "sha256":  "772f51e5216adf7147a8b82eda346584cf83be9ccd142bee744ec98d3748e3ec",
-                                 "descompactado":  7624559539
+                                 "url":  "linux/argos-epi-servidor-20.3.0-nvidia.tar.gz",
+                                 "tamanho":  4418011417,
+                                 "sha256":  "afbfbecf5b4dd7f3a587fa4398761820895245a2c4c2de8f4dcecd0ed4b0eb95",
+                                 "descompactado":  7624583086
                              }
               }
 }
