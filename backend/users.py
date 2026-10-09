@@ -199,24 +199,36 @@ def set_restrictions(uid: str, restricoes: list) -> bool:
 
 # ── Tokens de camera (celular usado como camera) ────────────────────
 
-def create_cam_token(uid: str, nome: str) -> Optional[dict]:
-    token = 'cam_' + uuid.uuid4().hex[:16]
+def create_cam_token(uid: str, nome: str, tipo: str = 'camera') -> Optional[dict]:
+    """Link de dispositivo: 'camera' (celular que manda video, token cam_) ou 'tv' (tela que toca
+    a sirene e fala os avisos, token tv_). O token de TV nao serve para mais nada."""
+    tipo = 'tv' if tipo == 'tv' else 'camera'
+    token = ('tv_' if tipo == 'tv' else 'cam_') + uuid.uuid4().hex[:16]
     agora = time.time()
     try:
-        db.executar('INSERT INTO cam_tokens (token, uid, nome, criado_em) VALUES (%s,%s,%s,%s)',
-                    (token, uid, nome, agora))
-        return {'token': token, 'nome': nome, 'created_at': agora}
+        db.executar('INSERT INTO cam_tokens (token, uid, nome, criado_em, tipo) VALUES (%s,%s,%s,%s,%s)',
+                    (token, uid, nome, agora, tipo))
+        return {'token': token, 'nome': nome, 'created_at': agora, 'tipo': tipo}
     except Exception:
         return None
 
 
-def list_cam_tokens(uid: str) -> list:
+def list_cam_tokens(uid: str, tipo: str = None) -> list:
     try:
-        return [{'token': l['token'], 'nome': l['nome'], 'created_at': l['criado_em']}
-                for l in db.consultar(
-                    'SELECT token, nome, criado_em FROM cam_tokens WHERE uid=%s ORDER BY criado_em DESC', (uid,))]
+        linhas = [{'token': l['token'], 'nome': l['nome'], 'created_at': l['criado_em'],
+                   'tipo': 'tv' if str(l['token']).startswith('tv_') else 'camera'}
+                  for l in db.consultar(
+                      'SELECT token, nome, criado_em FROM cam_tokens WHERE uid=%s ORDER BY criado_em DESC', (uid,))]
+        return [l for l in linhas if not tipo or l['tipo'] == tipo]
     except Exception:
         return []
+
+
+def rename_cam_token(uid: str, token: str, nome: str) -> bool:
+    try:
+        return db.executar('UPDATE cam_tokens SET nome=%s WHERE uid=%s AND token=%s', (nome, uid, token)) > 0
+    except Exception:
+        return False
 
 
 def delete_cam_token(uid: str, token: str) -> bool:

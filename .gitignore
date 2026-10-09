@@ -28,6 +28,9 @@ backend/users.json.migrated
 *.torchscript
 models/
 weights/
+
+# Programas auxiliares baixados (MediaMTX, Piper e a voz): vem do instalador ou sao baixados na hora.
+midia/
 runs/
 treinamento/runs/
 treinamento/weights/

@@ -61,14 +61,24 @@ def dir_evidencias(dados_dir: str, uid: str) -> str:
 def registrar(uid: str, evento: dict) -> int:
     linha = db.inserir_retornando(
         'INSERT INTO auditoria (uid,ts,fim,duracao,tipo,func_id,func_nome,track_id,stream_id,'
-        'area_id,area_nome,epi,epi_label,detalhe,fotos)'
-        ' VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb) RETURNING id',
+        'area_id,area_nome,epi,epi_label,detalhe,fotos,exigidos)'
+        ' VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb) RETURNING id',
         (uid, float(evento.get('ts') or time.time()), evento.get('fim'), evento.get('duracao'),
          evento.get('tipo'), evento.get('func_id'), evento.get('func_nome'),
          evento.get('track_id'), evento.get('stream_id'), evento.get('area_id'),
          evento.get('area_nome'), evento.get('epi'), evento.get('epi_label'),
-         evento.get('detalhe'), json.dumps(evento.get('fotos') or [])))
+         evento.get('detalhe'), json.dumps(evento.get('fotos') or []),
+         json.dumps(evento.get('exigidos')) if evento.get('exigidos') is not None else None))
     return linha['id'] if linha else None
+
+
+def registrar_aviso(uid: str, rowids, aviso: dict) -> int:
+    """A TV falou sobre estas faltas: guarda a frase, a TV, o volume e a hora em cada uma."""
+    ids = [int(r) for r in rowids or () if r]
+    if not ids:
+        return 0
+    return db.executar("UPDATE auditoria SET avisos = coalesce(avisos, '[]'::jsonb) || %s::jsonb"
+                       ' WHERE uid = %s AND id = ANY(%s)', (json.dumps([aviso]), uid, ids))
 
 
 def _fechar_linha(uid, rowid, fim, inicio, fotos):
@@ -104,7 +114,7 @@ def salvar_evidencia(dados_dir: str, uid: str, img, box) -> str:
 
 def episodio(dados_dir, uid, *, stream_id, chave_pessoa, tipo, epi=None, epi_label=None,
              func_id=None, func_nome=None, track_id=None, area_id=None, area_nome=None,
-             detalhe=None, img=None, box=None, t=None, forte=False):
+             detalhe=None, img=None, box=None, t=None, forte=False, exigidos=None):
     """Abre ou mantem um episodio. Chamar a cada quadro-chave em que a violacao existe."""
     t = time.time() if t is None else t
     chave = (uid, stream_id, str(chave_pessoa), tipo, epi or '')
@@ -122,7 +132,8 @@ def episodio(dados_dir, uid, *, stream_id, chave_pessoa, tipo, epi=None, epi_lab
                 'ts': t, 'tipo': tipo, 'func_id': func_id, 'func_nome': func_nome,
                 'track_id': str(track_id) if track_id is not None else None,
                 'stream_id': stream_id, 'area_id': area_id, 'area_nome': area_nome,
-                'epi': epi, 'epi_label': epi_label, 'detalhe': detalhe, 'fotos': []})
+                'epi': epi, 'epi_label': epi_label, 'detalhe': detalhe, 'fotos': [],
+                'exigidos': exigidos})
         est['visto'] = t
         # forte = a ausencia foi vista de fato (classe sem_capacete...), nao so deduzida
         est['quadros'] += 1
@@ -235,7 +246,22 @@ def _linha(l) -> dict:
         except ValueError:
             fotos = []
     d['fotos'] = fotos or []
+    for campo in ('exigidos', 'avisos'):
+        v = d.get(campo)
+        if isinstance(v, str):
+            try:
+                v = json.loads(v or '[]')
+            except ValueError:
+                v = []
+        d[campo] = v or []
+    # episodio ainda aberto: a pessoa continua sem o EPI (a linha fecha quando a falta some)
+    d['em_andamento'] = d.get('tipo') == 'violacao' and _aberto(d)
     return d
+
+
+def _aberto(d) -> bool:
+    with _ep_lock:
+        return any(e.get('rowid') == d.get('id') for e in _episodios.values())
 
 
 def eventos(uid: str, func_id=None, tipo=None, desde=None, ate=None,

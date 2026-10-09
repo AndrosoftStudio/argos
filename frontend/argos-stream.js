@@ -1,15 +1,21 @@
 /* argos-stream.js — câmeras ao vivo do Argos EPI. Usado por cam.html (celular) e index.html (painel).
    Sem dependências.
 
-   Os três modos (tempo real, detalhado, super) são ao vivo: a câmera manda quadros com o horário de
-   captura, o servidor analisa com um atraso fixo por modo e devolve o resultado de cada quadro no
-   ritmo original. O modo, o fps e a resolução são escolhidos no painel; a câmera só obedece.
+   Tempo real é imediato: nada é guardado. A câmera manda vídeo de verdade (H.264/VP8) por WebRTC,
+   direto para o servidor (UDP; o aperto de mãos passa pelo endereço de sempre). A tela mostra o
+   vídeo ao vivo e, por cima, as caixas do resultado mais novo. Se a conexão direta não fecha, o
+   envio volta sozinho para quadros JPEG pelo WebSocket, ainda sem atraso proposital.
 
-   LiveSender  captura, codifica e envia (WebSocket, com HTTP de reserva). Guarda os quadros até o
-               servidor confirmar: se a conexão cai, reenvia os que ainda cabem no atraso do modo.
-               Ajusta qualidade, tamanho e fps à rede.
-   LivePlayer  mostra quadro + caixas sincronizados pelo número do quadro, com buffer contra oscilação.
-   LiveViewer  painel assistindo um stream do servidor (vídeo + resultado pelo WebSocket /ws/view).
+   Detalhado e super continuam com atraso fixo: a câmera manda quadros com o horário de captura,
+   o servidor analisa e devolve o resultado de cada quadro no ritmo original.
+   O modo, o fps e a resolução são escolhidos no painel; a câmera só obedece.
+
+   LiveSender  captura e envia. Tempo real: WebRTC (DirectLink), com JPEG por WebSocket de reserva.
+               Nos outros modos guarda os quadros até o servidor confirmar e reenvia se a conexão cai.
+   LivePlayer  mostra quadro + caixas. Imediato: o mais novo, na hora (ou só as caixas sobre o vídeo
+               ao vivo). Com atraso: sincronizados pelo número do quadro, com buffer contra oscilação.
+   LiveViewer  painel assistindo um stream do servidor: resultado pelo WebSocket /ws/view e vídeo
+               direto (WebRTC) quando a câmera está mandando assim; senão, os quadros pelo WebSocket.
 */
 (function () {
   'use strict';
@@ -30,7 +36,7 @@
     perfil_direita: 'perfil direito', perfil_esquerda: 'perfil esquerdo', de_costas: 'de costas', desconhecida: '—',
   };
   const MODES = {
-    tempo_real: { nome: 'Tempo real', icone: '⚡', descricao: 'Resposta mais rápida (atraso de ~0,4 s).' },
+    tempo_real: { nome: 'Tempo real', icone: '⚡', descricao: 'Imediato: nada é guardado. O atraso é só o da rede e o da análise.' },
     detalhado: { nome: 'Detalhado', icone: '🎯', descricao: 'Modelos maiores e decisão com passado e futuro (atraso de ~1,5 s).' },
     super: { nome: 'Super detalhado', icone: '🔬', descricao: 'O mais preciso: revisa cada pessoa ampliada (atraso de ~4 s).' },
   };
@@ -241,6 +247,164 @@
     return { fps: s.frameRate || 0, width: s.width || 0, height: s.height || 0 };
   }
 
+  /* ── Conexão direta (WebRTC) ───────────────────────────────────── */
+  const esperar = (ms) => new Promise((ok) => setTimeout(ok, ms));
+  const temRtc = () => typeof RTCPeerConnection !== 'undefined';
+
+  async function pedirJson(backendUrl, path, token, opts = {}) {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), opts.timeout || 12000);
+    try {
+      const r = await fetch(joinUrl(backendUrl, path), {
+        method: opts.method || 'GET', signal: ctl.signal, cache: 'no-store',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { const e = new Error(d.error || ('HTTP ' + r.status)); e.status = r.status; e.codigo = d.codigo; throw e; }
+      return d;
+    } finally { clearTimeout(t); }
+  }
+
+  /* Uma conexão WebRTC com o servidor: 'enviar' (câmera) ou 'assistir' (painel).
+     O aperto de mãos vai pelas rotas /rtc/... do servidor; o vídeo vai por UDP, direto. */
+  class DirectLink {
+    constructor({ backendUrl, token, streamId, modo, track = null, fps = 30, onState = null, onTrack = null }) {
+      Object.assign(this, { backendUrl, token, streamId, modo, track, fps, onState, onTrack });
+      this.pc = null;
+      this.sessao = '';
+      this.estado = 'novo';     // novo | conectando | ligado | caiu | fechado
+      this.rota = '';           // direta | retransmitida
+      this._stats = { t: 0, bytes: 0, quadros: 0 };
+    }
+
+    _set(estado, motivo) {
+      if (this.estado === estado || this.estado === 'fechado') return;
+      this.estado = estado;
+      this.onState && this.onState(estado, motivo);
+    }
+
+    async abrir() {
+      if (!temRtc()) throw new Error('Este navegador não tem WebRTC.');
+      this._set('conectando');
+      const ice = await pedirJson(this.backendUrl, '/rtc/ice', this.token, { timeout: 8000 });
+      if (ice.ativo === false) { const e = new Error('Vídeo direto desligado neste servidor.'); e.codigo = 'desligado'; throw e; }
+      const pc = this.pc = new RTCPeerConnection({ iceServers: ice.iceServers || [], bundlePolicy: 'max-bundle' });
+      pc.onconnectionstatechange = () => {
+        const st = pc.connectionState;
+        if (st === 'connected') { this._set('ligado'); this._lerRota(); }
+        else if (st === 'failed' || st === 'closed') this._set('caiu', st);
+        else if (st === 'disconnected') {
+          // oscilação curta volta sozinha; se passar de 4 s, considera caída
+          clearTimeout(this._queda);
+          this._queda = setTimeout(() => { if (pc.connectionState !== 'connected') this._set('caiu', 'disconnected'); }, 4000);
+        }
+      };
+      if (this.modo === 'enviar') {
+        const tr = pc.addTransceiver(this.track, { direction: 'sendonly' });
+        this.sender = tr.sender;
+        try { this.track.contentHint = 'motion'; } catch (e) { /* */ }
+        // H.264 primeiro: o celular codifica por hardware e o servidor decodifica mais barato
+        try {
+          const caps = RTCRtpSender.getCapabilities('video').codecs;
+          const h264 = caps.filter((c) => /h264/i.test(c.mimeType));
+          tr.setCodecPreferences([...h264, ...caps.filter((c) => !/h264/i.test(c.mimeType))]);
+        } catch (e) { /* navegador sem setCodecPreferences: usa o padrão dele */ }
+      } else {
+        pc.addTransceiver('video', { direction: 'recvonly' });
+        pc.ontrack = (ev) => {
+          // sem fila no navegador: mostra o quadro assim que chega
+          try { ev.receiver.jitterBufferTarget = 0; } catch (e) { /* */ }
+          try { ev.receiver.playoutDelayHint = 0; } catch (e) { /* */ }
+          this.onTrack && this.onTrack(ev.streams[0] || new MediaStream([ev.track]));
+        };
+      }
+      await pc.setLocalDescription(await pc.createOffer());
+      // espera juntar os endereços (até 1,5 s) e manda a oferta completa: sem troca aos poucos
+      await new Promise((ok) => {
+        if (pc.iceGatheringState === 'complete') return ok();
+        const fim = setTimeout(ok, 1500);
+        pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(fim); ok(); } });
+      });
+      const rota = this.modo === 'enviar' ? '/rtc/publicar/' : '/rtc/assistir/';
+      const d = await pedirJson(this.backendUrl, rota + encodeURIComponent(this.streamId), this.token,
+        { method: 'POST', body: { sdp: pc.localDescription.sdp }, timeout: 20000 });
+      if (this.estado === 'fechado') return;
+      this.sessao = d.sessao || '';
+      await pc.setRemoteDescription({ type: 'answer', sdp: d.sdp });
+      if (this.modo === 'enviar') this._limites();
+      // não fechou em 10 s: a rede não deixou (sem caminho direto e sem TURN)
+      this._prazo = setTimeout(() => { if (this.estado === 'conectando') this._set('caiu', 'prazo'); }, 10000);
+    }
+
+    async _limites() {
+      try {
+        const p = this.sender.getParameters();
+        if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+        p.encodings[0].maxBitrate = 3500000;
+        p.encodings[0].maxFramerate = this.fps;
+        p.degradationPreference = 'maintain-framerate';
+        await this.sender.setParameters(p);
+      } catch (e) { /* o navegador escolhe */ }
+    }
+
+    async trocarTrack(track, fps) {
+      this.track = track;
+      if (fps) this.fps = fps;
+      if (this.sender && track) { await this.sender.replaceTrack(track); try { track.contentHint = 'motion'; } catch (e) { /* */ } this._limites(); }
+    }
+
+    async _lerRota() {
+      try {
+        const st = await this.pc.getStats();
+        let par = null;
+        st.forEach((v) => { if (v.type === 'transport' && v.selectedCandidatePairId) par = st.get(v.selectedCandidatePairId); });
+        if (!par) st.forEach((v) => { if (v.type === 'candidate-pair' && v.nominated && v.state === 'succeeded') par = v; });
+        const local = par && st.get(par.localCandidateId);
+        const remoto = par && st.get(par.remoteCandidateId);
+        this.rota = ((local && local.candidateType === 'relay') || (remoto && remoto.candidateType === 'relay')) ? 'retransmitida' : 'direta';
+      } catch (e) { /* */ }
+    }
+
+    /* {fps, kbps, largura, altura} do vídeo que está passando. */
+    async medir() {
+      if (!this.pc || this.estado !== 'ligado') return null;
+      try {
+        const st = await this.pc.getStats();
+        let r = null;
+        const tipo = this.modo === 'enviar' ? 'outbound-rtp' : 'inbound-rtp';
+        st.forEach((v) => { if (v.type === tipo && (v.kind === 'video' || v.mediaType === 'video')) r = v; });
+        if (!r) return null;
+        const bytes = this.modo === 'enviar' ? r.bytesSent : r.bytesReceived;
+        const quadros = this.modo === 'enviar' ? r.framesEncoded : r.framesDecoded;
+        const t = now();
+        const ant = this._stats;
+        this._stats = { t, bytes, quadros };
+        const dt = ant.t ? (t - ant.t) / 1000 : 0;
+        return {
+          fps: dt ? Math.max(0, (quadros - ant.quadros) / dt) : (r.framesPerSecond || 0),
+          kbps: dt ? Math.max(0, (bytes - ant.bytes) * 8 / 1000 / dt) : 0,
+          largura: r.frameWidth || 0, altura: r.frameHeight || 0, rota: this.rota,
+        };
+      } catch (e) { return null; }
+    }
+
+    fechar() {
+      if (this.estado === 'fechado') return;
+      clearTimeout(this._prazo);
+      clearTimeout(this._queda);
+      this.estado = 'fechado';
+      const pc = this.pc;
+      this.pc = null;
+      if (pc) { try { pc.ontrack = null; pc.onconnectionstatechange = null; pc.close(); } catch (e) { /* */ } }
+      if (this.sessao) {
+        const tipo = this.modo === 'enviar' ? 'whip' : 'whep';
+        pedirJson(this.backendUrl, `/rtc/sessao/${encodeURIComponent(this.streamId)}/${tipo}/${encodeURIComponent(this.sessao)}`,
+          this.token, { method: 'DELETE', timeout: 4000 }).catch(() => {});
+      }
+    }
+  }
+
   /* ── Envio ─────────────────────────────────────────────────────── */
   class LiveSender {
     constructor(opts) {
@@ -271,9 +435,68 @@
       this.congested = 0;
       this.clear = 0;
       this.c = { captured: 0, sent: 0, bytes: 0, dropped: 0, results: 0 };
+      // vídeo direto (WebRTC) no tempo real; this.direto === false desliga (só JPEG)
+      this.link = null;
+      this.diretoLigado = false;
+      this.diretoFalhas = 0;
+      this.diretoMotivo = '';
     }
 
     get targetFps() { return Math.max(3, this.config.fps * this.fpsFactor); }
+
+    // ── vídeo direto ──
+    _querDireto() {
+      return this.active && this.direto !== false && temRtc() && Boolean(this.config.imediato) && this.transport === 'ws';
+    }
+
+    _trackDaCamera() {
+      const s = this.video && this.video.srcObject;
+      return (s && s.getVideoTracks && s.getVideoTracks()[0]) || null;
+    }
+
+    /* Liga, mantém ou desliga a conexão direta conforme o modo e a rede. Chamado a cada segundo. */
+    async _cuidarDoDireto() {
+      if (!this._querDireto()) { this._fecharDireto(); return; }
+      const track = this._trackDaCamera();
+      if (!track || track.readyState !== 'live') return;
+      if (this.link) {
+        // a câmera foi reaberta (o painel mudou fps/resolução): troca a faixa sem derrubar a conexão
+        if (this.link.track !== track) this.link.trocarTrack(track, this.config.fps).catch(() => {});
+        return;
+      }
+      if (now() < (this._diretoDepois || 0)) return;
+      const link = this.link = new DirectLink({
+        backendUrl: this.backendUrl, token: this.token, streamId: this.streamId, modo: 'enviar', track, fps: this.config.fps,
+        onState: (st, motivo) => {
+          if (this.link !== link) return;
+          if (st === 'ligado') { this.diretoLigado = true; this.diretoFalhas = 0; this.diretoMotivo = ''; this._semFila(); }
+          else if (st === 'caiu') this._diretoCaiu(motivo === 'prazo' ? 'a rede não deixou fechar a conexão direta' : 'a conexão direta caiu');
+        },
+      });
+      try { await link.abrir(); } catch (e) {
+        if (this.link === link) this._diretoCaiu(e.codigo === 'desligado' || e.codigo === 'indisponivel' ? 'vídeo direto indisponível no servidor' : (e.message || 'falhou'), e.codigo);
+      }
+    }
+
+    _diretoCaiu(motivo, codigo) {
+      this._fecharDireto();
+      this.diretoFalhas++;
+      this.diretoMotivo = motivo || '';
+      // tenta de novo com calma: 5 s, 15 s, 45 s... até 5 min (servidor sem o recurso: 5 min direto)
+      const espera = codigo === 'desligado' ? 300000 : Math.min(300000, 5000 * 3 ** Math.min(this.diretoFalhas - 1, 4));
+      this._diretoDepois = now() + espera;
+    }
+
+    _fecharDireto() {
+      const l = this.link;
+      this.link = null;
+      this.diretoLigado = false;
+      if (l) l.fechar();
+    }
+
+    _semFila() {
+      for (const e of this.outbox) e.sent = true;     // o que estava na fila em JPEG não serve mais
+    }
 
     start() {
       this.active = true;
@@ -282,6 +505,7 @@
         setInterval(() => this._emitStats(), 1000),
         setInterval(() => this._adapt(), 500),
         setInterval(() => this._heartbeat(), 1000),
+        setInterval(() => this._cuidarDoDireto().catch(() => {}), 1000),
       ];
       this._connectWs();
       this._captureLoop();
@@ -292,6 +516,7 @@
       (this._timers || []).forEach(clearInterval);
       clearTimeout(this._retryTimer);
       clearTimeout(this._capTimer);
+      this._fecharDireto();
       const ws = this.ws;
       this.ws = null;
       if (ws) {
@@ -330,7 +555,8 @@
       if (!cfg) return;
       const old = this.config;
       this.config = { ...old, ...cfg, janela_s: janela || cfg.janela_s || old.janela_s };
-      if (old.modo !== this.config.modo || old.fps !== this.config.fps || old.resolucao !== this.config.resolucao) {
+      if (old.modo !== this.config.modo || old.fps !== this.config.fps || old.resolucao !== this.config.resolucao
+          || Boolean(old.imediato) !== Boolean(this.config.imediato)) {
         this.fpsFactor = 1;
         this.scale = 1;
         this.onConfig && this.onConfig(this.config, old);
@@ -366,6 +592,7 @@
             this._setTransport('ws');
             break;
           case 'config': this._applyConfig(d.config, d.janela_s); break;
+          case 'mover': this.onMove && this.onMove(d.url); break;
           case 'pong': if (d.t) this.rtt = this.rtt ? this.rtt * 0.7 + (now() - d.t) * 0.3 : now() - d.t; break;
           case 'removido': this.onStatus && this.onStatus('removido'); this.stop(); break;
           case 'erro': this.onStatus && this.onStatus('erro', d.error); break;
@@ -424,6 +651,7 @@
     }
 
     _maybeCapture() {
+      if (this.diretoLigado) return;          // o vídeo está indo por WebRTC: nada de JPEG
       const t = now();
       if (t - this.lastCapture < 1000 / this.targetFps - 4) return;
       if (this.encoding >= 2) { this.c.dropped++; return; }
@@ -499,7 +727,7 @@
         if (e.sent || e.seq <= this.ackRecv) continue;
         if (ws.bufferedAmount > limit) break;
         // tempo real: quadro velho não serve; nos detalhados, serve enquanto couber no atraso
-        if (t - e.at > (realtime ? 700 : keepMs)) { e.sent = true; this.c.dropped++; continue; }
+        if (t - e.at > (realtime ? 250 : keepMs)) { e.sent = true; this.c.dropped++; continue; }
         try { ws.send(e.data); } catch (err) { return; }
         e.sent = true;
         this.c.sent++;
@@ -584,17 +812,20 @@
       }
     }
 
-    _emitStats() {
+    async _emitStats() {
       const t = now();
       const dt = Math.max(0.001, (t - this._statsAt) / 1000);
+      const rtc = this.diretoLigado && this.link ? await this.link.medir() : null;
       const s = {
-        transport: this.transport || 'reconectando', mode: this.transport,
+        direto: Boolean(rtc), rota: rtc ? rtc.rota : '', diretoMotivo: this.diretoMotivo,
+        transport: rtc ? 'direto' : (this.transport || 'reconectando'), mode: this.transport,
         captureFps: this.c.captured / dt, sentFps: this.c.sent / dt, resultFps: this.c.results / dt,
         dropped: this.c.dropped, kbps: (this.c.bytes * 8) / 1000 / dt, rtt: this.rtt,
         quality: this.quality, scale: this.scale, targetFps: this.targetFps,
         pending: this.outbox.filter((e) => !e.sent).length,
         serverDelay: this.server.atraso_ms, serverFps: this.server.fps_analise, shownFps: this.server.fps_exibido,
       };
+      if (rtc) { s.captureFps = s.sentFps = rtc.fps; s.kbps = rtc.kbps; s.quality = 1; s.scale = 1; s.pending = 0; }
       this.c = { captured: 0, sent: 0, bytes: 0, dropped: 0, results: 0 };
       this._statsAt = t;
       this.onStats && this.onStats(s);
@@ -618,8 +849,23 @@
       this.annotated = null;     // reserva: imagem já desenhada pelo servidor
       this.closed = false;
       this.message = '';
+      this.live = null;          // <video> ao vivo por baixo do canvas: só as caixas são desenhadas
+      this.liveResult = null;
       this._statsAt = now();
       this._raf = requestAnimationFrame(() => this._render());
+    }
+
+    /* Vídeo ao vivo por baixo (câmera local ou vídeo direto): o canvas fica transparente e leva só
+       as caixas do resultado mais novo. null volta ao modo de quadros. */
+    setLive(video) {
+      if (this.live === video) return;
+      this.live = video || null;
+      this.liveResult = null;
+      for (const e of this.entries.values()) if (e.bitmap) e.bitmap.close();
+      this.entries.clear();
+      if (this.current && this.current.bitmap) this.current.bitmap.close();
+      this.current = null;
+      this._paint();
     }
 
     close() {
@@ -641,7 +887,7 @@
 
     setMessage(text) { this.message = text || ''; }
 
-    get latestResult() { return this.current ? this.current.result : null; }
+    get latestResult() { return this.liveResult || (this.current ? this.current.result : null); }
 
     _entry(seq) {
       let e = this.entries.get(seq);
@@ -650,7 +896,15 @@
     }
 
     pushResult(r) {
-      if (this.closed || r.seq === null || r.seq === undefined) return;
+      if (this.closed) return;
+      if (this.live) {            // vídeo ao vivo: o resultado mais novo vale na hora
+        this.liveResult = r;
+        this.lastArrival = now();
+        this.shown++;
+        this._paint();
+        return;
+      }
+      if (r.seq === null || r.seq === undefined) return;
       const e = this._entry(r.seq);
       e.result = r;
       e.t = r.t;
@@ -661,7 +915,7 @@
     }
 
     pushFrame(seq, t, blob) {
-      if (this.closed) return;
+      if (this.closed || this.live) return;
       const e = this._entry(seq);
       e.blob = blob;
       e.t = t;
@@ -697,6 +951,7 @@
       const t = now();
       this.lastArrival = t;
       if (this.annotated) { this.annotated.close(); this.annotated = null; }
+      if (e.result.imediato) { e.agora = true; return; }   // imediato: sai no próximo quadro da tela, sem buffer
       this.offsets.push([t, t - e.t * 1000]);
       while (this.offsets.length && t - this.offsets[0][0] > 4000) this.offsets.shift();
       const offs = this.offsets.map((o) => o[1]);
@@ -723,7 +978,7 @@
           if (e.arrival && t - e.arrival > 8000) old.push(e);
           continue;
         }
-        if (this.base + e.t * 1000 + this.jb <= t) {
+        if (e.agora || this.base + e.t * 1000 + this.jb <= t) {
           if (!pick || e.t > pick.t) { if (pick) old.push(pick); pick = e; } else old.push(e);
         }
       }
@@ -737,6 +992,9 @@
         this.current = pick;
         this.shown++;
         this._paint();
+      } else if (this.live) {
+        if (t - this.lastArrival > 1200 && this.liveResult) { this.liveResult = null; this._paint(); }   // resultado velho some
+        else if (t - (this._livePaint || 0) > 500) this._paint();
       } else if (this.annotated || (this.current && t - this.lastArrival > 1500) || !this.current) {
         this._paint();
       }
@@ -762,6 +1020,12 @@
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, cw, ch);
+      if (this.live) {
+        this._livePaint = now();
+        if (this.liveResult) drawOverlay(canvas, this.liveResult, { showBoxes: this.showBoxes, clear: false });
+        if (this.message) this._texto(ctx, cw, ch, this.message, false);
+        return;
+      }
       const img = this.annotated || (this.current && this.current.bitmap);
       if (img) {
         const s = Math.min(cw / img.width, ch / img.height);
@@ -772,7 +1036,13 @@
       const text = this.message || (stalled ? 'Sinal interrompido · reconectando...' : '');
       if (text) {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        if (img) { ctx.fillStyle = 'rgba(0,1,42,.45)'; ctx.fillRect(0, 0, cw, ch); }
+        this._texto(ctx, cw, ch, text, Boolean(img));
+      }
+    }
+
+    _texto(ctx, cw, ch, text, escurecer) {
+      {
+        if (escurecer) { ctx.fillStyle = 'rgba(0,1,42,.45)'; ctx.fillRect(0, 0, cw, ch); }
         ctx.font = '600 14px Outfit, system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -797,17 +1067,25 @@
       this.lastMsgAt = 0;
       this.pending = new Map();  // seq -> resultado esperando o quadro
       this.polling = false;
+      // vídeo direto: this.videoEl (um <video>) recebe o mesmo vídeo que a câmera manda por WebRTC
+      this.link = null;
+      this.diretoLigado = false;
+      this.diretoFalhas = 0;
+      this.info = null;
     }
 
     start() {
       this.active = true;
       this._connect();
       this._timer = setInterval(() => this._heartbeat(), 2000);
+      this._timerDireto = setInterval(() => this._cuidarDoDireto().catch(() => {}), 1000);
     }
 
     stop() {
       this.active = false;
       clearInterval(this._timer);
+      clearInterval(this._timerDireto);
+      this._fecharDireto();
       clearTimeout(this._retry);
       this.polling = false;
       const ws = this.ws;
@@ -816,6 +1094,65 @@
     }
 
     _status(st, extra) { this.onStatus && this.onStatus(st, extra); }
+
+    // ── vídeo direto ──
+    /* A câmera está mandando vídeo direto? Então o painel assiste o mesmo vídeo por WebRTC e pede ao
+       servidor só os resultados; se a conexão não fecha ou cai, volta aos quadros pelo WebSocket. */
+    async _cuidarDoDireto() {
+      const i = this.info || {};
+      const quer = this.active && this.direto !== false && this.videoEl && temRtc() && i.direto === true
+        && (i.config || {}).imediato && this.ws && this.ws.readyState === 1;
+      if (!quer) { if (this.link) this._fecharDireto(); return; }
+      if (this.link || now() < (this._diretoDepois || 0)) return;
+      const link = this.link = new DirectLink({
+        backendUrl: this.backendUrl, token: this.token, streamId: this.streamId, modo: 'assistir',
+        onTrack: (stream) => {
+          if (this.link !== link) return;
+          const v = this.videoEl;
+          v.srcObject = stream;
+          v.muted = true;
+          v.play().catch(() => {});
+          const aoTocar = () => {
+            if (this.link !== link || this.diretoLigado) return;
+            this.diretoLigado = true;
+            this.diretoFalhas = 0;
+            this._pedirVideo(false);
+            this.player.setLive(v);
+            this.onDireto && this.onDireto(true, link);
+            this._status('direto');
+          };
+          if (v.readyState >= 2 && v.videoWidth) aoTocar(); else v.addEventListener('playing', aoTocar, { once: true });
+        },
+        onState: (st) => { if (this.link === link && st === 'caiu') this._diretoCaiu(); },
+      });
+      try { await link.abrir(); } catch (e) { if (this.link === link) this._diretoCaiu(e.codigo); }
+    }
+
+    _diretoCaiu(codigo) {
+      this._fecharDireto();
+      this.diretoFalhas++;
+      const espera = codigo === 'sem_video' ? 2000 : Math.min(300000, 5000 * 3 ** Math.min(this.diretoFalhas - 1, 4));
+      this._diretoDepois = now() + espera;
+    }
+
+    _fecharDireto() {
+      const l = this.link;
+      this.link = null;
+      if (l) l.fechar();
+      if (this.diretoLigado) {
+        this.diretoLigado = false;
+        this._pedirVideo(true);
+        if (this.player) this.player.setLive(null);
+        if (this.videoEl) this.videoEl.srcObject = null;
+        this.onDireto && this.onDireto(false, null);
+        if (this.active && this.ws) this._status('ws');
+      }
+    }
+
+    _pedirVideo(on) {
+      const ws = this.ws;
+      if (ws && ws.readyState === 1) try { ws.send(JSON.stringify({ type: 'video', on })); } catch (e) { /* */ }
+    }
 
     _connect() {
       if (!this.active) return;
@@ -827,6 +1164,7 @@
       ws.onmessage = (ev) => {
         this.lastMsgAt = now();
         if (typeof ev.data !== 'string') {
+          if (this.diretoLigado) return;      // já assistindo pelo vídeo direto
           const f = unpackFrame(ev.data);
           if (!f) return;
           this.player.pushFrame(f.seq, f.t, f.blob);
@@ -837,11 +1175,19 @@
         let d;
         try { d = JSON.parse(ev.data); } catch (e) { return; }
         if (d.type === 'quadro') {
-          this.pending.set(d.seq, d);
-          if (this.pending.size > 240) this.pending.delete(this.pending.keys().next().value);
+          if (this.diretoLigado) this.player.pushResult(d);   // caixas sobre o vídeo ao vivo
+          else {
+            this.pending.set(d.seq, d);
+            if (this.pending.size > 240) this.pending.delete(this.pending.keys().next().value);
+          }
           this.onResult && this.onResult(d);
         } else if (d.type === 'pronto' || d.type === 'estado') {
-          if (!ready) { ready = true; clearTimeout(giveUp); this.ws = ws; this.attempt = 0; this.failures = 0; this.polling = false; this.player.setMessage(''); this._status('ws'); }
+          if (!ready) {
+            ready = true; clearTimeout(giveUp); this.ws = ws; this.attempt = 0; this.failures = 0; this.polling = false; this.player.setMessage('');
+            if (this.diretoLigado) this._pedirVideo(false);   // reconectou com o vídeo direto ainda de pé
+            this._status(this.diretoLigado ? 'direto' : 'ws');
+          }
+          this.info = d;
           this.onInfo && this.onInfo(d);
         } else if (d.type === 'aguardando') {
           ready = true; clearTimeout(giveUp); this.ws = ws; this.attempt = 0;
@@ -1027,7 +1373,7 @@
   }
 
   window.ArgosStream = {
-    openCamera, trackInfo, LiveSender, LivePlayer, LiveViewer, uploadAnalysisFile, drawOverlay,
+    openCamera, trackInfo, LiveSender, LivePlayer, LiveViewer, DirectLink, uploadAnalysisFile, drawOverlay,
     drawEpiIcon, drawEpiRow, EPI_ICONS,
     packFrame, unpackFrame, itemLabel, formatDuration, LABELS, COLORS, POSTURE, HEAD, MODES, FPS_OPTIONS, RES_OPTIONS,
   };

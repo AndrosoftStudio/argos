@@ -6,6 +6,7 @@
 //   win/argos-motor-<placa>-<id>.zip          bibliotecas do motor (PyTorch, OpenCV... em .dll), por placa:
 //                                             nvidia (CUDA + TensorRT), dml (AMD/Intel com DirectML) ou cpu
 //   win/argos-base-<id>.zip                   modelos (YOLO e rosto), PostgreSQL e cloudflared
+//   win/argos-midia-<id>.zip                  midia\: video direto (MediaMTX) e voz dos avisos (Piper + voz em portugues)
 // O nucleo, o motor e a base so sao baixados de novo quando mudam (id): atualizar baixa so o programa (~3 MB).
 // No latest.json o programa fica em windows.programa2: a chave antiga (programa) trazia o ArgosMotor.exe
 // dentro, e um instalador antigo lendo o formato novo instalaria pela metade; sem ela, ele pede o instalador novo.
@@ -286,12 +287,12 @@ namespace ArgosEPI.Instalador
             lblEspaco.Text = "Baixa " + Tam(baixar) + " e ocupa cerca de " + Tam(ocupa) + livre;
         }
 
-        // programa + nucleo + bibliotecas do motor + base, para a placa escolhida
+        // programa + nucleo + bibliotecas do motor + base + midia, para a placa escolhida
         long Soma(string placa, string campo)
         {
             var w = Obj(manifesto, "windows");
             return Num(Obj(Obj(w, "programa2"), placa), campo) + Num(Obj(Obj(w, "nucleo"), placa), campo)
-                 + Num(Obj(Obj(w, "motor"), placa), campo) + Num(Obj(w, "base"), campo);
+                 + Num(Obj(Obj(w, "motor"), placa), campo) + Num(Obj(w, "base"), campo) + Num(Obj(w, "midia"), campo);
         }
 
         // so instala em pasta vazia ou onde o Argos ja esta (a limpeza apagaria arquivos de outra coisa)
@@ -344,6 +345,7 @@ namespace ArgosEPI.Instalador
             var nucleo = Obj(Obj(w, "nucleo"), variante);
             var motor = Obj(Obj(w, "motor"), variante);
             var basePac = Obj(w, "base");
+            var midia = Obj(w, "midia");      // video direto e voz dos avisos (manifesto antigo nao tem)
             var cache = Path.Combine(Path.GetTempPath(), "ArgosEPI-Setup");
             Directory.CreateDirectory(cache);
             Log("Pasta: " + pasta + " | placa: " + variante + " | fonte: " + fonte + (FonteLocal ? " (arquivos locais)" : ""));
@@ -356,7 +358,9 @@ namespace ArgosEPI.Instalador
             bool precisaNucleo = precisaMotor || Marca(Path.Combine(pasta, "motor", "argos-nucleo-id.txt")) != Str(nucleo, "id");
             var arquivos = new List<Dictionary<string, object>>();
             var nomes = new Dictionary<Dictionary<string, object>, string>();
+            bool precisaMidia = midia != null && Marca(Path.Combine(pasta, "midia", "argos-midia-id.txt")) != Str(midia, "id");
             if (precisaBase) { arquivos.Add(basePac); nomes[basePac] = "os modelos e o banco de dados"; } else Log("Modelos e banco já instalados: não precisa baixar de novo.");
+            if (precisaMidia) { arquivos.Add(midia); nomes[midia] = "o vídeo direto e a voz dos avisos"; } else if (midia != null) Log("Vídeo direto e voz já instalados: não precisa baixar de novo.");
             if (precisaMotor) { arquivos.Add(motor); nomes[motor] = "as bibliotecas (" + Rotulo(variante) + ")"; } else Log("Bibliotecas " + Str(motor, "id") + " já instaladas: não precisa baixar de novo.");
             // pacote opcional do TensorRT (instalado pelo painel): mora dentro de motor\, entao volta junto quando o motor e trocado
             var trt = Obj(Obj(Obj(w, "extras"), "tensorrt"), variante);
@@ -397,7 +401,7 @@ namespace ArgosEPI.Instalador
             // 3. limpa a pasta: so fica o que e do usuario (e o motor/base que nao mudaram)
             Directory.CreateDirectory(pasta);
             Etapa("Removendo os arquivos da versão anterior", 720, "");
-            Limpar(pasta, !precisaMotor, !precisaBase);
+            Limpar(pasta, !precisaMotor, !precisaBase, !precisaMidia);
 
             // 4. extrai (tudo ja compilado: nada e instalado ou baixado depois)
             long totalExt = Math.Max(1, arquivos.Sum(a => Num(a, "descompactado"))), feitoExt = 0;
@@ -412,6 +416,12 @@ namespace ArgosEPI.Instalador
                 Etapa("Instalando os modelos e o banco de dados", -1, "");
                 var f = faixa(basePac);
                 Extrair(baixados[basePac], pasta, f[0], f[1], ct);
+            }
+            if (precisaMidia)
+            {
+                Etapa("Instalando o vídeo direto e a voz dos avisos", -1, "");
+                var f = faixa(midia);
+                Extrair(baixados[midia], pasta, f[0], f[1], ct);
             }
             if (precisaMotor)
             {
@@ -452,7 +462,7 @@ namespace ArgosEPI.Instalador
                 if (iniciar) IniciarComWindows(pasta, exe);
             }
             File.WriteAllText(Path.Combine(pasta, "instalacao.json"), new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
-                { "versao", Str(manifesto, "versao") }, { "variante", variante }, { "motor_id", Str(motor, "id") }, { "nucleo_id", Str(nucleo, "id") }, { "base_id", Str(basePac, "id") },
+                { "versao", Str(manifesto, "versao") }, { "variante", variante }, { "motor_id", Str(motor, "id") }, { "nucleo_id", Str(nucleo, "id") }, { "base_id", Str(basePac, "id") }, { "midia_id", Str(midia, "id") },
                 { "instalado_em", DateTime.Now.ToString("s") } }));
             foreach (var b in temporarios) try { File.Delete(b); } catch { }
             Log("OK");
@@ -465,11 +475,12 @@ namespace ArgosEPI.Instalador
 
         // Apaga tudo o que nao e do usuario: versoes antigas deixavam Python solto, codigo-fonte e outros arquivos.
         // Ficam: dados\ (banco, rostos, gravacoes), .env, models\ (modelos enviados pelo painel) e uploads\.
-        void Limpar(string pasta, bool manterMotor, bool manterBase)
+        void Limpar(string pasta, bool manterMotor, bool manterBase, bool manterMidia)
         {
             var ficam = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "dados", ".env", "models", "uploads" };
             if (manterMotor) ficam.Add("motor");
             if (manterBase) ficam.Add("bin");
+            if (manterMidia) ficam.Add("midia");
             int n = 0;
             foreach (var item in Directory.GetFileSystemEntries(pasta))
             {

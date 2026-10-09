@@ -1,14 +1,18 @@
 """
 live_pipeline.py - Os tres modos de camera ao vivo, com atraso controlado.
 
-Os tres modos sao em tempo real. Os quadros chegam (ate 60 q/s) e entram num buffer ordenado
-pelo horario de captura. A GPU analisa todos os quadros que conseguir (quadros-chave), e o
-resultado de CADA quadro sai no ritmo original da camera com um atraso fixo. O atraso permite:
+Tempo real (imediato): nada e guardado. A GPU pega sempre o quadro mais novo que chegou, analisa
+e o resultado sai na hora; quadro que chegou enquanto ela estava ocupada e descartado. O atraso e
+so o da rede mais o da analise. O estado de cada EPI e decidido so com o passado.
+
+Detalhado e super: os quadros chegam (ate 60 q/s) e entram num buffer ordenado pelo horario de
+captura. A GPU analisa todos os quadros que conseguir (quadros-chave), e o resultado de CADA
+quadro sai no ritmo original da camera com um atraso fixo. O atraso permite:
   - interpolar pessoas, esqueletos e EPIs entre dois quadros-chave (caixas em todos os quadros);
   - decidir o estado de cada EPI olhando tambem um pouco do futuro (sem piscadas nem atraso);
   - absorver oscilacoes e quedas curtas da rede sem travar a imagem.
 
-  tempo_real  ~0,35 s  pose nano,   detector 640 px,  quadro mais novo primeiro
+  tempo_real  imediato pose nano,   detector 640 px,  so o quadro mais novo, sem buffer
   detalhado   ~1,5 s   pose small,  detector 960 px,  quadros em ordem, janela centrada
   super       ~4 s     pose medium, detector 1280 px + recortes ampliados de cada pessoa,
                        janela centrada maior
@@ -32,9 +36,9 @@ from ppe_analyzer import (WEIGHTS, DEFAULT_CONFIG, activity_text, decide_state, 
 import ppe_taxonomy as tax
 
 MODOS = {
-    'tempo_real': {'nome': 'Tempo real', 'atraso': 0.35, 'atraso_max': 1.2, 'pose': 'tempo_real', 'imgsz': 640,
-                   'conf': 0.35, 'recortes': False, 'passado': 1.5, 'futuro': 0.2, 'escolha': 'recente',
-                   'intervalo_max': 0.25, 'largura_envio': 960},
+    'tempo_real': {'nome': 'Tempo real', 'atraso': 0.0, 'atraso_max': 0.0, 'pose': 'tempo_real', 'imgsz': 640,
+                   'conf': 0.35, 'recortes': False, 'passado': 1.5, 'futuro': 0.0, 'escolha': 'recente',
+                   'intervalo_max': 0.25, 'largura_envio': 960, 'imediato': True},
     'detalhado': {'nome': 'Detalhado', 'atraso': 1.5, 'atraso_max': 3.0, 'pose': 'detalhado', 'imgsz': 960,
                   'conf': 0.3, 'recortes': False, 'passado': 0.9, 'futuro': 0.75, 'escolha': 'ordem',
                   'intervalo_max': 0.2, 'largura_envio': 1280},
@@ -45,7 +49,8 @@ MODOS = {
 MODO_PADRAO = 'tempo_real'
 FPS_OPCOES = (15, 30, 60)
 RES_OPCOES = (480, 720, 1080)
-CONFIG_PADRAO = {'modo': MODO_PADRAO, 'fps': 60, 'resolucao': 720}
+# rosto: reconhecer quem e a pessoa (por padrao ligado; computador fraco pode desligar e so conferir os EPIs)
+CONFIG_PADRAO = {'modo': MODO_PADRAO, 'fps': 60, 'resolucao': 720, 'rosto': True}
 
 MAGIC = b'AG'
 HEADER_LEN = 16
@@ -61,6 +66,9 @@ def normalizar_config(cfg, base=None):
         epis = cfg['epis']
         out['epis'] = tax.normalize_required(epis)[:32] if isinstance(epis, (list, tuple)) else None
     out.setdefault('epis', None)
+    if 'rosto' in cfg:
+        out['rosto'] = cfg['rosto'] not in (False, 0, '0', 'false', 'nao', 'não', None)
+    out.setdefault('rosto', True)
     for chave, opcoes in (('fps', FPS_OPCOES), ('resolucao', RES_OPCOES)):
         try:
             v = int(cfg.get(chave, out[chave]))
@@ -73,6 +81,7 @@ def normalizar_config(cfg, base=None):
 def config_publica(cfg):
     perfil = MODOS[cfg['modo']]
     return {**cfg, 'modo_nome': perfil['nome'], 'atraso_s': perfil['atraso'],
+            'imediato': bool(perfil.get('imediato')),
             'largura_envio': perfil['largura_envio'],
             'janela_s': round(perfil['atraso_max'] + 0.5, 2)}
 
@@ -280,10 +289,11 @@ class _Revisor:
 
 # ── Pecas internas ──────────────────────────────────────────────────
 class _Quadro:
-    __slots__ = ('seq', 't', 'jpeg', 'w', 'h', 'chegada')
+    __slots__ = ('seq', 't', 'jpeg', 'w', 'h', 'chegada', 'img')
 
-    def __init__(self, seq, t, jpeg, w, h, chegada):
+    def __init__(self, seq, t, jpeg, w, h, chegada, img=None):
         self.seq, self.t, self.jpeg, self.w, self.h, self.chegada = seq, t, jpeg, w, h, chegada
+        self.img = img      # imagem ja aberta (fontes do proprio servidor no modo imediato)
 
 
 class _Chave:
@@ -451,13 +461,14 @@ class LivePipeline:
             s.fechar()
 
     # ── entrada ─────────────────────────────────────────────────────
-    def receber(self, seq, t, jpeg, sessao=None, w=None, h=None):
-        """Um quadro JPEG. t = horario de captura em segundos (None = usa a hora de chegada)."""
+    def receber(self, seq, t, jpeg, sessao=None, w=None, h=None, img=None):
+        """Um quadro JPEG (ou a imagem ja aberta, em img). t = horario de captura em segundos
+        (None = usa a hora de chegada)."""
         agora = time.perf_counter()
-        if not jpeg:
+        if not jpeg and img is None:
             return False
         if w is None or h is None:
-            w, h = jpeg_size(jpeg)
+            w, h = (img.shape[1], img.shape[0]) if img is not None else jpeg_size(jpeg)
         with self.cond:
             if t is None:
                 t, sessao = agora, sessao or 'servidor'
@@ -492,7 +503,16 @@ class LivePipeline:
                 self.base = self.base_alvo = offset
             elif offset < self.base_alvo:
                 self.base_alvo = offset
-            self.quadros.insert(i, _Quadro(seq, t, jpeg, w, h, agora))
+            if self.perfil.get('imediato'):
+                # sem fila: so interessa o quadro mais novo; o que a analise nao pegou a tempo sai
+                if self.ts and t < self.ts[-1]:
+                    self.pulados += 1
+                    return False
+                self.pulados += len(self.quadros)
+                self.quadros, self.ts = [_Quadro(seq, t, jpeg, w, h, agora, img)], [t]
+                self.cond.notify_all()
+                return True
+            self.quadros.insert(i, _Quadro(seq, t, jpeg, w, h, agora, img))
             self.ts.insert(i, t)
             if len(self.quadros) > self.LIMITE_QUADROS:
                 self.quadros.pop(0)
@@ -501,16 +521,20 @@ class LivePipeline:
             self.cond.notify_all()
         return True
 
-    def receber_imagem(self, img, t=None, qualidade=80, largura_max=1280):
-        """Quadro de uma fonte do proprio servidor (RTSP, HTTP, webcam, arquivo)."""
+    def receber_imagem(self, img, t=None, qualidade=80, largura_max=1280, sessao='servidor'):
+        """Quadro de uma fonte do proprio servidor (RTSP, HTTP, webcam, arquivo, video direto)."""
         h, w = img.shape[:2]
         if w > largura_max:
             s = largura_max / w
             img = cv2.resize(img, (int(w * s) // 2 * 2, int(h * s) // 2 * 2), interpolation=cv2.INTER_AREA)
             h, w = img.shape[:2]
+        if self.perfil.get('imediato'):
+            # imediato: a imagem vai aberta; o JPEG so e feito do quadro que for analisado
+            self.receber(None, t, None, sessao=sessao, w=w, h=h, img=img)
+            return
         ok, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, qualidade])
         if ok:
-            self.receber(None, t, buf.tobytes(), sessao='servidor', w=w, h=h)
+            self.receber(None, t, buf.tobytes(), sessao=sessao, w=w, h=h)
 
     def assinar_retomando(self, sessao, ultimo_resultado, video=False, maxlen=600):
         """Assina e ja coloca na fila os resultados exibidos enquanto o cliente estava fora."""
@@ -624,13 +648,24 @@ class LivePipeline:
                     continue
                 self.ultima_chave_t = q.t
                 perfil, geracao, base = self.perfil, self.geracao, self.base
+                revisor = self.revisor
                 reset, self._reset_pendente = self._reset_pendente, False
+                imediato = bool(perfil.get('imediato'))
+                if imediato:        # o quadro saiu da fila: o proximo so entra se for mais novo
+                    self.quadros, self.ts = [], []
             try:
                 if reset:
                     self._reiniciar()
-                img = cv2.imdecode(np.frombuffer(q.jpeg, np.uint8), cv2.IMREAD_COLOR)
+                img = q.img
                 if img is None:
-                    continue
+                    img = cv2.imdecode(np.frombuffer(q.jpeg, np.uint8), cv2.IMREAD_COLOR)
+                    if img is None:
+                        continue
+                elif q.jpeg is None:
+                    ok, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    if not ok:
+                        continue
+                    q.jpeg, q.img = buf.tobytes(), None
                 t0 = time.perf_counter()
                 # o JPEG original vai junto: outro servidor da conta pode adiantar parte do trabalho
                 analysis, dets, employees = self.analisar(img, q.t, perfil, q.jpeg)
@@ -650,7 +685,40 @@ class LivePipeline:
                 self.chaves_t.insert(j, q.t)
                 self.revisor.adicionar(q.t, analysis)
                 self.taxa_analise.marcar(fim)
+                if imediato:
+                    del self.chaves[:-1]
+                    del self.chaves_t[:-1]
+                    # atraso medido: da chegada do quadro ate o resultado sair (a rede fica por fora)
+                    self.atraso = 0.8 * self.atraso + 0.2 * (fim - q.chegada) if self.atraso else fim - q.chegada
+                    atraso = self.atraso
                 self.cond.notify_all()
+            if imediato:
+                self._emitir(q, chave, perfil, revisor, atraso, geracao, fim)
+
+    def _emitir(self, q, chave, perfil, revisor, atraso, geracao, agora):
+        """Imediato: o resultado do quadro que acabou de ser analisado sai na hora."""
+        try:
+            resultado = self._montar(q, chave, None, perfil, revisor, atraso)
+        except Exception as ex:
+            self.log(f"erro ao montar quadro: {ex}")
+            return
+        resultado['estimado'] = False
+        texto = json.dumps({'type': 'quadro', **resultado}, ensure_ascii=False, separators=(',', ':'))
+        item = (q.seq, q.t, texto, q.jpeg, resultado)
+        with self.cond:
+            if geracao != self.geracao:
+                return
+            self.ultimo_exibido_t = q.t
+            self.ultima_exibicao = agora
+            self.recentes.append(item)
+            self.ultimo_resultado = resultado
+            self.ultimo_jpeg = q.jpeg
+            self.exibidos += 1
+            self.taxa_saida.marcar(agora)
+            subs = list(self.assinantes) + list(self.http.values())
+            self.cond.notify_all()
+        for s in subs:
+            s.empurrar(item)
 
     # ── exibicao ────────────────────────────────────────────────────
     def _exibicao(self):
@@ -659,6 +727,12 @@ class LivePipeline:
                 if not self.rodando:
                     return
                 agora = time.perf_counter()
+                if self.perfil.get('imediato'):     # quem exibe e a propria analise (_emitir)
+                    if self.ultima_entrada and agora - self.ultima_entrada > self.OCIOSO_RESET_S:
+                        self.ultima_entrada = 0.0
+                        self._zerar_linha_do_tempo()
+                    self.cond.wait(0.25)
+                    continue
                 self._ajustar_relogio(agora)
                 if not self.quadros:
                     if self.ultima_entrada and agora - self.ultima_entrada > self.OCIOSO_RESET_S:
@@ -737,6 +811,7 @@ class LivePipeline:
             'employees': list(perto.employees) if perto else [],
             'activity': activity_text(resumo) if perto else 'aguardando análise',
             'modo': self.modo,
+            'imediato': bool(perfil.get('imediato')),
             'quadro_chave': perto is not None and perto.seq == q.seq and perto.t == q.t,
             'estimado': kb is None,
             'fps': self.taxa_analise.valor(agora),

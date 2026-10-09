@@ -5,14 +5,15 @@
 #   <Saida>\win\argos-nucleo-<placa>-<id>.zip         motor\ArgosMotor.exe (Python + bibliotecas em Python, sem o codigo do Argos)
 #   <Saida>\win\argos-motor-<placa>-<id>.zip          bibliotecas do motor (.dll/.pyd: Python, PyTorch, OpenCV...)
 #   <Saida>\win\argos-base-<id>.zip                   modelos (YOLO e rosto), PostgreSQL e cloudflared
+#   <Saida>\win\argos-midia-<id>.zip                  midia\: video direto (MediaMTX) e voz dos avisos (Piper + voz em portugues)
 #   <Saida>\win\argos-tensorrt-nvidia-<id>.zip        opcional (NVIDIA): DLLs do TensorRT, baixadas pelo botao do painel
 #   <Saida>\latest.json                               o que o instalador e o programa leem
-# O nucleo, o motor e a base so sao refeitos/baixados quando o conteudo muda (id):
+# O nucleo, o motor, a base e a midia so sao refeitos/baixados quando o conteudo muda (id):
 # uma atualizacao comum do programa baixa so o argos-programa (~3 MB).
 # Requisitos: Windows 10/11 (csc do .NET Framework, curl, tar) e internet na primeira vez.
 # Uso: powershell -ExecutionPolicy Bypass -File empacotar_windows.ps1 -Versao 20.3.0 [-Placas cpu,nvidia,dml] [-SoJanela]
 param(
-  [string]$Versao = "20.3.0",
+  [string]$Versao = "20.4.0",
   [string[]]$Placas = @("cpu", "nvidia", "dml"),
   [string]$Trabalho = "D:\argos-build",
   [string]$Notas = "",
@@ -34,6 +35,10 @@ $env:UV_LINK_MODE = "copy"; $env:UV_HTTP_TIMEOUT = "900"
 [Net.ServicePointManager]::SecurityProtocol = "Tls12"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $PG_VERSAO = "16.14-1"
+# os mesmos de backend/midia.py (la, quem roda do codigo baixa por conta propria)
+$MEDIAMTX_VERSAO = "v1.21.2"
+$PIPER_VERSAO = "2023.11.14-2"
+$VOZ = "pt_BR-faber-medium"
 $PY_VERSAO = "3.12"
 $TORCH = @{
   cpu    = @{ pacotes = @("torch", "torchvision"); indice = "https://download.pytorch.org/whl/cpu"; onnx = ""; extras = @() }
@@ -161,6 +166,47 @@ if (-not (Test-Path $zipBase)) {
   Zipar $b $zipBase
 } else { Write-Host "   base $idBase ja pronta" }
 $descBase = Descrever $zipBase "win/argos-base-$idBase.zip" $b $idBase
+
+# ---------------------------------------------------------------- midia: video direto e voz dos avisos
+Passo "Midia (MediaMTX para o video direto; Piper e a voz em portugues para os avisos da TV)"
+$md = Join-Path $palco "midia"
+if (Test-Path $md) { Remove-Item $md -Recurse -Force }
+New-Item -ItemType Directory -Force "$md\midia\mediamtx", "$md\midia\voz" | Out-Null
+$mtxZip = Join-Path $cache "mediamtx-$MEDIAMTX_VERSAO.zip"
+Baixar "https://github.com/bluenviron/mediamtx/releases/download/$MEDIAMTX_VERSAO/mediamtx_${MEDIAMTX_VERSAO}_windows_amd64.zip" $mtxZip
+tar.exe -xf $mtxZip -C "$md\midia\mediamtx" mediamtx.exe LICENSE
+if ($LASTEXITCODE) { throw "o pacote do MediaMTX nao trouxe mediamtx.exe" }
+$piperZip = Join-Path $cache "piper-$PIPER_VERSAO.zip"
+Baixar "https://github.com/rhasspy/piper/releases/download/$PIPER_VERSAO/piper_windows_amd64.zip" $piperZip
+tar.exe -xf $piperZip -C "$md\midia"          # ja traz a pasta piper\
+if ($LASTEXITCODE -or -not (Test-Path "$md\midia\piper\piper.exe")) { throw "o pacote do Piper nao trouxe piper\piper.exe" }
+foreach ($f in "$VOZ.onnx", "$VOZ.onnx.json") {
+  Baixar "https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/$f" "$cache\$f"
+  Copy-Item "$cache\$f" "$md\midia\voz\"
+}
+@"
+Programas de terceiros nesta pasta (distribuidos sem alteracao):
+  mediamtx\  MediaMTX $MEDIAMTX_VERSAO - licenca MIT - https://github.com/bluenviron/mediamtx
+  piper\     Piper $PIPER_VERSAO - licenca MIT - https://github.com/rhasspy/piper
+             (inclui o eSpeak NG, licenca GPL-3.0 - https://github.com/espeak-ng/espeak-ng)
+  voz\       voz $VOZ do projeto Piper - https://huggingface.co/rhasspy/piper-voices
+"@ | Set-Content -Encoding UTF8 "$md\midia\LICENCAS.txt"
+# autoteste: a voz precisa falar (gera um .wav de verdade) e o MediaMTX precisa abrir
+$wavTeste = Join-Path $cache "teste-voz.wav"
+Remove-Item $wavTeste -ErrorAction SilentlyContinue
+"Teste de voz do Argos." | & "$md\midia\piper\piper.exe" --model "$md\midia\voz\$VOZ.onnx" --output_file $wavTeste --quiet
+if ($LASTEXITCODE -or -not (Test-Path $wavTeste) -or (Get-Item $wavTeste).Length -lt 10000) { throw "a voz (Piper) nao passou no autoteste" }
+Remove-Item $wavTeste
+& "$md\midia\mediamtx\mediamtx.exe" --version | Out-Null
+if ($LASTEXITCODE) { throw "o MediaMTX nao abriu" }
+$idMidia = IdDaPasta "$md\midia"
+Set-Content -Encoding ascii "$md\midia\argos-midia-id.txt" $idMidia
+$zipMidia = Join-Path $saida "win\argos-midia-$idMidia.zip"
+if (-not (Test-Path $zipMidia)) {
+  Get-ChildItem "$saida\win" -Filter "argos-midia-*.zip" | Remove-Item -Force
+  Zipar $md $zipMidia
+} else { Write-Host "   midia $idMidia ja pronta" }
+$descMidia = Descrever $zipMidia "win/argos-midia-$idMidia.zip" $md $idMidia
 
 # ---------------------------------------------------------------- motor e programa, por placa
 $programas = @{}; $nucleos = @{}; $motores = @{}; $trts = @{}
@@ -351,6 +397,7 @@ $m = [ordered]@{
   windows = [ordered]@{
     setup = [ordered]@{ url = "ArgosEPI-Servidor-Setup.exe"; tamanho = (Get-Item $setup).Length; sha256 = (Sha $setup) }
     base = $descBase
+    midia = $descMidia                          # video direto e voz dos avisos
     programa2 = $prog                           # chave nova: instalador antigo nao instala o formato novo pela metade
     nucleo = $nuc
     motor = $mot

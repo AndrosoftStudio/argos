@@ -16,14 +16,14 @@
 <meta name="twitter:card" content="summary_large_image">
 <script src="config.js"></script>
 <script type="module" src="google-login.js"></script>
-<script src="argos-stream.js?v=20260923"></script>
+<script src="argos-stream.js?v=20261008"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Outfit:wght@300;400;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="painel.css?v=20261007-b">
+<link rel="stylesheet" href="painel.css?v=20261008">
 </head>
 <body><div id="root"></div>
 <script type="text/babel">
@@ -43,6 +43,13 @@ function buildCamLink(token,{nodeId,fallback,conta}={}){
   if(conta) q.set('conta',conta);
   if(nodeId) q.set('node',nodeId);
   return `${CAM_SHARE_BASE}/cam.html?${q}`;
+}
+/* Link da TV de avisos (sirene e voz): mesma ideia do link do celular. */
+function buildTvLink(token,{fallback,conta}={}){
+  if(!CAM_SHARE_BASE) return `${fallback||''}/tv?token=${encodeURIComponent(token)}`;
+  const q=new URLSearchParams({token});
+  if(conta) q.set('conta',conta);
+  return `${CAM_SHARE_BASE}/tv.html?${q}`;
 }
 const SAVED_BACKEND_URL = cleanUrl(localStorage.getItem('epi_backendUrl') || '');
 // Pagina servida pelo proprio servidor (localhost, rede local ou o link do tunel): o backend e
@@ -149,7 +156,14 @@ const ICONES={
   image:<><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="9.5" r="1.8"/><path d="m21 16-5-5-9 9"/></>,
   chevron:<path d="m9 5 7 7-7 7"/>,
   calendar:<><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/></>,
+  help:<><circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.6a2.5 2.5 0 1 1 3.7 2.2c-.8.5-1.3 1-1.3 1.9"/><path d="M12 16.8v.2"/></>,
+  tv:<><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 20.5h8M12 17v3.5"/></>,
+  volume:<><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6M18 6.5a7.6 7.6 0 0 1 0 11"/></>,
+  save:<><path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/></>,
 };
+// marcas dos sistemas (preenchidas, não de traço): reconhecidas de relance na escolha do download
+const LOGO_WINDOWS=<svg className="ic" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M3 5.5 10.5 4.4v7.1H3zM11.5 4.3 21 3v8.5h-9.5zM3 12.5h7.5v7.1L3 18.5zM11.5 12.5H21V21l-9.5-1.3z"/></svg>;
+const LOGO_LINUX=<svg className="ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 2.5c-2.2 0-3.6 1.8-3.6 4.2 0 1.3.1 2.3-.6 3.6-1 1.8-2.6 3.9-2.6 6.4 0 .9.2 1.7.6 2.3-.6.4-1.3 1-1.3 1.7 0 .9 1.2 1.3 3.3 1.3 1.2 0 2-.4 2.6-.9h3.2c.6.5 1.4.9 2.6.9 2.1 0 3.3-.4 3.3-1.3 0-.7-.7-1.3-1.3-1.7.4-.6.6-1.4.6-2.3 0-2.5-1.6-4.6-2.6-6.4-.7-1.3-.6-2.3-.6-3.6 0-2.4-1.4-4.2-3.6-4.2z"/><ellipse cx="12" cy="15.2" rx="3.2" ry="4.3" fill="#fff" fillOpacity=".88"/><circle cx="10.6" cy="6.6" r=".85" fill="#fff"/><circle cx="13.4" cy="6.6" r=".85" fill="#fff"/><path d="M10.7 8.3h2.6L12 9.7z" fill="#fbc343"/></svg>;
 function Icon({n,className}){
   const c=ICONES[n];
   if(!c) return null;
@@ -251,15 +265,39 @@ function Titulo({n=2,...props}){
 
 /* Passo a passo em figuras (lista ordenada): substitui os parágrafos de ajuda. */
 function Passos({itens,rotulo='Como funciona'}){
+  // numerados e sem moldura: é um passo a passo para ler, não uma fileira de botões
   return(
-    <ol className="passos" aria-label={rotulo}>
-      {itens.map((p,i)=>(
-        <li key={i} className="passo">
-          {i>0&&<Icon n="chevron" className="passo-seta"/>}
-          <span className="passo-item"><span className="passo-ico"><Icon n={p.ic}/></span><span>{p.txt}</span></span>
-        </li>
-      ))}
-    </ol>
+    <div className="passos-caixa">
+      <p className="passos-rot" aria-hidden="true">{rotulo}</p>
+      <ol className="passos" aria-label={rotulo}>
+        {itens.map((p,i)=>(
+          <li key={i} className="passo">
+            <span className="passo-num" aria-hidden="true">{i+1}</span>
+            <Icon n={p.ic}/><span>{p.txt}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/* Ajuda: um "?" ao lado do título. Passar o mouse mostra o resumo; tocar abre a explicação inteira.
+   Assim a tela fica com o essencial e o texto longo só aparece para quem quer. */
+function Ajuda({titulo,resumo,children,className}){
+  const [aberta,setAberta]=useState(false);
+  return(
+    <>
+      <button type="button" className={"ajuda"+(className?' '+className:'')} onClick={()=>setAberta(true)}
+        aria-label={'Ajuda: '+titulo} data-dica={resumo}><Icon n="help"/></button>
+      {aberta&&(
+        <Janela titulo={titulo} ic="help" onClose={()=>setAberta(false)}>
+          <div className="ajuda-texto">{children||<p>{resumo}</p>}</div>
+          <footer className="modal-actions">
+            <button type="button" className="btn btn-primary" onClick={()=>setAberta(false)} data-foco><Icon n="check"/>Entendi</button>
+          </footer>
+        </Janela>
+      )}
+    </>
   );
 }
 
@@ -369,6 +407,9 @@ const pedirTexto=(o)=>_perguntar({tipo:'texto',ic:'text',botao:'Salvar',...o},
   ()=>window.prompt(o.titulo)||null);
 const informar=(o)=>_perguntar({tipo:'info',ic:'check',botao:'Entendi',...o},
   ()=>{window.alert([o.titulo,o.texto].filter(Boolean).join('\n'));return true;});
+// 'salvar' | 'descartar' | null (cancelou: continua editando)
+const perguntarSalvar=(o={})=>_perguntar({tipo:'salvar',ic:'save',titulo:'Salvar as alterações?',texto:'Você mudou os ajustes e ainda não salvou.',...o},
+  ()=>window.confirm('Salvar as alterações?')?'salvar':'descartar');
 
 function Perguntas(){
   const [p,setP]=useState(null);
@@ -379,7 +420,17 @@ function Perguntas(){
   },[]);
   if(!p) return null;
   const responder=(v)=>{setP(null);p.res(v);};
-  const cancelar=()=>responder(p.tipo==='texto'?null:false);
+  const cancelar=()=>responder(p.tipo==='texto'||p.tipo==='salvar'?null:false);
+  if(p.tipo==='salvar') return(
+    <Janela titulo={p.titulo} ic={p.ic} onClose={cancelar} fecharFora={false}>
+      {p.texto&&<p className="pergunta-texto">{p.texto}</p>}
+      <footer className="modal-actions">
+        <button type="button" className="btn btn-secondary" onClick={cancelar}>Cancelar</button>
+        <button type="button" className="btn btn-danger" onClick={()=>responder('descartar')}><Icon n="x"/>Não salvar</button>
+        <button type="button" className="btn btn-primary" onClick={()=>responder('salvar')} data-foco><Icon n="check"/>Salvar</button>
+      </footer>
+    </Janela>
+  );
   const ok=()=>{
     if(p.tipo==='texto'){const v=valor.trim();if(!v) return;responder(v);}
     else responder(true);
@@ -757,9 +808,9 @@ function ComoVincular({compacto}){
   return(
     <div className="como-vincular">
       <ol className="vincular-passos" aria-label="Como vincular um servidor">
-        <li><strong>Ligue o Argos no computador</strong><span>Programa Argos EPI Servidor (abaixo), instalar_docker.bat, iniciar.bat ou iniciar.sh</span></li>
-        <li><strong>Nesse mesmo computador, toque em “Adicionar este computador”</strong><span>O site encontra o servidor sozinho. Se o navegador perguntar, permita o acesso aos apps do computador.</span></li>
-        <li><strong>Entre nesta conta e clique em Vincular</strong><span>No programa do servidor também há o botão “Vincular agora”.</span></li>
+        <li><strong>Ligue o Argos no computador</strong></li>
+        <li><strong>Nele, toque em “Adicionar este computador”</strong></li>
+        <li><strong>Entre nesta conta e clique em Vincular</strong></li>
       </ol>
       <div className="vincular-acoes">
         <a className="btn btn-primary" href={SITE_PAREAR}><Icon n="plus"/>Adicionar este computador</a>
@@ -767,7 +818,7 @@ function ComoVincular({compacto}){
       </div>
       {!compacto&&(
         <form className="vincular-codigo" onSubmit={enviar(()=>{const c=codigo.trim();if(c) window.location.href=SITE_PAREAR+'?codigo='+encodeURIComponent(c);})}>
-          <label htmlFor={idCodigo}><Icon n="key"/>O site não achou o servidor? Digite o código que aparece nele</label>
+          <label htmlFor={idCodigo}><Icon n="key"/>Ou digite o código que aparece no servidor</label>
           <div className="vincular-codigo-linha">
             <input id={idCodigo} value={codigo} onChange={e=>setCodigo(e.target.value.toUpperCase())} placeholder="ABCD-1234" maxLength={9} autoComplete="off" spellCheck={false}/>
             <button type="submit" className="btn btn-primary" disabled={codigo.trim().length<8}><Icon n="check"/>Vincular</button>
@@ -804,62 +855,74 @@ function BaixarServidor(){
   const [man,setMan]=useState(undefined);
   const [so,setSo]=useState(detectarSistema);
   const detectada=useMemo(detectarPlaca,[]);
-  const [placa,setPlaca]=useState(detectada.placa);
+  // Linux não tem instalador que pergunte a placa: sugere pela placa deste computador
+  const [placaLinux,setPlacaLinux]=useState(detectada.placa==='nvidia'?'nvidia':'cpu');
+  const [placaPen,setPlacaPen]=useState(detectada.placa);
   useEffect(()=>{
     let vivo=true;
     fetch('downloads.json',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{if(vivo) setMan(j&&j.versao?j:null);}).catch(()=>{if(vivo) setMan(null);});
     return()=>{vivo=false;};
   },[]);
-  const placasSo=so==='linux'?['nvidia','cpu']:['nvidia','dml','cpu'];
-  const placaOk=placasSo.includes(placa)?placa:'cpu';
-  let link=null,tamanho=0,nota='',pendrive=[];
+  let link=null,tamanho=0,faixa='',pendrive=[],outraLinux=null;
   if(man){
     if(so==='windows'){
       const w=man.windows||{};
-      // programa compilado: janela + código (pequeno), núcleo do motor (.exe), bibliotecas do motor (.dll) e base (modelos, banco)
-      const prog=(w.programa2||w.programa||{})[placaOk], nucleo=(w.nucleo||{})[placaOk], motor=(w.motor||{})[placaOk];
-      if(prog&&motor){
-        const nomeSetup={nvidia:'nvidia',dml:'amd-intel',cpu:'cpu'}[placaOk];
-        link=DOWNLOADS_URL+'ArgosEPI-Servidor-Setup-'+nomeSetup+'.exe';
-        tamanho=(prog.tamanho||0)+((nucleo||{}).tamanho||0)+(motor.tamanho||0)+((w.base||{}).tamanho||0);
-        nota=`O instalador é pequeno: ele baixa o programa já compilado (${tamTxt(tamanho)}) por várias conexões ao mesmo tempo e continua de onde parou se a internet cair. Os modelos de IA vêm junto; depois de instalado nada mais é baixado. Não precisa de administrador.`;
-        // instalar sem internet: o instalador usa os pacotes que estiverem ao lado dele (pasta win)
+      const prog=w.programa2||w.programa||{};
+      const total=(pl)=>prog[pl]&&(w.motor||{})[pl]?(prog[pl].tamanho||0)+(((w.nucleo||{})[pl]||{}).tamanho||0)+(w.motor[pl].tamanho||0)+((w.base||{}).tamanho||0)+((w.midia||{}).tamanho||0):0;
+      const totais=['nvidia','dml','cpu'].map(total).filter(Boolean);
+      if(totais.length){
+        // um instalador só: ele vê a placa de vídeo do computador, pergunta e baixa o pacote certo
+        link=DOWNLOADS_URL+((w.setup||{}).url||'ArgosEPI-Servidor-Setup.exe');
+        tamanho=(w.setup||{}).tamanho||0;
+        faixa=Math.min(...totais)===Math.max(...totais)?tamTxt(totais[0]):`de ${tamTxt(Math.min(...totais))} a ${tamTxt(Math.max(...totais))}`;
+        const pl=prog[placaPen]?placaPen:'cpu';
         pendrive=[{nome:link.split('/').pop(),url:link,onde:''},{nome:'latest.json',url:DOWNLOADS_URL+'latest.json',onde:''},
-          ...[w.base,motor,nucleo,prog].filter(Boolean).map(a=>({nome:a.url.split('/').pop(),url:DOWNLOADS_URL+a.url,onde:'win',tam:a.tamanho}))];
+          ...[w.base,w.midia,(w.motor||{})[pl],(w.nucleo||{})[pl],prog[pl]].filter(Boolean).map(a=>({nome:a.url.split('/').pop(),url:DOWNLOADS_URL+a.url,onde:'win',tam:a.tamanho}))];
       }
     }else{
-      const l=(man.linux||{})[placaOk];
-      if(l){link=DOWNLOADS_URL+l.url;tamanho=l.tamanho;nota='';}
+      const l=(man.linux||{})[placaLinux]||(man.linux||{}).cpu;
+      if(l){link=DOWNLOADS_URL+l.url;tamanho=l.tamanho;}
+      const outra=placaLinux==='nvidia'?'cpu':'nvidia';
+      if((man.linux||{})[outra]) outraLinux=outra;
     }
   }
   const nomeSo=so==='linux'?'Linux':'Windows';
   return(
     <section className="bloco baixar" aria-labelledby="titulo-baixar">
       <header className="bloco-titulo"><Icon n="download"/><h2 id="titulo-baixar">Baixar o programa do servidor</h2>
+        <Ajuda titulo="Programa do servidor" resumo="Instale em cada computador que vai analisar câmeras. O instalador pergunta a placa de vídeo e baixa o resto.">
+          <p>Instale em cada computador que vai analisar câmeras (por exemplo, um por filial). Vem tudo pronto e compilado: PyTorch, banco de dados e os modelos de IA. Ele abre numa janela, pode ligar junto com o computador e mostra a conta e as câmeras.</p>
+          <p><b>Windows</b>: o instalador é pequeno. Ele confere a placa de vídeo do computador (NVIDIA, AMD/Intel ou só o processador), pergunta qual usar e baixa o programa já compilado ({faixa||'conforme a placa'}), por várias conexões ao mesmo tempo, continuando de onde parou se a internet cair. Não precisa de administrador. Depois de instalado, atualizar baixa só o que mudou (poucos MB).</p>
+          <p><b>Linux</b>: um pacote .tar.gz por tipo de placa (NVIDIA ou só o processador; AMD/Intel usam o do processador). Depois de baixar: <code>tar -xzf</code> no arquivo, entre na pasta <code>argos-epi-servidor</code> e rode <code>./instalar.sh</code>. Ubuntu, Debian, Mint, Fedora e parecidos (x64, com interface gráfica). Não rode como root.</p>
+          <p><b>Sem internet boa?</b> Abra “Instalar por pendrive”: baixe os arquivos num computador com internet e o instalador usa os que estiverem ao lado dele.</p>
+        </Ajuda>
         {man&&<span className="chip">versão {man.versao}</span>}</header>
-      <p className="baixar-intro">Instale em cada computador que vai analisar câmeras (por exemplo, um por filial). Vem tudo pronto e compilado: PyTorch, banco de dados e os modelos de IA. Ele abre numa janela, pode ligar junto com o computador e mostra a conta e as câmeras.</p>
       <div className="baixar-escolhas">
-        <div className="baixar-campo"><span className="baixar-rot">Sistema</span>
-          <Opcoes rotulo="Sistema" valor={so} onChange={setSo} opcoes={[{id:'windows',ic:'monitor',txt:'Windows 10/11'},{id:'linux',ic:'terminal',txt:'Linux'}]}/></div>
-        <div className="baixar-campo"><span className="baixar-rot">Placa de vídeo</span>
-          <Opcoes rotulo="Placa de vídeo" valor={placaOk} onChange={setPlaca}
-            opcoes={placasSo.map(id=>({id,ic:PLACAS[id].ic,txt:PLACAS[id].txt,dica:PLACAS[id].dica}))}/></div>
+        <Opcoes rotulo="Sistema" valor={so} onChange={setSo} className="so"
+          opcoes={[{id:'windows',svg:LOGO_WINDOWS,txt:'Windows 10/11'},{id:'linux',svg:LOGO_LINUX,txt:'Linux'}]}/>
       </div>
-      {detectada.nome&&<p className="dica-linha" style={{marginTop:10}}><Icon n="chip"/>Este computador: {detectada.nome}{detectada.placa===placaOk?' (escolha sugerida)':''}</p>}
-      {so==='linux'&&placa==='dml'&&<p className="dica-linha" style={{marginTop:6}}><Icon n="alert"/>No Linux, placas AMD/Intel usam a versão do processador.</p>}
       {man===undefined
         ? <p className="dica-linha" style={{marginTop:14}}><span className="giro"/>Procurando a versão mais nova...</p>
         : link
           ? <div className="baixar-acao">
-              <a className="btn btn-gold btn-grande" href={link} download><Icon n="download"/>Baixar para {nomeSo} · {PLACAS[placaOk].txt}{tamanho?` (${tamTxt(tamanho)})`:''}</a>
-              {nota&&<p className="dica-linha">{nota}</p>}
+              <a className="btn btn-gold btn-grande" href={link} download><Icon n="download"/>Baixar para {nomeSo}{so==='linux'?` · ${PLACAS[placaLinux].txt} (${tamTxt(tamanho)})`:''}</a>
+              {so==='windows'&&<p className="dica-linha"><Icon n="chip"/>O instalador pergunta a placa de vídeo{detectada.nome?` (este computador: ${detectada.nome})`:''}.</p>}
+              {so==='linux'&&outraLinux&&(
+                <p className="dica-linha"><Icon n="chip"/>{placaLinux==='nvidia'?'Com placa NVIDIA.':'Só o processador.'}
+                  <button type="button" className="chip" onClick={()=>setPlacaLinux(outraLinux)}>{outraLinux==='nvidia'?'Tenho placa NVIDIA':'Não tenho placa NVIDIA'}</button></p>
+              )}
               {pendrive.length>0&&(
                 <details className="baixar-offline">
-                  <summary><Icon n="upload"/>Internet lenta ou vários computadores? Instale por pendrive, sem internet</summary>
+                  <summary><Icon n="upload"/>Instalar por pendrive, sem internet</summary>
+                  <div className="aj-linha" style={{margin:'10px 0 4px'}}>
+                    <span className="baixar-rot">Placa do computador de destino</span>
+                    <Opcoes rotulo="Placa de vídeo do computador de destino" valor={placaPen} onChange={setPlacaPen}
+                      opcoes={['nvidia','dml','cpu'].map(id=>({id,ic:PLACAS[id].ic,txt:PLACAS[id].txt,dica:PLACAS[id].dica}))}/>
+                  </div>
                   <ol>
-                    <li>Num computador com internet boa, baixe os 5 arquivos abaixo (no <code>latest.json</code>: botão direito &gt; “Salvar link como”).</li>
-                    <li>No pendrive, crie uma pasta com o instalador e o <code>latest.json</code>; dentro dela, uma pasta chamada <code>win</code> com os 3 arquivos <code>.zip</code>.</li>
-                    <li>Em cada computador, abra o instalador direto do pendrive: ele instala dos arquivos ao lado, sem baixar nada.</li>
+                    <li>Baixe os arquivos abaixo (no <code>latest.json</code>: botão direito &gt; “Salvar link como”).</li>
+                    <li>No pendrive: o instalador e o <code>latest.json</code> numa pasta; dentro dela, uma pasta <code>win</code> com os arquivos <code>.zip</code>.</li>
+                    <li>No outro computador, abra o instalador direto do pendrive.</li>
                   </ol>
                   <ul className="baixar-arquivos">
                     {pendrive.map(a=>(
@@ -870,9 +933,7 @@ function BaixarServidor(){
               )}
               {so==='linux'&&(
                 <div className="baixar-linux">
-                  <p className="dica-linha">Depois de baixar, no terminal:</p>
                   <pre><code>{`tar -xzf ${link.split('/').pop()}\ncd argos-epi-servidor && ./instalar.sh`}</code></pre>
-                  <p className="dica-linha">Ubuntu, Debian, Mint, Fedora e parecidos (x64, com interface gráfica). Não rode como root.</p>
                 </div>
               )}
             </div>
@@ -973,7 +1034,13 @@ function HardwareServidor({s,alc,token,onToast}){
   const idRot=useId();
   return(
     <div className={"hw-servidor"+(salvando?' ocupado':'')} role="group" aria-labelledby={idRot}>
-      <p className="hw-rot" id={idRot}><Icon n="gauge"/>Processar câmeras com</p>
+      <p className="hw-rot" id={idRot}><Icon n="gauge"/>Processar câmeras com
+        <Ajuda titulo="Placa de vídeo ou processador" resumo="Onde a IA deste servidor roda. Vale na hora para as câmeras ligadas.">
+          <p><b>Automático</b>: usa a placa de vídeo se houver uma compatível; senão, o processador.</p>
+          <p><b>Placa de vídeo</b>: mais quadros por segundo. Precisa de uma placa compatível neste servidor (NVIDIA, ou AMD/Intel no Windows).</p>
+          <p><b>Processador</b>: deixa a placa de vídeo livre para outros programas; as câmeras ficam mais lentas.</p>
+          <p>A escolha fica guardada no próprio servidor e as câmeras ligadas recarregam sozinhas. Para trocar daqui, o servidor precisa estar ligado e ao alcance deste navegador.</p>
+        </Ajuda></p>
       <Opcoes rotulo="Processar câmeras com" valor={escolha} onChange={trocar}
         opcoes={[
           {id:'auto',ic:'zap',txt:'Automático',dica:'Placa de vídeo se houver, senão o processador',off:!base},
@@ -982,9 +1049,9 @@ function HardwareServidor({s,alc,token,onToast}){
         ]}/>
       <p className="dica-linha">
         {!base
-          ? <><Icon n="wifi"/>Para trocar, este servidor precisa estar ao alcance deste navegador (ligado e online).</>
+          ? <><Icon n="wifi"/>Fora de alcance daqui: não dá para trocar agora.</>
           : !gpu
-            ? <><Icon n="info"/>Sem placa de vídeo compatível: processa no processador.</>
+            ? <><Icon n="info"/>Sem placa de vídeo compatível.</>
             : hw&&gpu==='nvidia'&&hw.rosto_na_gpu===false
               ? <><Icon n="alert"/>{nomeGpu}: câmeras na placa; o reconhecimento de rosto ainda na CPU (atualize o servidor).</>
               : <><Icon n="chip"/>{nomeGpu}{hw&&hw.em_uso?` · em uso: ${hw.em_uso==='gpu'?'placa de vídeo':'processador'}`:''}</>}
@@ -1015,23 +1082,41 @@ function ServidoresPage({servidores,alcance,principalId,carregando,onAtualizar,o
     catch(e){onToast(mensagemErro(e),'err');}
   };
   const online=servidores.filter(s=>s.online).length;
+  const [filtro,setFiltro]=useState('todos');
+  const visiveis=servidores.filter(s=>filtro==='todos'||(filtro==='online')===Boolean(s.online));
   return(
     <Pagina ic="gear" titulo="Ajustes" acoes={
       <button type="button" className="btn btn-claro" onClick={onAtualizar} disabled={carregando} aria-label="Atualizar servidores"><Icon n="refresh"/><span className="btn-rotulo" aria-hidden="true">{carregando?'Buscando...':'Atualizar'}</span></button>}>
       <AbasAjustes atual="servidores"/>
       {servidores.length===0
         ? <section className="bloco" aria-labelledby="titulo-sem-servidor">
-            <header className="bloco-titulo"><Icon n="server"/><h2 id="titulo-sem-servidor">Nenhum servidor vinculado</h2></header>
+            <header className="bloco-titulo"><Icon n="server"/><h2 id="titulo-sem-servidor">Nenhum servidor vinculado</h2>
+              <Ajuda titulo="Como vincular um servidor" resumo="Ligue o Argos no computador e, nele mesmo, toque em “Adicionar este computador”.">
+                <p><b>1. Ligue o Argos no computador</b> que vai analisar as câmeras: o programa Argos EPI Servidor (baixe logo abaixo), ou instalar_docker.bat, iniciar.bat, iniciar.sh.</p>
+                <p><b>2. Nesse mesmo computador</b>, abra este painel e toque em “Adicionar este computador”. O site encontra o servidor sozinho; se o navegador perguntar, permita o acesso aos apps do computador.</p>
+                <p><b>3. Entre nesta conta e clique em Vincular.</b> No programa do servidor também há o botão “Vincular agora”.</p>
+                <p>Se o site não achar o servidor, digite o código de 8 letras que aparece nele (vale 15 minutos).</p>
+              </Ajuda></header>
             <ComoVincular/>
           </section>
         : <>
             <section className="bloco servidores-resumo" aria-labelledby="titulo-servidores">
               <header className="bloco-titulo"><Icon n="server"/><h2 id="titulo-servidores">Servidores da conta</h2>
+                <Ajuda titulo="Servidores da conta" resumo="Cada servidor é um computador que analisa câmeras. Os da mesma conta copiam os cadastros entre si.">
+                  <p>Um <b>servidor</b> é um computador com o Argos EPI ligado: é ele que analisa as câmeras. Dá para ter vários na mesma conta (um por filial, por exemplo).</p>
+                  <p>Os servidores da conta formam uma <b>malha</b>: EPIs, equipe, áreas, links de celular e de TV e o histórico de faltas são copiados entre eles. O que é de cada máquina (modelos enviados, câmeras ligadas) fica só nela.</p>
+                  <p>Em cada cartão: se está online, quanto do computador está livre, quantas câmeras está analisando e se a IA roda na placa de vídeo ou no processador.</p>
+                  <p><b>Usar neste painel</b> escolhe por qual servidor este painel lê e grava os cadastros. Cada câmera pode ficar em qualquer servidor (Ajustes da câmera &gt; Servidor).</p>
+                </Ajuda>
                 <span className={"chip"+(online?' bom':' alerta')}><span className={"dot"+(online?' on':'')}/>{online} de {servidores.length} online</span></header>
-              <p className="dica-linha"><Icon n="globe"/>Os servidores da conta formam uma malha: EPIs, equipe, áreas, links de celular e o histórico de faltas são copiados entre eles. Em cada um dá para escolher se a IA roda na placa de vídeo ou no processador.</p>
+              {servidores.length>1&&(
+                <Opcoes rotulo="Mostrar servidores" valor={filtro} onChange={setFiltro} className="filtros"
+                  opcoes={[{id:'todos',ic:'server',txt:`Todos (${servidores.length})`},{id:'online',ic:'check',txt:`Online (${online})`},{id:'offline',ic:'x',txt:`Offline (${servidores.length-online})`}]}/>
+              )}
             </section>
+            {visiveis.length===0&&<p className="dica-linha vazio-filtro"><Icon n="info"/>Nenhum servidor {filtro==='online'?'online':'offline'} agora.</p>}
             <ul className="servidores-lista" aria-label="Servidores da conta">
-              {servidores.map(s=>(
+              {visiveis.map(s=>(
                 <li key={s.id}>
                   <ServidorCard s={s} alc={alcance[s.id]} principal={s.id===principalId} token={token} onToast={onToast}
                     onUsar={onUsar} onRenomear={renomear} onRemover={remover}/>
@@ -1039,7 +1124,13 @@ function ServidoresPage({servidores,alcance,principalId,carregando,onAtualizar,o
               ))}
             </ul>
             <section className="bloco" aria-labelledby="titulo-add-servidor">
-              <header className="bloco-titulo"><Icon n="plus"/><h2 id="titulo-add-servidor">Adicionar outro servidor</h2></header>
+              <header className="bloco-titulo"><Icon n="plus"/><h2 id="titulo-add-servidor">Adicionar outro servidor</h2>
+              <Ajuda titulo="Como vincular um servidor" resumo="Ligue o Argos no computador e, nele mesmo, toque em “Adicionar este computador”.">
+                <p><b>1. Ligue o Argos no computador</b> que vai analisar as câmeras: o programa Argos EPI Servidor (baixe logo abaixo), ou instalar_docker.bat, iniciar.bat, iniciar.sh.</p>
+                <p><b>2. Nesse mesmo computador</b>, abra este painel e toque em “Adicionar este computador”. O site encontra o servidor sozinho; se o navegador perguntar, permita o acesso aos apps do computador.</p>
+                <p><b>3. Entre nesta conta e clique em Vincular.</b> No programa do servidor também há o botão “Vincular agora”.</p>
+                <p>Se o site não achar o servidor, digite o código de 8 letras que aparece nele (vale 15 minutos).</p>
+              </Ajuda></header>
               <ComoVincular/>
             </section>
           </>}
@@ -1067,7 +1158,139 @@ function Faltas({status,sm}){
   return txt.length?<span className="faltas-txt">{txt.join(', ')}</span>:null;
 }
 
-function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,device,index,onRemove,alarmeLigado,onToast,visual='medio',servidorNome}){
+/* ═══ AJUSTES DA CÂMERA ═══════════════════════════════════════
+   Janela no meio da tela, com o fundo embaçado. Nada vale enquanto não salvar: a pessoa mexe à
+   vontade e decide no fim (Salvar ou Cancelar). Fechar pelo X, pelo Esc ou tocando fora pergunta
+   antes se há mudança sem salvar. Ao salvar, tudo é aplicado na hora, com a câmera ligada.      */
+const atrasoTxt=(ms)=>ms==null?'':ms<1000?Math.round(ms)+' ms':(ms/1000).toFixed(1)+' s';
+
+function CameraAjustes({nome,inicial,remoto,rodando,availableModels,episDoModeloAtual,servidores,diag,onSalvar,onClose}){
+  const [r,setR]=useState(inicial);
+  const [salvando,setSalvando]=useState(false);
+  const [erro,setErro]=useState('');
+  const id=useId();
+  const mudar=(patch)=>setR(prev=>({...prev,...patch}));
+  const sujo=JSON.stringify(r)!==JSON.stringify(inicial);
+  const precisaUrl=r.sourceType==='rtsp'||r.sourceType==='http'||r.sourceType==='file_url';
+  const modelo=findModelByValue(availableModels,r.streamModel);
+  // trocou o modelo: os EPIs disponíveis passam a ser os do modelo novo
+  const episDisp=r.streamModel===inicial.streamModel?episDoModeloAtual:getModelRequiredItems(modelo);
+  const padrao=getModelRequiredItems(modelo).length?getModelRequiredItems(modelo):episDisp;
+  const ativos=Array.isArray(r.epis)?r.epis:padrao;
+  const todos=[...new Set([...episDisp,...ativos])];
+  const toggleEpi=(item,ligar)=>mudar({epis:ligar?[...ativos.filter(k=>k!==item),item]:ativos.filter(k=>k!==item)});
+
+  const salvar=async()=>{
+    if(precisaUrl&&!r.camUrl.trim()){setErro('Informe o endereço da câmera.');return;}
+    setSalvando(true);setErro('');
+    try{await onSalvar(r);onClose();}
+    catch(e){setErro(mensagemErro(e,'Não foi possível salvar os ajustes.'));setSalvando(false);}
+  };
+  const tentarFechar=async()=>{
+    if(salvando) return;
+    if(!sujo){onClose();return;}
+    const v=await perguntarSalvar({texto:`Você mudou os ajustes de "${nome}" e ainda não salvou.`});
+    if(v==='salvar') salvar();
+    else if(v==='descartar') onClose();
+  };
+
+  return(
+    <Janela titulo={'Ajustes · '+nome} ic="sliders" onClose={tentarFechar} tamanho="medio">
+      <form className="cam-modal" onSubmit={enviar(salvar)}>
+        <p className="field"><label htmlFor={id+'-nome'}><Icon n="text"/>Nome da câmera</label>
+          <input id={id+'-nome'} value={r.apelido} onChange={e=>mudar({apelido:e.target.value})} placeholder={nome} maxLength={40} data-foco/></p>
+
+        <div className="field-row">
+          <p className="field"><label htmlFor={id+'-fonte'}><Icon n="video"/>Fonte do vídeo</label>
+            <select id={id+'-fonte'} value={r.sourceType} onChange={e=>mudar({sourceType:e.target.value})} disabled={remoto}>
+              {FONTES.map(f=><option key={f.id} value={f.id}>{f.txt}</option>)}
+            </select></p>
+          <p className="field"><label htmlFor={id+'-modelo'}><Icon n="chip"/>Modelo de IA</label>
+            <select id={id+'-modelo'} value={r.streamModel} onChange={e=>mudar({streamModel:e.target.value,epis:null})}>
+              {availableModels.length>0
+                ? availableModels.map(m=><option key={m.name} value={m.name}>{m.display_name||(m.tipo==='customizado'?'★ '+m.name:m.name)} ({m.size_mb}MB)</option>)
+                : <><option value="yolo26n.pt">YOLO26 Nano</option><option value="yolo26s.pt">YOLO26 Small</option></>}
+            </select></p>
+        </div>
+        {precisaUrl&&(
+          <p className="field"><label htmlFor={id+'-url'}><Icon n="link"/>Endereço da câmera</label>
+            <input id={id+'-url'} type="url" value={r.camUrl} onChange={e=>mudar({camUrl:e.target.value})} placeholder={r.sourceType==='rtsp'?'rtsp://usuario:senha@192.168.0.10/...':'http://...'}/></p>
+        )}
+
+        <div className="cam-modal-grupo">
+          <p className="cam-modal-rot"><Icon n="zap"/>Modo de análise
+            <Ajuda titulo="Modos de análise" resumo="Tempo real: imediato, sem guardar vídeo. Detalhado e Super: mais precisos, com atraso de 1,5 s e 4 s.">
+              <p><b>Tempo real</b>: nada é guardado. O servidor analisa sempre o quadro mais novo e o resultado sai na hora; o atraso é só o da rede e o da análise. O vídeo vai direto para o servidor (WebRTC) quando a rede deixa.</p>
+              <p><b>Detalhado</b> (cerca de 1,5 s de atraso): modelos maiores, e cada EPI é decidido olhando um pouco antes e um pouco depois.</p>
+              <p><b>Super detalhado</b> (cerca de 4 s): o mais preciso; revisa cada pessoa ampliada.</p>
+            </Ajuda></p>
+          <div className="aj-linha">
+            <Opcoes rotulo="Modo de análise" valor={r.modo} onChange={k=>mudar({modo:k})}
+              opcoes={Object.entries(ArgosStream.MODES).map(([k,m])=>({id:k,txt:m.nome,ic:MODO_ICONE[k]||'zap',dica:m.descricao}))}/>
+            <select value={r.fps} onChange={e=>mudar({fps:Number(e.target.value)})} aria-label="Quadros por segundo">
+              {ArgosStream.FPS_OPTIONS.map(f=><option key={f} value={f}>{f} fps</option>)}
+            </select>
+            <select value={r.resolucao} onChange={e=>mudar({resolucao:Number(e.target.value)})} aria-label="Resolução">
+              {ArgosStream.RES_OPTIONS.map(v=><option key={v} value={v}>{v}p</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div className="cam-modal-grupo">
+          <p className="cam-modal-rot"><Icon n="helmet"/>EPIs fiscalizados nesta câmera
+            {Array.isArray(r.epis)&&<button type="button" className="chip" onClick={()=>mudar({epis:null})} title="Voltar aos EPIs padrão do modelo"><Icon n="undo"/>Padrão</button>}</p>
+          {todos.length>0
+            ? <EpiBotoes disponiveis={todos} ativos={ativos} onToggle={toggleEpi} titulo="EPIs fiscalizados nesta câmera" comNomes/>
+            : <p className="dica-linha">Este modelo não reconhece EPIs</p>}
+        </div>
+
+        <div className="cam-modal-grupo">
+          <label className="pref compacta">
+            <span className="pref-ico"><Icon n="scan-face"/></span>
+            <span className="pref-nome">Reconhecer o rosto</span>
+            <Ajuda titulo="Reconhecer o rosto" resumo="Ligado: identifica o funcionário. Desligado: só confere os EPIs (mais leve para computador fraco).">
+              <p><b>Ligado</b> (padrão): a câmera compara o rosto com os funcionários cadastrados. A falta fica com o nome da pessoa, entra no desempenho dela e a TV chama pelo nome.</p>
+              <p><b>Desligado</b>: a câmera só confere se a pessoa está com os EPIs. Fica mais leve para um computador sem placa de vídeo, mas as faltas ficam sem nome ("pessoa não identificada") e não entram no desempenho de ninguém.</p>
+            </Ajuda>
+            <span className="switch">
+              <input type="checkbox" role="switch" checked={r.rosto!==false} onChange={e=>mudar({rosto:e.target.checked})}/>
+              <span className="switch-trilho"/><span className="switch-bolha"/>
+            </span>
+          </label>
+        </div>
+
+        {servidores.length>0&&(
+          <div className="cam-modal-grupo">
+            <p className="field" style={{marginBottom:0}}><label htmlFor={id+'-serv'}><Icon n="server"/>Servidor que processa esta câmera
+              <Ajuda titulo="Servidor da câmera" resumo="Escolha qual computador da conta analisa esta câmera.">
+                <p>Cada câmera é analisada por um dos servidores da conta. Escolha aqui qual; a mudança vale ao salvar.</p>
+                <p><b>Câmera IP (RTSP)</b> precisa ficar no servidor que está na mesma rede que ela (por exemplo, o da mesma filial).</p>
+                <p><b>Celular (link)</b>: o celular recebe o aviso e reconecta sozinho no servidor escolhido; ele precisa estar transmitindo agora.</p>
+              </Ajuda></label>
+              <select id={id+'-serv'} value={r.base} onChange={e=>mudar({base:e.target.value})} disabled={servidores.length<2}>
+                {!servidores.some(v=>v.base===r.base)&&<option value={r.base}>Servidor atual</option>}
+                {servidores.map((v,i)=><option key={v.id} value={v.base}>{v.nome}{i===0&&servidores.length>1?' (mais livre)':''} · livre {v.status.availability??'?'}%</option>)}
+              </select></p>
+          </div>
+        )}
+
+        <details className="cam-modal-diag">
+          <summary><Icon n="info"/>Diagnóstico</summary>
+          {diag}
+        </details>
+
+        {erro&&<p className="err-msg" role="alert"><Icon n="alert"/>{erro}</p>}
+        <footer className="modal-actions">
+          {rodando&&sujo&&<span className="dica-linha" style={{marginRight:'auto'}}><Icon n="zap"/>Vale na hora, com a câmera ligada</span>}
+          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={salvando}>Cancelar</button>
+          <button type="submit" className="btn btn-primary" disabled={salvando||!sujo}><Icon n="check"/>{salvando?'Salvando...':'Salvar alterações'}</button>
+        </footer>
+      </form>
+    </Janela>
+  );
+}
+
+function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,device,index,onRemove,alarmeLigado,onToast,visual='medio',servidorNome,servidores=[],onMudarServidor}){
   const [status,setStatus]=useState(null);
   const [info,setInfo]=useState(null);
   const [showZonas,setShowZonas]=useState(false);
@@ -1075,10 +1298,11 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
   const inferredSource = /^remote_cam_|^cam_/.test(streamId) ? 'remote' : 'cam';
   const [sourceType,setSourceType]=useState(()=>inferredSource==='remote' ? 'remote' : (localStorage.getItem('epi_source_'+streamId)||inferredSource));
   const [showLongInfo,setShowLongInfo]=useState(false);
-  // os ajustes ficam escondidos até alguém tocar no ícone: quem só acompanha não precisa deles
+  // os ajustes abrem numa janela: quem só acompanha não precisa deles
   const [ajustes,setAjustes]=useState(false);
+  // vídeo direto (WebRTC) chegando para esta câmera: o <video> mostra, o canvas só leva as caixas
+  const [direto,setDireto]=useState(false);
   const idTitulo=useId();
-  const idAjustes=useId();
   // apelido da câmera ("Portaria", "Solda 2"): fica no navegador de quem configurou
   const [apelido,setApelido]=useState(()=>localStorage.getItem('epi_apelido_'+streamId)||'');
   useEffect(()=>{
@@ -1090,7 +1314,7 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
   const [applying,setApplying]=useState(false);
   const [streamModel,setStreamModel]=useState(()=>localStorage.getItem('epi_sm_'+streamId)||defaultModel||'yolo26n.pt');
   // modo, fps e resolução ficam no servidor: valem para a câmera deste navegador, o celular e as câmeras IP
-  const [config,setConfig]=useState({modo:'tempo_real',fps:60,resolucao:720});
+  const [config,setConfig]=useState({modo:'tempo_real',fps:60,resolucao:720,rosto:true,imediato:true});
   const [net,setNet]=useState(null);
   const [conn,setConn]=useState('');
   const [playStats,setPlayStats]=useState(null);
@@ -1160,11 +1384,17 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
     if(usingCam||!playerRef.current) return;
     const viewer=new ArgosStream.LiveViewer({
       backendUrl,token,streamId,player:playerRef.current,onResult,onInfo,
+      videoEl:videoRef.current,onDireto:on=>setDireto(Boolean(on)),
       onStatus:st=>setConn(st),
     });
     viewer.start();
-    return()=>{viewer.stop();if(playerRef.current) playerRef.current.clear();setConn('');};
+    return()=>{viewer.stop();setDireto(false);if(playerRef.current) playerRef.current.clear();setConn('');};
   },[streamId,token,backendUrl,usingCam]);
+
+  // câmera deste navegador em tempo real: a tela mostra o vídeo ao vivo e só as caixas vêm do servidor
+  useEffect(()=>{
+    if(usingCam&&playerRef.current) playerRef.current.setLive(config.imediato?videoRef.current:null);
+  },[usingCam,config.imediato]);
 
   const enterFs=()=>{
     const el=videoOuterRef.current;
@@ -1186,7 +1416,7 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
     }
     if(streamRef.current){streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;}
     if(videoRef.current) videoRef.current.srcObject=null;
-    if(playerRef.current) playerRef.current.clear();
+    if(playerRef.current){playerRef.current.setLive(null);playerRef.current.clear();}
     setUsingCam(false);
     setNet(null);
   },[backendUrl,token,streamId]);
@@ -1211,14 +1441,15 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
     return true;
   };
 
-  const startCam=async(kind)=>{
+  const startCam=async(kind,v={})=>{
+    const base=v.base||backendUrl, modelo=v.streamModel||streamModel;
     kindRef.current=kind;
-    if(!await openLocal(config,kind)) return;
-    const r=await authFetch(backendUrl+'/update',token,{method:'POST',body:JSON.stringify({model:streamModel,device,camera:'webcam',stream_id:streamId,required_items:getModelRequiredItems(selectedModel)})});
+    if(!await openLocal(v.config||config,kind)) return;
+    const r=await authFetch(base+'/update',token,{method:'POST',body:JSON.stringify({model:modelo,device,camera:'webcam',stream_id:streamId,required_items:getModelRequiredItems(findModelByValue(availableModels,modelo))})});
     if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||'Falha ao iniciar a IA');}
     setUsingCam(true);
     const sender=new ArgosStream.LiveSender({
-      video:videoRef.current,backendUrl,token,streamId,
+      video:videoRef.current,backendUrl:base,token,streamId,
       onResult:d=>{if(playerRef.current) playerRef.current.pushResult(d);onResult(d);},
       onInfo,
       onStats:s=>setNet(s),
@@ -1239,14 +1470,16 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
     sender.start();
   };
 
-  const apply=async()=>{
+  const apply=async(v={})=>{
+    const fonte=v.sourceType||sourceType, url=v.camUrl!==undefined?v.camUrl:camUrl;
+    const base=v.base||backendUrl, modelo=v.streamModel||streamModel;
     setApplying(true);
     try{
       if(usingCam) await stopCam();
-      if(sourceType==='cam'||sourceType==='screen') await startCam(sourceType==='screen'?'screen':'camera');
+      if(fonte==='cam'||fonte==='screen') await startCam(fonte==='screen'?'screen':'camera',v);
       else{
-        const remoteCamera = sourceType==='remote' ? 'webcam' : camUrl;
-        const r=await authFetch(backendUrl+'/update',token,{method:'POST',body:JSON.stringify({model:streamModel,device,camera:remoteCamera,stream_id:streamId,required_items:getModelRequiredItems(selectedModel)})});
+        const remoteCamera = fonte==='remote' ? 'webcam' : url;
+        const r=await authFetch(base+'/update',token,{method:'POST',body:JSON.stringify({model:modelo,device,camera:remoteCamera,stream_id:streamId,required_items:getModelRequiredItems(findModelByValue(availableModels,modelo))})});
         if(!r.ok){const d=await r.json().catch(()=>({}));onToast&&onToast(d.error||'Não foi possível ligar a câmera.','err');}
       }
     }catch(e){
@@ -1272,27 +1505,44 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
     }catch{}
   };
 
-  // EPIs fiscalizados nesta câmera: cada botão liga ou desliga um; vale na hora, sem reiniciar
-  const toggleEpi=(item,ligar)=>{
-    const novo=ligar?[...episAtivos.filter(k=>k!==item),item]:episAtivos.filter(k=>k!==item);
-    setStatus(prev=>({...(prev||{}),required_items:novo,epis_da_camera:true}));
-    changeConfig({epis:novo});
-  };
-  const episDoModelo=()=>{
-    setStatus(prev=>({...(prev||{}),epis_da_camera:false}));
-    changeConfig({epis:null});
-  };
-
-  const changeModel=async(newModel)=>{
-    manualModelRef.current=true;
-    setStreamModel(newModel);
-    localStorage.setItem('epi_sm_'+streamId, newModel);
-    const modelCfg=getModelRequiredItems(findModelByValue(availableModels,newModel));
-    if(usingCam || sourceType==='remote'){
-      try{
-        await authFetch(backendUrl+'/update',token,{method:'POST',body:JSON.stringify({model:newModel,device,camera:'webcam',stream_id:streamId,required_items:modelCfg})});
-      }catch{}
+  /* Salvar da janela de ajustes: aplica tudo de uma vez, na hora, com a câmera ligada.
+     Ordem: servidor (se mudou) -> configuração (modo, fps, resolução, EPIs, rosto) -> fonte e modelo. */
+  const salvarAjustes=async(r)=>{
+    const rodando=usingCam||Boolean(status&&status.frame_w)||direto;
+    const mudouServidor=r.base!==backendUrl;
+    const mudouFonte=r.sourceType!==sourceType||(r.camUrl||'')!==(camUrl||'');
+    const mudouModelo=r.streamModel!==streamModel;
+    setApelido(r.apelido.trim());
+    if(mudouServidor){
+      const alvo=servidores.find(v=>v.base===r.base);
+      if(!alvo||!onMudarServidor) throw new Error('O servidor escolhido não está respondendo agora.');
+      if(usingCam) await stopCam();
+      await onMudarServidor(streamId,alvo,{remoto:sourceType==='remote',baseAtual:backendUrl});
     }
+    const cfg={modo:r.modo,fps:r.fps,resolucao:r.resolucao,epis:r.epis,rosto:r.rosto!==false};
+    const resp=await authFetch(r.base+'/streams/'+encodeURIComponent(streamId)+'/config',token,{method:'POST',body:JSON.stringify(cfg)});
+    const d=await resp.json().catch(()=>({}));
+    if(!resp.ok) throw new Error(d.error||'O servidor não aceitou os ajustes.');
+    if(d.config) setConfig(d.config);
+    setStatus(prev=>({...(prev||{}),epis_da_camera:Array.isArray(r.epis),...(Array.isArray(r.epis)?{required_items:r.epis}:{})}));
+    setSourceType(r.sourceType);
+    setCamUrl(r.camUrl);
+    if(mudouModelo){
+      manualModelRef.current=true;
+      setStreamModel(r.streamModel);
+      localStorage.setItem('epi_sm_'+streamId,r.streamModel);
+    }
+    // fonte, modelo ou servidor novos: a câmera que estava ligada recomeça já com eles
+    const celular=r.sourceType==='remote';
+    if(mudouServidor&&celular){onToast&&onToast('Ajustes salvos. O celular vai reconectar no servidor escolhido.');return;}
+    if((mudouFonte||mudouServidor)&&(rodando||mudouFonte)&&!celular){
+      await apply({sourceType:r.sourceType,camUrl:r.camUrl,streamModel:r.streamModel,base:r.base,config:d.config||cfg});
+    }else if(mudouModelo&&(rodando||celular)){
+      const fonteAtual=usingCam||celular?'webcam':((status&&status.camera)||r.camUrl||'webcam');
+      await authFetch(r.base+'/update',token,{method:'POST',body:JSON.stringify({model:r.streamModel,device,camera:fonteAtual,stream_id:streamId,
+        required_items:getModelRequiredItems(findModelByValue(availableModels,r.streamModel))})}).catch(()=>{});
+    }
+    onToast&&onToast('Ajustes salvos.');
   };
 
   const handleRemove=()=>{
@@ -1318,7 +1568,8 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
   const episProprios=Array.isArray(config.epis)||Boolean(status&&status.epis_da_camera);
   const pipe=(info&&info.pipeline)||{};
   const connLabel={ws:'WebSocket',http:'HTTP (reserva)',reconectando:'reconectando...',aguardando:'aguardando a câmera',erro:'erro'}[conn]||conn||'—';
-  const hasImage=Boolean(playStats&&playStats.fps>0)||Boolean(status&&status.frame_w);
+  const hasImage=Boolean(playStats&&playStats.fps>0)||Boolean(status&&status.frame_w)||direto;
+  const videoDireto=direto||Boolean(usingCam&&net&&net.direto);
   const cameraDisplay=sourceType==='remote'
     ? 'Celular (link)'
     : (usingCam?(sourceType==='screen'?'Tela deste navegador':'Câmera deste navegador'):maskCameraUrl((status&&status.camera)||camUrl)||'—');
@@ -1355,12 +1606,12 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
         {usingCam&&<button type="button" className="ib sm perigo" onClick={stopCam} aria-label="Parar câmera" data-dica="Parar"><Icon n="stop"/></button>}
         <button type="button" className="ib sm" onClick={()=>setShowZonas(true)}
           aria-label={'Áreas desta câmera'+(zonasN>0?` (${zonasN} desenhada(s))`:'')} data-dica={zonasN>0?`Áreas (${zonasN})`:'Áreas'}><Icon n="map"/></button>
-        <button type="button" className={"ib sm"+(ajustes?' ativo':'')} onClick={()=>setAjustes(v=>!v)}
-          aria-expanded={ajustes} aria-controls={idAjustes} aria-label="Ajustes da câmera" data-dica="Ajustes"><Icon n="sliders"/></button>
+        <button type="button" className="ib sm" onClick={()=>setAjustes(true)}
+          aria-haspopup="dialog" aria-label="Ajustes da câmera" data-dica="Ajustes"><Icon n="sliders"/></button>
         <button type="button" className="ib sm perigo" onClick={handleRemove} aria-label="Remover câmera" data-dica="Remover"><Icon n="trash"/></button>
       </header>
       <figure className="cam-video" ref={videoOuterRef} aria-label={'Vídeo ao vivo: '+nome}>
-        <video ref={videoRef} className="video-live" autoPlay playsInline muted style={{display:usingCam?'block':'none'}}/>
+        <video ref={videoRef} className="video-live" autoPlay playsInline muted style={{display:(usingCam||direto)?'block':'none'}}/>
         <canvas ref={canvasRef} className="video-overlay" aria-hidden="true"/>
         {!hasImage&&!usingCam&&(
           <div className="sem-sinal">
@@ -1369,7 +1620,7 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
               : <button type="button" className="play-grande" onClick={iniciar} disabled={applying} aria-label="Ligar câmera" data-dica="Ligar"><Icon n="play"/></button>}
           </div>
         )}
-        {(hasImage||usingCam)&&<span className="fps"><Icon n={MODO_ICONE[config.modo]||'zap'}/>{fps} fps{pipe.atraso_ms!=null?` · ${(pipe.atraso_ms/1000).toFixed(1)} s`:''}</span>}
+        {(hasImage||usingCam)&&<span className="fps" title={videoDireto?'Vídeo direto (WebRTC): imediato':config.imediato?'Imediato (quadros pelo servidor)':'Atraso do modo de análise'}><Icon n={MODO_ICONE[config.modo]||'zap'}/>{fps} fps{pipe.atraso_ms!=null?` · ${atrasoTxt(pipe.atraso_ms)}`:''}{videoDireto?' · direto':''}</span>}
         <button type="button" className="ib sm tela-cheia dica-dir" onClick={enterFs} aria-label="Tela cheia" data-dica="Tela cheia"><Icon n="maximize"/></button>
         <button type="button" className="btn btn-sm sair-fs" onClick={exitFs}><Icon n="x"/>Sair</button>
       </figure>
@@ -1401,64 +1652,27 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
       )}
 
       {ajustes&&(
-        <section className="cam-ajustes" id={idAjustes} aria-label={'Ajustes de '+nome}>
-          <form className="aj-linha" onSubmit={enviar(apply)}>
-            <label className="aj-rot" data-dica="Fonte do vídeo" htmlFor={idAjustes+'-fonte'}><Icon n="video"/><span className="sr">Fonte do vídeo</span></label>
-            <select id={idAjustes+'-fonte'} value={sourceType} onChange={e=>setSourceType(e.target.value)} disabled={usingCam}>
-              {FONTES.map(f=><option key={f.id} value={f.id}>{f.txt}</option>)}
-            </select>
-            {precisaUrl&&
-              <input className="inline-input" type="url" value={camUrl} onChange={e=>setCamUrl(e.target.value)} placeholder={sourceType==='rtsp'?'rtsp://...':'http://...'} aria-label="Endereço da câmera"/>
-            }
-            <button type="submit" className="btn btn-primary btn-sm" disabled={applying}>
-              <Icon n={usingCam?'refresh':'play'}/>{applying?'...':usingCam?'Reiniciar':'Ligar'}
-            </button>
-          </form>
-          <div className="aj-linha">
-            <label className="aj-rot" data-dica="Modelo de IA" htmlFor={idAjustes+'-modelo'}><Icon n="chip"/><span className="sr">Modelo de IA</span></label>
-            <select id={idAjustes+'-modelo'} value={streamModel} onChange={e=>changeModel(e.target.value)} style={{maxWidth:240}}>
-              {availableModels.length>0
-                ? availableModels.map(m=>{
-                    const label=m.display_name||(m.tipo==='customizado'?'★ '+m.name:m.name);
-                    return <option key={m.name} value={m.name}>{label} ({m.size_mb}MB)</option>;
-                  })
-                : <>
-                    <option value="yolo26n.pt">YOLO26 Nano</option>
-                    <option value="yolo26s.pt">YOLO26 Small</option>
-                  </>
-              }
-            </select>
-          </div>
-          <div className="aj-linha">
-            <Opcoes rotulo="Modo de análise" valor={config.modo} onChange={k=>changeConfig({modo:k})}
-              opcoes={Object.entries(ArgosStream.MODES).map(([k,m])=>({id:k,txt:m.nome,ic:MODO_ICONE[k]||'zap',dica:m.descricao}))}/>
-            <select value={config.fps} onChange={e=>changeConfig({fps:Number(e.target.value)})} aria-label="Quadros por segundo">
-              {ArgosStream.FPS_OPTIONS.map(f=><option key={f} value={f}>{f} fps</option>)}
-            </select>
-            <select value={config.resolucao} onChange={e=>changeConfig({resolucao:Number(e.target.value)})} aria-label="Resolução">
-              {ArgosStream.RES_OPTIONS.map(r=><option key={r} value={r}>{r}p</option>)}
-            </select>
-          </div>
-          <div className="aj-linha aj-epis">
-            <span className="aj-rot" data-dica="EPIs fiscalizados nesta câmera"><Icon n="helmet"/><span className="sr">EPIs fiscalizados nesta câmera</span></span>
-            {episDisp.length>0
-              ? <EpiBotoes disponiveis={episDisp} ativos={episAtivos} onToggle={toggleEpi} titulo="EPIs fiscalizados nesta câmera"/>
-              : <span className="dica-linha">Este modelo não reconhece EPIs</span>}
-            {episProprios&&<button type="button" className="chip" onClick={episDoModelo} title="Voltar aos EPIs padrão do modelo"><Icon n="undo"/>Padrão</button>}
-          </div>
-          <ul className="diag" aria-label="Diagnóstico">
-            <li className="chip" title={cameraDisplay}><Icon n="video"/>{cameraDisplay}</li>
-            <li className={"chip"+(conn==='reconectando'?' alerta':'')}><Icon n="wifi"/>{connLabel}</li>
-            {pipe.atraso_ms!=null&&<li className="chip"><Icon n="clock"/>{pipe.atraso_ms} ms</li>}
-            {pipe.fps_analise!=null&&<li className="chip" title="IA analisa / servidor recebe (quadros por segundo)"><Icon n="chip"/>{pipe.fps_analise}/{pipe.fps_entrada} q/s</li>}
-            {pipe.sem_sinal&&<li className="chip alerta"><Icon n="video-off"/>sem sinal</li>}
-            {info&&info.ajuda&&<li className="chip" title={'Outro servidor da conta, na mesma rede, adianta parte da análise desta câmera: rostos '+info.ajuda.rosto+' q/s, EPIs '+info.ajuda.epi+' q/s'}><Icon n="server"/>ajuda de {(info.ajuda.pares||[]).join(', ')||'outro servidor'}</li>}
-            {pipe.enganos>0&&<li className="chip" title="Vezes em que o modelo deixou de ver o EPI por alguns quadros e o sistema não contou como falta, porque a pessoa tinha sido vista com ele e ele reapareceu"><Icon n="shield"/>{pipe.enganos} engano(s) ignorado(s)</li>}
-            {usingCam&&net&&<li className="chip" title="Envio desta câmera"><Icon n="upload"/>{net.sentFps.toFixed(0)} q/s · {(net.kbps/1000).toFixed(1)} Mb/s</li>}
-            {status&&status.classes&&status.classes.length>0&&<li className="chip" title={status.classes.join(', ')}><Icon n="helmet"/>{status.classes.length} classes</li>}
-            {status&&status.pose===false&&<li className="chip">só detector</li>}
-          </ul>
-        </section>
+        <CameraAjustes nome={nome} remoto={inferredSource==='remote'} rodando={hasImage||usingCam}
+          inicial={{apelido,sourceType,camUrl,streamModel,modo:config.modo,fps:config.fps,resolucao:config.resolucao,
+            epis:Array.isArray(config.epis)?config.epis:null,rosto:config.rosto!==false,base:backendUrl}}
+          availableModels={availableModels} episDoModeloAtual={episDisp} servidores={servidores}
+          onSalvar={salvarAjustes} onClose={()=>setAjustes(false)}
+          diag={
+            <ul className="diag" aria-label="Diagnóstico">
+              <li className="chip" title={cameraDisplay}><Icon n="video"/>{cameraDisplay}</li>
+              <li className={"chip"+(conn==='reconectando'?' alerta':videoDireto?' bom':'')} title={videoDireto?'O vídeo vai direto para o servidor (WebRTC), sem passar pelo túnel':'O vídeo vai em quadros pelo endereço do servidor'}><Icon n="wifi"/>{videoDireto?'vídeo direto'+(net&&net.rota==='retransmitida'?' (retransmitido)':''):connLabel}</li>
+              {usingCam&&net&&!net.direto&&net.diretoMotivo&&<li className="chip" title="O envio segue em quadros pelo endereço do servidor"><Icon n="info"/>sem vídeo direto: {net.diretoMotivo}</li>}
+              {pipe.atraso_ms!=null&&<li className="chip" title={config.imediato?'Da chegada do quadro ao resultado':'Atraso do modo de análise'}><Icon n="clock"/>{atrasoTxt(pipe.atraso_ms)}</li>}
+              {pipe.fps_analise!=null&&<li className="chip" title="IA analisa / servidor recebe (quadros por segundo)"><Icon n="chip"/>{pipe.fps_analise}/{pipe.fps_entrada} q/s</li>}
+              {pipe.sem_sinal&&<li className="chip alerta"><Icon n="video-off"/>sem sinal</li>}
+              {config.rosto===false&&<li className="chip" title="Esta câmera só confere os EPIs"><Icon n="scan-face"/>sem reconhecer rosto</li>}
+              {info&&info.ajuda&&<li className="chip" title={'Outro servidor da conta, na mesma rede, adianta parte da análise desta câmera: rostos '+info.ajuda.rosto+' q/s, EPIs '+info.ajuda.epi+' q/s'}><Icon n="server"/>ajuda de {(info.ajuda.pares||[]).join(', ')||'outro servidor'}</li>}
+              {pipe.enganos>0&&<li className="chip" title="Vezes em que o modelo deixou de ver o EPI por alguns quadros e o sistema não contou como falta, porque a pessoa tinha sido vista com ele e ele reapareceu"><Icon n="shield"/>{pipe.enganos} engano(s) ignorado(s)</li>}
+              {usingCam&&net&&<li className="chip" title="Envio desta câmera"><Icon n="upload"/>{net.sentFps.toFixed(0)} q/s · {(net.kbps/1000).toFixed(1)} Mb/s</li>}
+              {status&&status.classes&&status.classes.length>0&&<li className="chip" title={status.classes.join(', ')}><Icon n="helmet"/>{status.classes.length} classes</li>}
+              {status&&status.pose===false&&<li className="chip">só detector</li>}
+            </ul>
+          }/>
       )}
       {showZonas&&<ZonaEditor streamId={streamId} token={token} backendUrl={backendUrl}
         onClose={()=>setShowZonas(false)} onToast={onToast}/>}
@@ -1488,9 +1702,21 @@ function EpiCard({epi,token,backendUrl,onUpdate,onDelete,onToast,nivel=2}){
   const [uploading,setUploading]=useState(false);
   const [treinando,setTreinando]=useState(false);
   const [importando,setImportando]=useState(false);
+  const [editando,setEditando]=useState(false);
   const fileRef=useRef();
   const roboRef=useRef();
   const idTitulo=useId();
+
+  const salvarEdicao=async(form)=>{
+    try{
+      const r=await authFetch(backendUrl+'/epis/'+epi.id,token,{method:'PUT',body:JSON.stringify({nome:form.nome.trim(),descricao:(form.descricao||'').trim(),cor:form.cor})});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(d.error||'Não foi possível salvar.');
+      setEditando(false);
+      onToast&&onToast('EPI atualizado!');
+      onUpdate();
+    }catch(e){onToast&&onToast(mensagemErro(e),'err');}
+  };
 
   const uploadFoto=async(e)=>{
     const files=[...e.target.files];
@@ -1584,8 +1810,10 @@ function EpiCard({epi,token,backendUrl,onUpdate,onDelete,onToast,nivel=2}){
           aria-label="Importar dataset .zip do Roboflow" data-dica="Importar .zip (Roboflow)">
           {importando?<span className="giro"/>:<Icon n="box"/>}
         </button>
+        <button type="button" className="ib sm" onClick={()=>setEditando(true)} aria-label={'Editar '+epi.nome} data-dica="Editar"><Icon n="pencil"/></button>
         <button type="button" className="ib sm perigo dica-dir" onClick={deleteEpi} aria-label={'Remover '+epi.nome} data-dica="Remover"><Icon n="trash"/></button>
       </footer>
+      {editando&&<ModalNovoEpi inicial={{nome:epi.nome||'',descricao:epi.descricao||'',cor:epi.cor||'#3740b4'}} onClose={()=>setEditando(false)} onSave={salvarEdicao}/>}
       <input ref={roboRef} type="file" accept=".zip" hidden onChange={importarDataset}/>
     </article>
   );
@@ -1595,8 +1823,21 @@ function EpiCard({epi,token,backendUrl,onUpdate,onDelete,onToast,nivel=2}){
 function FuncCard({func,token,backendUrl,onUpdate,onDelete,onToast,nivel=2}){
   const [uploading,setUploading]=useState(false);
   const [verDesempenho,setVerDesempenho]=useState(false);
+  const [editando,setEditando]=useState(false);
   const fileRef=useRef();
   const idTitulo=useId();
+
+  // nome, cargo e matrícula: o nome novo vale na hora nas câmeras ligadas e na voz da TV
+  const salvarEdicao=async(form)=>{
+    try{
+      const r=await authFetch(backendUrl+'/funcionarios/'+func.id,token,{method:'PUT',body:JSON.stringify({nome:form.nome.trim(),cargo:(form.cargo||'').trim(),matricula:(form.matricula||'').trim()})});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(d.error||'Não foi possível salvar.');
+      setEditando(false);
+      onToast&&onToast('Funcionário atualizado!');
+      onUpdate();
+    }catch(e){onToast&&onToast(mensagemErro(e),'err');}
+  };
 
   const uploadFoto=async(e)=>{
     const files=[...e.target.files];
@@ -1643,6 +1884,7 @@ function FuncCard({func,token,backendUrl,onUpdate,onDelete,onToast,nivel=2}){
           <Titulo n={nivel} className="card-nome" id={idTitulo}>{func.nome}</Titulo>
           {(func.cargo||func.matricula)&&<p className="card-sub">{[func.cargo,func.matricula&&('Nº '+func.matricula)].filter(Boolean).join(' · ')}</p>}
         </div>
+        <button type="button" className="ib sm dica-dir" onClick={()=>setEditando(true)} aria-label={'Editar '+func.nome} data-dica="Editar"><Icon n="pencil"/></button>
       </header>
       <ul className="fotos" aria-label="Fotos do rosto">
         {fotos.map((f,i)=>(
@@ -1664,17 +1906,18 @@ function FuncCard({func,token,backendUrl,onUpdate,onDelete,onToast,nivel=2}){
         <button type="button" className="ib sm perigo dica-dir" onClick={deleteFunc} aria-label={'Remover '+func.nome} data-dica="Remover"><Icon n="trash"/></button>
       </footer>
       {verDesempenho&&<FuncDesempenho func={func} token={token} backendUrl={backendUrl} onClose={()=>setVerDesempenho(false)}/>}
+      {editando&&<ModalNovoFunc inicial={{nome:func.nome||'',cargo:func.cargo||'',matricula:func.matricula||''}} onClose={()=>setEditando(false)} onSave={salvarEdicao}/>}
     </article>
   );
 }
 
 /* ═══ JANELA NOVO EPI ════════════════════════════════════════ */
-function ModalNovoEpi({onClose,onSave}){
-  const [form,setForm]=useState({nome:'',descricao:'',cor:'#3740b4'});
+function ModalNovoEpi({onClose,onSave,inicial}){
+  const [form,setForm]=useState(inicial||{nome:'',descricao:'',cor:'#3740b4'});
   const sf=(k,v)=>setForm(p=>({...p,[k]:v}));
   const salvar=()=>{if(form.nome.trim()) onSave(form);};
   return(
-    <Janela titulo="Novo EPI" ic="helmet" onClose={onClose}>
+    <Janela titulo={inicial?'Editar EPI':'Novo EPI'} ic="helmet" onClose={onClose}>
       <form onSubmit={enviar(salvar)}>
         {/* prévia: o desenho muda conforme o nome ("Luva", "Óculos"...) e a cor */}
         <figure className="previa" aria-hidden="true">
@@ -1686,7 +1929,7 @@ function ModalNovoEpi({onClose,onSave}){
         <p className="field"><label htmlFor="novo-epi-cor"><Icon n="palette"/>Cor</label><input id="novo-epi-cor" type="color" value={form.cor} onChange={e=>sf('cor',e.target.value)}/></p>
         <footer className="modal-actions">
           <button type="button" className="btn btn-secondary" onClick={onClose}>Cancelar</button>
-          <button type="submit" className="btn btn-primary" disabled={!form.nome.trim()}><Icon n="check"/>Criar</button>
+          <button type="submit" className="btn btn-primary" disabled={!form.nome.trim()}><Icon n="check"/>{inicial?'Salvar':'Criar'}</button>
         </footer>
       </form>
     </Janela>
@@ -1694,12 +1937,12 @@ function ModalNovoEpi({onClose,onSave}){
 }
 
 /* ═══ JANELA NOVO FUNCIONARIO ════════════════════════════════ */
-function ModalNovoFunc({onClose,onSave}){
-  const [form,setForm]=useState({nome:'',cargo:'',matricula:''});
+function ModalNovoFunc({onClose,onSave,inicial}){
+  const [form,setForm]=useState(inicial||{nome:'',cargo:'',matricula:''});
   const sf=(k,v)=>setForm(p=>({...p,[k]:v}));
   const salvar=()=>{if(form.nome.trim()) onSave(form);};
   return(
-    <Janela titulo="Novo funcionário" ic="user-plus" onClose={onClose}>
+    <Janela titulo={inicial?'Editar funcionário':'Novo funcionário'} ic={inicial?'pencil':'user-plus'} onClose={onClose}>
       <form onSubmit={enviar(salvar)}>
         <Campo ic="user" rotulo="Nome completo"><input value={form.nome} onChange={e=>sf('nome',e.target.value)} placeholder="Nome completo" required data-foco/></Campo>
         <div className="field-row">
@@ -1708,13 +1951,41 @@ function ModalNovoFunc({onClose,onSave}){
         </div>
         <footer className="modal-actions">
           <button type="button" className="btn btn-secondary" onClick={onClose}>Cancelar</button>
-          <button type="submit" className="btn btn-primary" disabled={!form.nome.trim()}><Icon n="check"/>Cadastrar</button>
+          <button type="submit" className="btn btn-primary" disabled={!form.nome.trim()}><Icon n="check"/>{inicial?'Salvar':'Cadastrar'}</button>
         </footer>
       </form>
     </Janela>
   );
 }
 
+
+/* ═══ JANELA NOVO DISPOSITIVO ════════════════════════════════
+   Dois tipos de link: o celular que vira câmera e a TV que toca a sirene e fala os avisos. */
+function ModalNovoDispositivo({onClose,onSave}){
+  const [tipo,setTipo]=useState('camera');
+  const [nome,setNome]=useState('');
+  const salvar=()=>{if(nome.trim()) onSave({tipo,nome:nome.trim()});};
+  return(
+    <Janela titulo="Novo dispositivo" ic="plus" onClose={onClose}>
+      <form onSubmit={enviar(salvar)}>
+        <Opcoes rotulo="Tipo de dispositivo" valor={tipo} onChange={setTipo} className="tipo-disp"
+          opcoes={[{id:'camera',ic:'phone',txt:'Celular como câmera'},{id:'tv',ic:'tv',txt:'TV de avisos'}]}/>
+        <p className="dica-linha" style={{margin:'12px 0'}}>
+          {tipo==='tv'
+            ? <><Icon n="volume"/>A TV toca a sirene e fala o aviso quando alguém aparece sem EPI. Abra o link no navegador da TV, ou num computador ligado nela por HDMI.</>
+            : <><Icon n="camera"/>O celular abre o link e vira uma câmera do sistema.</>}
+        </p>
+        <Campo ic={tipo==='tv'?'tv':'phone'} rotulo="Nome do dispositivo">
+          <input value={nome} onChange={e=>setNome(e.target.value)} placeholder={tipo==='tv'?'Nome (ex.: TV do refeitório)':'Nome (ex.: Celular da portaria)'} maxLength={60} required data-foco/>
+        </Campo>
+        <footer className="modal-actions">
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancelar</button>
+          <button type="submit" className="btn btn-primary" disabled={!nome.trim()}><Icon n="link"/>Criar link</button>
+        </footer>
+      </form>
+    </Janela>
+  );
+}
 
 /* Instala o onnx e o TensorRT no servidor (só com GPU NVIDIA). Vários cards podem
    mostrar o botão: todos leem o mesmo estado do servidor. */
@@ -1861,7 +2132,7 @@ function NetworkCameraModal({open,onClose,backendUrl,token,servidores,onUseStrea
   const [alvo,setAlvo]=useState('todos');
   const [buscas,setBuscas]=useState({});        // id do servidor -> {jobId, job, result, erro}
   const [choices,setChoices]=useState({});
-  const [credDevice,setCredDevice]=useState(null);
+  const [cred,setCred]=useState({});            // servidor|ip -> {usuario, senha, rodando, erro}
   const [addedUris,setAddedUris]=useState({});
   const lista=(servidores&&servidores.length)?servidores:[{id:'_',nome:'',base:backendUrl}];
   const varios=lista.length>1;
@@ -1872,7 +2143,7 @@ function NetworkCameraModal({open,onClose,backendUrl,token,servidores,onUseStrea
   const runScan=async(extra={},soId)=>{
     localStorage.setItem('epi_scan_user',username||'');
     const ids=soId?[soId]:(alvo==='todos'?lista.map(s=>s.id):[alvo]);
-    if(!soId) setChoices({});
+    if(!soId){setChoices({});setCred({});}
     setBuscas(p=>{const n=soId?{...p}:{};for(const id of ids) n[id]={job:{status:'running'}};return n;});
     await Promise.all(ids.map(async id=>{
       const srv=lista.find(s=>s.id===id);
@@ -1927,7 +2198,7 @@ function NetworkCameraModal({open,onClose,backendUrl,token,servidores,onUseStrea
   const streamLabel=(st,i)=>{
     const bits=[st.label||('Stream '+(i+1))];
     if(st.resolution) bits.push(st.resolution);
-    bits.push(st.source==='onvif'?'ONVIF':'RTSP sugerido');
+    bits.push(st.source==='onvif'?'ONVIF':st.verified?'confirmado':'sugerido');
     return bits.join(' | ');
   };
   const chave=(srv,dev)=>srv.id+'|'+dev.ip;
@@ -1937,20 +2208,36 @@ function NetworkCameraModal({open,onClose,backendUrl,token,servidores,onUseStrea
     const idx=Number(choices[chave(srv,dev)]||0);
     return streams[Math.max(0,Math.min(idx,streams.length-1))]||streams[0];
   };
-  const addDevice=(srv,dev,force=false)=>{
+  // Adicionar não mexe na lista: dá para adicionar várias em seguida. Só "Atualizar" busca de novo.
+  const addDevice=(srv,dev)=>{
     const st=selectedStreamFor(srv,dev);
-    if(!st || (!force && st.source!=='onvif' && !username.trim() && !String(st.uri||'').includes('@'))){
-      setCredDevice({srvId:srv.id,ip:dev.ip});
-      return;
-    }
+    if(!st) return;
     onUseStream&&onUseStream({...st,device:dev},srv.base);
     setAddedUris(p=>({...p,[srv.id+'|'+st.uri]:true}));
   };
-  const retryWithCredentials=()=>{
-    if(!credDevice) return;
-    const {srvId,ip}=credDevice;
-    setCredDevice(null);
-    runScan({subnet:ip,username,password},srvId);
+  // Câmera com senha: confere só ela (com o usuário e a senha digitados no cartão dela) e troca
+  // o cartão pelo resultado. As outras câmeras da lista ficam como estão.
+  const conferir=async(srv,dev)=>{
+    const k=chave(srv,dev);
+    const c=cred[k]||{};
+    setCred(p=>({...p,[k]:{...c,rodando:true,erro:''}}));
+    try{
+      const r=await authFetch(srv.base+'/cameras/scan',token,{method:'POST',body:JSON.stringify({
+        subnet:dev.ip,username:(c.usuario||'').trim(),password:c.senha||'',timeout:0.6,include_onvif:true})});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(d.error||'Não foi possível conferir esta câmera.');
+      const novo=(d.devices||[]).find(x=>x.ip===dev.ip);
+      if(!novo) throw new Error('A câmera não respondeu agora. Tente de novo.');
+      setBuscas(p=>{
+        const b=p[srv.id];
+        if(!b||!b.result) return p;
+        return {...p,[srv.id]:{...b,result:{...b.result,devices:b.result.devices.map(x=>x.ip===dev.ip?novo:x)}}};
+      });
+      const serviu=(novo.streams||[]).length>0&&!novo.precisa_senha;
+      setCred(p=>({...p,[k]:{...c,rodando:false,erro:serviu?'':'Usuário ou senha não conferem. Confira e tente de novo.'}}));
+    }catch(e){
+      setCred(p=>({...p,[k]:{...c,rodando:false,erro:mensagemErro(e)}}));
+    }
   };
 
   const Dispositivo=(srv,dev)=>{
@@ -1958,13 +2245,16 @@ function NetworkCameraModal({open,onClose,backendUrl,token,servidores,onUseStrea
     const selected=selectedStreamFor(srv,dev);
     const selectedUri=selected?.uri||'';
     const alreadyAdded=Boolean(selectedUri&&addedUris[srv.id+'|'+selectedUri]);
-    const showCred=credDevice&&credDevice.srvId===srv.id&&credDevice.ip===dev.ip;
+    const k=chave(srv,dev);
+    const c=cred[k]||{};
+    const pedeSenha=!streams.length||dev.precisa_senha;
     const nomeDev=dev.display_name||('Câmera '+dev.ip);
+    const mudaCred=(patch)=>setCred(p=>({...p,[k]:{...(p[k]||{}),...patch,erro:''}}));
     return(
       <li key={dev.ip}>
-        <article className={"scan-device"+(showCred?' credential-open':'')} aria-label={nomeDev}>
+        <article className={"scan-device"+(pedeSenha?' credential-open':'')} aria-label={nomeDev}>
           <header className="scan-device-top">
-            <span className="card-ico sm"><Icon n="camera"/></span>
+            <span className="card-ico sm"><Icon n={pedeSenha?'lock':'camera'}/></span>
             <div className="scan-device-main">
               <h3 className="scan-title" title={nomeDev}>{nomeDev}</h3>
               <ul className="diag" style={{marginTop:4}}>
@@ -1972,37 +2262,33 @@ function NetworkCameraModal({open,onClose,backendUrl,token,servidores,onUseStrea
                 {streams.length>1&&<li className="chip">{streams.length} faixas</li>}
                 {(dev.discovery||[]).includes('onvif')&&<li className="chip">ONVIF</li>}
                 {(dev.open_ports||[]).includes(554)&&<li className="chip">RTSP</li>}
+                {dev.senha_ok&&<li className="chip bom"><Icon n="check"/>senha conferida</li>}
                 {alreadyAdded&&<li className="chip bom"><Icon n="check"/>adicionada</li>}
               </ul>
             </div>
           </header>
-          <div className="scan-device-controls">
-            <div style={{minWidth:0}}>
-              {streams.length>0?(
-                <>
-                  <select className="scan-select largo" value={choices[chave(srv,dev)]||0} onChange={e=>setChoices(p=>({...p,[chave(srv,dev)]:e.target.value}))} aria-label={'Stream de '+nomeDev}>
-                    {streams.slice(0,24).map((st,i)=><option key={(st.uri||'')+i} value={i}>{streamLabel(st,i)}</option>)}
-                  </select>
-                  <p className="scan-uri" title={maskCameraUrl(selected?.masked_uri||selected?.uri)}><code>{maskCameraUrl(selected?.masked_uri||selected?.uri)}</code></p>
-                </>
-              ):(
-                <p className="scan-meta"><Icon n="lock"/>Precisa de usuário e senha</p>
-              )}
-            </div>
-            <button type="button" className={alreadyAdded?'btn btn-secondary btn-sm':'btn btn-primary btn-sm'} onClick={()=>addDevice(srv,dev)} disabled={alreadyAdded}>
-              <Icon n={alreadyAdded?'check':streams.length?'plus':'lock'}/>{streams.length?(alreadyAdded?'Adicionada':'Adicionar'):'Senha'}
-            </button>
-          </div>
-          {showCred&&(
-            <form className="inline-cred" onSubmit={enviar(retryWithCredentials)} aria-label={'Usuário e senha de '+dev.ip}>
-              <p className="scan-meta" style={{fontWeight:700}}><Icon n="lock"/>{dev.ip}{varios?' · '+srv.nome:''}</p>
+          {pedeSenha?(
+            <form className="inline-cred" onSubmit={enviar(()=>conferir(srv,dev))} aria-label={'Senha de '+nomeDev}>
+              <p className="scan-meta" style={{fontWeight:700}}><Icon n="lock"/>Digite a senha desta câmera para poder usar</p>
               <div className="scan-form">
-                <Campo ic="user" rotulo="Usuário da câmera"><input value={username} onChange={e=>setUsername(e.target.value)} placeholder="Usuário" autoComplete="off"/></Campo>
-                <Campo ic="lock" rotulo="Senha da câmera"><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Senha" autoComplete="off"/></Campo>
-                <button type="submit" className="btn btn-primary" disabled={!username.trim()||loading}><Icon n="search"/>Buscar</button>
-                {streams.length>0&&<button type="button" className="btn btn-secondary" onClick={()=>{setCredDevice(null);addDevice(srv,dev,true);}}>Adicionar assim</button>}
+                <Campo ic="user" rotulo="Usuário da câmera (se ela pedir)"><input value={c.usuario??username} onChange={e=>mudaCred({usuario:e.target.value})} placeholder="Usuário (vazio = admin)" autoComplete="off"/></Campo>
+                <Campo ic="lock" rotulo="Senha da câmera"><input type="password" value={c.senha??password} onChange={e=>mudaCred({senha:e.target.value})} placeholder="Senha" autoComplete="off"/></Campo>
+                <button type="submit" className="btn btn-primary" disabled={c.rodando}>{c.rodando?<><span className="giro"/>Conferindo...</>:<><Icon n="check"/>Conferir</>}</button>
               </div>
+              {c.erro&&<p className="dica-linha alerta" role="alert"><Icon n="alert"/>{c.erro}</p>}
             </form>
+          ):(
+            <div className="scan-device-controls">
+              <div style={{minWidth:0}}>
+                <select className="scan-select largo" value={choices[k]||0} onChange={e=>setChoices(p=>({...p,[k]:e.target.value}))} aria-label={'Stream de '+nomeDev}>
+                  {streams.slice(0,24).map((st,i)=><option key={(st.uri||'')+i} value={i}>{streamLabel(st,i)}</option>)}
+                </select>
+                <p className="scan-uri" title={maskCameraUrl(selected?.masked_uri||selected?.uri)}><code>{maskCameraUrl(selected?.masked_uri||selected?.uri)}</code></p>
+              </div>
+              <button type="button" className={alreadyAdded?'btn btn-secondary btn-sm':'btn btn-primary btn-sm'} onClick={()=>addDevice(srv,dev)} disabled={alreadyAdded}>
+                <Icon n={alreadyAdded?'check':'plus'}/>{alreadyAdded?'Adicionada':'Adicionar'}
+              </button>
+            </div>
           )}
         </article>
       </li>
@@ -2030,11 +2316,12 @@ function NetworkCameraModal({open,onClose,backendUrl,token,servidores,onUseStrea
           </div>
         )}
         <form className="scan-form" onSubmit={enviar(()=>runScan())} aria-label="Buscar câmeras">
-          <Campo ic="user" rotulo="Usuário da câmera"><input value={username} onChange={e=>setUsername(e.target.value)} placeholder="Usuário" autoComplete="off" data-foco/></Campo>
-          <Campo ic="lock" rotulo="Senha da câmera"><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Senha" autoComplete="off"/></Campo>
+          <Campo ic="user" rotulo="Usuário das câmeras (opcional)"><input value={username} onChange={e=>setUsername(e.target.value)} placeholder="Usuário (opcional)" autoComplete="off" data-foco/></Campo>
+          <Campo ic="lock" rotulo="Senha das câmeras (opcional)"><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Senha (opcional)" autoComplete="off"/></Campo>
           <Campo ic="globe" rotulo="Faixa de IP (auto ou 192.168.1.0/24)"><input value={subnet} onChange={e=>setSubnet(e.target.value)} placeholder="Faixa: auto" title="auto ou 192.168.1.0/24"/></Campo>
-          <button type="submit" className="btn btn-primary" disabled={loading}><Icon n="search"/>{loading?'Buscando...':'Buscar'}</button>
+          <button type="submit" className="btn btn-primary" disabled={loading}><Icon n={grupos.length?'refresh':'search'}/>{loading?'Buscando...':grupos.length?'Atualizar':'Buscar'}</button>
         </form>
+        <p className="dica-linha"><Icon n="info"/>A busca acha também as câmeras com senha: a senha é pedida no cartão de cada uma. Adicionar não refaz a busca.</p>
         {loading&&<div className="scan-bar" role="progressbar" aria-label="Buscando câmeras"><span/></div>}
         {!grupos.length&&<p className="scan-empty"><Icon n="wifi"/>Toque em Buscar</p>}
         {terminou&&totalCams===0&&grupos.every(s=>!buscas[s.id].erro)&&<p className="scan-empty"><Icon n="video-off"/>Nenhuma câmera encontrada</p>}
@@ -2083,12 +2370,14 @@ function Stat({ic,label,value,danger}){
 /* ═══ ALARME SONORO ══════════════════════════════════════════
    O navegador só libera áudio depois de um gesto do usuário; por isso o
    contexto é criado no primeiro clique/tecla e reaproveitado depois.      */
-const Alarme={ctx:null};
+const Alarme={ctx:null,sirene:null,tocando:null};
 function prepararAlarme(){
   if(Alarme.ctx) return;
   const AC=window.AudioContext||window.webkitAudioContext;
   if(!AC) return;
-  try{ Alarme.ctx=new AC(); }catch(e){}
+  try{ Alarme.ctx=new AC(); }catch(e){ return; }
+  // o mesmo som de sirene da TV (frontend/sons/sirene.wav)
+  fetch('sons/sirene.wav').then(r=>r.arrayBuffer()).then(b=>Alarme.ctx.decodeAudioData(b)).then(buf=>{Alarme.sirene=buf;}).catch(()=>{});
 }
 if(typeof document!=='undefined'){
   const libera=()=>{prepararAlarme(); if(Alarme.ctx&&Alarme.ctx.state==='suspended') Alarme.ctx.resume();};
@@ -2098,7 +2387,18 @@ if(typeof document!=='undefined'){
 function bipAlarme(){
   const ctx=Alarme.ctx;
   if(!ctx||ctx.state!=='running') return;
-  // duas notas curtas: lê como alarme, não como notificação
+  if(Alarme.sirene){
+    if(Alarme.tocando) return;      // várias câmeras em alerta: uma sirene só
+    const fonte=ctx.createBufferSource(),g=ctx.createGain();
+    fonte.buffer=Alarme.sirene;
+    g.gain.value=0.5;
+    fonte.connect(g); g.connect(ctx.destination);
+    fonte.onended=()=>{Alarme.tocando=null;};
+    Alarme.tocando=fonte;
+    fonte.start();
+    return;
+  }
+  // sem o arquivo da sirene (rede caiu ao abrir): duas notas curtas no lugar
   [0,0.22].forEach((atraso,i)=>{
     const osc=ctx.createOscillator(),g=ctx.createGain();
     const t0=ctx.currentTime+atraso;
@@ -2115,8 +2415,8 @@ function useAlarme(ativo,ligado){
   useEffect(()=>{
     if(!ativo||!ligado) return;
     bipAlarme();
-    const id=setInterval(bipAlarme,2200);
-    return ()=>clearInterval(id);
+    const id=setInterval(bipAlarme,4500);
+    return ()=>{clearInterval(id);if(Alarme.tocando){try{Alarme.tocando.stop();}catch(e){}Alarme.tocando=null;}};
   },[ativo,ligado]);
 }
 
@@ -2513,6 +2813,14 @@ function FuncDesempenho({func,token,backendUrl,onClose}){
   },[func.id,dias,token,backendUrl]);
 
   const quando=(ts)=>new Date(ts*1000).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+  const hora=(ts)=>new Date(ts*1000).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const dia=(ts)=>new Date(ts*1000).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
+  // de quando até quando a pessoa ficou sem o EPI
+  const periodo=(ev)=>ev.em_andamento
+    ? `desde ${hora(ev.ts)} · em andamento`
+    : ev.fim&&ev.fim>ev.ts ? `das ${hora(ev.ts)} às ${hora(ev.fim)} · ${dur(ev.duracao||ev.fim-ev.ts)}` : `às ${hora(ev.ts)}`;
+  // o nome da câmera é o apelido dado neste navegador
+  const nomeCamera=(sid)=>localStorage.getItem('epi_apelido_'+sid)||(/^remote_/.test(sid)?'Celular (link)':'Câmera '+String(sid).slice(-6));
   const dur=(s)=>!s?'—':s<60?Math.round(s)+'s':Math.floor(s/60)+'min '+Math.round(s%60)+'s';
   const urlFoto=(f)=>backendUrl+'/auditoria/evidencia/'+f+'?token='+token;
   // "foi engano" / "foi falta mesmo": a decisão de quem olha vale sobre a do sistema e refaz os gráficos
@@ -2572,16 +2880,34 @@ function FuncDesempenho({func,token,backendUrl,onClose}){
             : <ol className="linha-tempo">
                 {dados.ultimos_eventos.map(ev=>(
                   <li key={ev.id} className={"evento"+(ev.validacao==='engano'?' engano':'')}>
-                    <time className="evento-quando" dateTime={isoDe(ev.ts)}>{quando(ev.ts)}</time>
+                    <time className="evento-quando" dateTime={isoDe(ev.ts)}>{dia(ev.ts)}<br/>{hora(ev.ts)}</time>
                     <div className="evento-corpo">
                       <p className={"evento-tipo"+(ev.tipo==='queda'?' queda':'')}>
                         {ev.tipo==='queda'
                           ? <><Icon n="alert"/>Possível queda</>
                           : <>{ev.epi&&<EpiSelo item={ev.epi} estado="falta" sm rotulo={ev.epi_label}/>}Sem {String(ev.epi_label||ev.epi||'EPI').toLowerCase()}</>}
+                        {ev.em_andamento&&<span className="selo-andamento"><Icon n="clock"/>Em andamento</span>}
                         {ev.validacao==='engano'&&<span className="selo-engano" title={ev.validacao_motivo||''}><Icon n="shield"/>Provável engano</span>}
                         {ev.validacao==='confirmada'&&<span className="selo-confirmada"><Icon n="check"/>Conferida</span>}
                       </p>
                       {ev.validacao==='engano'&&ev.validacao_motivo&&<p className="evento-motivo">{ev.validacao_motivo} Não entra nos gráficos.</p>}
+                      <dl className="evento-dados">
+                        <div><dt><Icon n="clock"/>Período</dt><dd>{periodo(ev)}</dd></div>
+                        {ev.tipo==='violacao'&&<div><dt><Icon n="helmet"/>EPIs exigidos</dt>
+                          <dd>{(ev.exigidos||[]).length?<EpiSelos itens={ev.exigidos} sm max={9} titulo="EPIs exigidos naquele momento"/>:<span className="mudo">não registrado</span>}</dd></div>}
+                        <div><dt><Icon n="map"/>Área</dt><dd>{ev.area_nome||<span className="mudo">fora das áreas cadastradas</span>}</dd></div>
+                        {ev.stream_id&&<div><dt><Icon n="camera"/>Câmera</dt><dd title={ev.stream_id}>{nomeCamera(ev.stream_id)}</dd></div>}
+                      </dl>
+                      {(ev.avisos||[]).length>0&&(
+                        <ul className="evento-avisos" aria-label="Avisos falados pela TV">
+                          {ev.avisos.map((a,i)=>(
+                            <li key={i}><Icon n="volume"/>
+                              <span><b>{hora(a.ts)}</b> · {a.tv||'TV'}{a.volume!=null?` · volume ${a.volume}%`:''}{a.falou===false?' · só a sirene':''}
+                                {a.frase&&<q>{a.frase}</q>}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                       {ev.tipo==='violacao'&&(
                         <p className="evento-acoes">
                           {ev.validacao==='engano'
@@ -2589,11 +2915,6 @@ function FuncDesempenho({func,token,backendUrl,onClose}){
                             : <button type="button" className="chip" onClick={()=>validar(ev,true)}><Icon n="shield"/>Foi engano do sistema</button>}
                         </p>
                       )}
-                      <ul className="evento-meta">
-                        {ev.area_nome&&<li><Icon n="map"/><span className="sr">Área: </span>{ev.area_nome}</li>}
-                        {ev.stream_id&&<li><Icon n="camera"/><span className="sr">Câmera: </span>{ev.stream_id}</li>}
-                        {ev.duracao?<li><Icon n="clock"/><span className="sr">Duração: </span>{dur(ev.duracao)}</li>:null}
-                      </ul>
                       {(ev.fotos||[]).length>0&&(
                         <ul className="evidencias" aria-label="Fotos de evidência">
                           {ev.fotos.map(f=>(
@@ -3104,8 +3425,9 @@ function App(){
   const [paused,setPaused]=useState(false);
   // id estavel do backend (vem de /status); vai no link do celular para o hub achar o servidor
   const [nodeId,setNodeId]=useState('');
-  // alarme sonoro do monitoramento: fica ligado por padrão e a escolha persiste
-  const [alarmeLigado,setAlarmeLigado]=useState(()=>localStorage.getItem('epi_alarme')!=='0');
+  // A sirene e a voz saem na TV (Dispositivos > link de TV). Neste painel o som vem desligado
+  // e só toca se alguém ligar aqui (quem não tem TV pode querer ouvir no computador).
+  const [alarmeLigado,setAlarmeLigado]=useState(()=>localStorage.getItem('epi_som_painel')==='1');
   // modo projetor: tudo maior e com mais contraste, para a tela ser projetada
   const [modoProjetor,setModoProjetor]=useState(()=>localStorage.getItem('epi_projetor')==='1');
   // tema: 'sistema' (padrão) segue o aparelho; 'claro' e 'escuro' mandam no aparelho
@@ -3167,13 +3489,44 @@ function App(){
     try{const r=await authFetch(backendUrl+'/funcionarios',token);if(r.ok){const d=await r.json();setFuncs(d.funcionarios||[]);}}catch{}
   },[token,backendUrl]);
 
-  const addToken=async()=>{
-    const n=await pedirTexto({titulo:'Novo celular',ic:'phone',placeholder:'Nome (ex.: Celular da portaria)',botao:'Criar link'});if(!n)return;
-    try{await authFetch(backendUrl+'/cam_tokens',token,{method:'POST',body:JSON.stringify({nome:n})});loadTokens(backendUrl,token);}catch{}
+  const [novoDisp,setNovoDisp]=useState(false);
+  const [filtroDisp,setFiltroDisp]=useState('todos');
+  const addToken=()=>setNovoDisp(true);
+  const criarDispositivo=async({tipo,nome})=>{
+    setNovoDisp(false);
+    try{
+      const r=await authFetch(backendUrl+'/cam_tokens',token,{method:'POST',body:JSON.stringify({nome,tipo})});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(d.error||'Não foi possível criar o link.');
+      // servidor de versão antiga ignora o tipo e cria um link de câmera: avisa em vez de entregar o link errado
+      if(tipo==='tv'&&!String((d.token||{}).token||'').startsWith('tv_')){
+        showToast('Este servidor ainda não tem a TV de avisos. Atualize o Argos EPI Servidor.','err');
+        if(d.token&&d.token.token) authFetch(backendUrl+'/cam_tokens/'+d.token.token,token,{method:'DELETE'}).catch(()=>{});
+      }else showToast(tipo==='tv'?'Link de TV criado. Copie e abra na TV.':'Link criado. Copie e abra no celular.');
+      loadTokens(backendUrl,token);
+    }catch(e){showToast(mensagemErro(e),'err');}
   };
   const delToken=async(t)=>{
-    if(!await confirmar({titulo:'Remover este celular?',texto:'O link para de funcionar e a transmissão dele para na hora.'}))return;
-    try{await authFetch(backendUrl+'/cam_tokens/'+t,token,{method:'DELETE'});loadTokens(backendUrl,token);}catch{}
+    const tv=t.tipo==='tv';
+    if(!await confirmar({titulo:tv?'Remover esta TV?':'Remover este celular?',texto:tv?'O link para de funcionar e a TV deixa de tocar os avisos.':'O link para de funcionar e a transmissão dele para na hora.'}))return;
+    try{await authFetch(backendUrl+'/cam_tokens/'+t.token,token,{method:'DELETE'});loadTokens(backendUrl,token);}catch{}
+  };
+  const renomearToken=async(t)=>{
+    const nome=await pedirTexto({titulo:'Nome do dispositivo',ic:t.tipo==='tv'?'tv':'phone',valor:t.nome,placeholder:'Nome'});
+    if(!nome||nome===t.nome) return;
+    try{
+      const r=await authFetch(backendUrl+'/cam_tokens/'+t.token,token,{method:'PUT',body:JSON.stringify({nome})});
+      if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||'Não foi possível renomear.');
+      loadTokens(backendUrl,token);
+    }catch(e){showToast(mensagemErro(e),'err');}
+  };
+  const testarTv=async()=>{
+    try{
+      const r=await authFetch(backendUrl+'/tv/teste',token,{method:'POST',body:'{}'});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(d.error||'Não foi possível enviar o teste.');
+      showToast(`Aviso de teste enviado para ${d.tvs} TV(s).`+((d.voz||{}).status==='pronta'?'':' A voz ainda não está instalada neste servidor: sai só a sirene.'));
+    }catch(e){showToast(mensagemErro(e),'err');}
   };
 
   const showToast=(msg,type='ok')=>{setToast({msg,type});setTimeout(()=>setToast(null),3000);};
@@ -3382,6 +3735,26 @@ function App(){
     if(token&&page==='servidores') carregarServidores();
   },[page,token,backendUrl]);
 
+  useEffect(()=>{
+    if(!token||!backendUrl||page!=='devices') return;
+    const iv=setInterval(()=>{if(!document.hidden) loadTokens(backendUrl,token);},5000);
+    return()=>clearInterval(iv);
+  },[page,token,backendUrl]);
+
+  /* Ajustes da câmera > Servidor: passa a câmera para outro servidor da conta.
+     Câmera do painel: sai do servidor antigo (quem salva os ajustes religa no novo).
+     Celular: o servidor atual avisa o celular, que reconecta no escolhido. */
+  const mudarServidorDaCamera=async(sid,alvo,{remoto,baseAtual})=>{
+    if(remoto){
+      const r=await authFetch(baseAtual+'/streams/'+encodeURIComponent(sid)+'/mover',token,{method:'POST',body:JSON.stringify({servidor_id:alvo.id})});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(d.error||'Não foi possível mudar o servidor desta câmera.');
+    }else{
+      try{await authFetch(baseAtual+'/streams/remove',token,{method:'POST',body:JSON.stringify({stream_id:sid})});}catch{}
+    }
+    setStreamsList(lista=>lista.map(x=>x.streamId===sid?{...x,base:alvo.base}:x));
+  };
+
   const criarCamera=(base)=>{
     const idx=nextIndex.current++;
     const sid=novoSid();
@@ -3497,7 +3870,7 @@ function App(){
 
   const flURL=serverLinks.frontend_local||null;
   const cfURL=serverLinks.cloudflare_url;
-  const trocarAlarme=(v)=>{setAlarmeLigado(v);localStorage.setItem('epi_alarme',v?'1':'0');};
+  const trocarAlarme=(v)=>{setAlarmeLigado(v);localStorage.setItem('epi_som_painel',v?'1':'0');};
 
   return(
     <div className="app">
@@ -3508,8 +3881,8 @@ function App(){
             <Icon n="server"/><span className={"dot"+(online?' on':'')}/><span className="sr">{online?'Servidor online':'Servidor offline'}</span>
           </span>
           <button type="button" className={"ib"+(alarmeLigado?'':' aceso')} onClick={()=>trocarAlarme(!alarmeLigado)}
-            aria-pressed={alarmeLigado} aria-label="Alarme sonoro"
-            data-dica={alarmeLigado?'Alarme ligado':'Alarme mudo'}><Icon n={alarmeLigado?'bell':'bell-off'}/></button>
+            aria-pressed={alarmeLigado} aria-label="Sirene neste painel"
+            data-dica={alarmeLigado?'Sirene neste painel: ligada':'Sirene neste painel: desligada (toca na TV)'}><Icon n={alarmeLigado?'bell':'bell-off'}/></button>
           {online&&<button type="button" className={"ib"+(paused?' aceso':'')} onClick={togglePause}
             aria-label={paused?'Retomar IA':'Pausar IA'} data-dica={paused?'IA pausada: retomar':'Pausar IA'}><Icon n={paused?'play':'pause'}/></button>}
           <abbr className="avatar" title={user.nome}>{iniciais(user.nome)}</abbr>
@@ -3575,6 +3948,7 @@ function App(){
                   <StreamCard streamId={s.streamId} token={token} backendUrl={s.base||backendUrl}
                     availableModels={availableModels} defaultModel={defaultModel} device={device} index={s.index}
                     alarmeLigado={alarmeLigado} onToast={showToast} visual={visualAtivo} servidorNome={nomeServidor(s.base||backendUrl)}
+                    servidores={servidoresVivos()} onMudarServidor={mudarServidorDaCamera}
                     onRemove={()=>removeStream(s.streamId)}/>
                 </li>
               ))}
@@ -3656,41 +4030,74 @@ function App(){
       )}
 
 
-      {page==='devices'&&!semServidor&&(
-        <Pagina ic="phone" titulo="Dispositivos remotos" total={camTokens.length} acoes={camTokens.length>0&&
-          <button type="button" className="btn btn-gold" onClick={addToken} aria-label="Criar link para celular"><Icon n="plus"/><span className="btn-rotulo" aria-hidden="true">Link</span></button>}>
+      {page==='devices'&&!semServidor&&(()=>{
+        const nCam=camTokens.filter(t=>t.tipo!=='tv').length, nTv=camTokens.length-nCam;
+        const visiveis=camTokens.filter(t=>filtroDisp==='todos'||(filtroDisp==='tv')===(t.tipo==='tv'));
+        const tvAberta=camTokens.some(t=>t.tipo==='tv'&&t.aberta);
+        return(
+        <Pagina ic="phone" titulo="Dispositivos" total={camTokens.length} acoes={camTokens.length>0&&
+          <button type="button" className="btn btn-gold" onClick={addToken} aria-label="Criar link de celular ou de TV"><Icon n="plus"/><span className="btn-rotulo" aria-hidden="true">Link</span></button>}>
           {camTokens.length===0&&(
-            <Vazio ic="phone" titulo="Celular como câmera">
-              <Passos itens={[{ic:'link',txt:'Criar o link'},{ic:'phone',txt:'Abrir no celular'},{ic:'camera',txt:'Câmera ao vivo'}]}/>
+            <Vazio ic="phone" titulo="Celular como câmera e TV de avisos">
+              <Passos itens={[{ic:'link',txt:'Criar o link'},{ic:'phone',txt:'Abrir no celular ou na TV'},{ic:'camera',txt:'Câmera ao vivo / sirene e voz'}]}/>
               <p className="acoes"><button type="button" className="btn btn-gold" onClick={addToken}><Icon n="plus"/>Criar link</button></p>
             </Vazio>
           )}
           {camTokens.length>0&&servidores.length>0&&!servidores.some(s=>s.online&&s.url)&&(
-            <p className="aviso" role="status"><Icon n="alert"/><span>Nenhum servidor da conta está com endereço de internet agora, então o link não abre a câmera no celular. {(((servidores.find(s=>s.online&&!s.url)||{}).estado||{}).tunel||{}).erro||'A rede do computador do servidor pode estar bloqueando o túnel.'} Veja a linha “Internet” na tela Início do programa do servidor.</span></p>
+            <p className="aviso" role="status"><Icon n="alert"/><span>Nenhum servidor da conta está com endereço de internet agora, então os links não abrem fora da rede do servidor. {(((servidores.find(s=>s.online&&!s.url)||{}).estado||{}).tunel||{}).erro||'A rede do computador do servidor pode estar bloqueando o túnel.'} Veja a linha “Internet” na tela Início do programa do servidor.</span></p>
           )}
           {camTokens.length>0&&(
+            <div className="barra-filtros">
+              <Opcoes rotulo="Mostrar dispositivos" valor={filtroDisp} onChange={setFiltroDisp} className="filtros"
+                opcoes={[{id:'todos',ic:'link',txt:`Todos (${camTokens.length})`},{id:'camera',ic:'phone',txt:`Câmeras (${nCam})`},{id:'tv',ic:'tv',txt:`TVs (${nTv})`}]}/>
+              <Ajuda titulo="Dispositivos" resumo="Links para um celular virar câmera e para uma TV tocar a sirene e falar os avisos.">
+                <p><b>Celular como câmera</b>: crie o link, abra no celular e toque em Iniciar. No modo tempo real o vídeo vai direto do celular para o servidor.</p>
+                <p><b>TV de avisos</b>: crie o link de TV e abra no navegador da TV (ou num computador ligado nela por HDMI). Na primeira vez, toque em “Ativar som”. Quando alguém aparece sem EPI, a TV toca a sirene e fala, por exemplo: “André Jorge, por favor, coloque o capacete e os óculos de proteção, na área Solda”. O volume é ajustado na própria TV e fica registrado no desempenho do funcionário junto com a frase.</p>
+                <p>Por padrão o som sai só na TV; este painel fica em silêncio (dá para ligar em Ajustes &gt; Sirene neste painel).</p>
+                <p>Cada link vale para um aparelho. Removendo o dispositivo aqui, o link para de funcionar.</p>
+              </Ajuda>
+              {nTv>0&&<button type="button" className="btn btn-claro btn-sm" onClick={testarTv} disabled={!tvAberta} title={tvAberta?'Toca a sirene e uma frase de teste nas TVs abertas':'Nenhuma TV aberta agora'}><Icon n="volume"/>Testar som das TVs</button>}
+            </div>
+          )}
+          {camTokens.length>0&&visiveis.length===0&&<p className="dica-linha vazio-filtro"><Icon n="info"/>Nenhum dispositivo deste tipo.</p>}
+          {visiveis.length>0&&(
             <ul className="cards" aria-label="Dispositivos com acesso">
-              {camTokens.map(t=>(
+              {visiveis.map(t=>{
+                const tv=t.tipo==='tv';
+                const link=tv?buildTvLink(t.token,{conta:user.id,fallback:cfURL||flURL||backendUrl})
+                  :buildCamLink(t.token,{nodeId,conta:user.id,fallback:cfURL||flURL||backendUrl});
+                return(
                 <li key={t.token}>
-                  <article className="card" aria-label={t.nome}>
+                  <article className={"card"+(tv?' card-tv':'')} aria-label={t.nome}>
                     <header className="card-topo">
-                      <span className="card-ico"><Icon n="phone"/></span>
+                      <span className="card-ico"><Icon n={tv?'tv':'phone'}/></span>
                       <div className="card-txt">
                         <h2 className="card-nome">{t.nome}</h2>
-                        <p className="token" title="Código do celular (se o link não abrir, cole no celular)"><Icon n="key"/><code>{t.token}</code></p>
+                        <p className="card-sub">{tv?'TV de avisos':'Celular como câmera'}</p>
                       </div>
+                      <button type="button" className="ib sm dica-dir" onClick={()=>renomearToken(t)} aria-label={'Renomear '+t.nome} data-dica="Renomear"><Icon n="pencil"/></button>
                     </header>
+                    {tv&&(
+                      <ul className="diag" aria-label="Situação da TV">
+                        <li className={"chip"+(t.aberta?' bom':'')}><span className={"dot"+(t.aberta?' on':'')}/>{t.aberta?'aberta agora':'fechada'}</li>
+                        {t.aberta&&t.volume!=null&&<li className="chip"><Icon n="volume"/>volume {t.volume}%</li>}
+                        {t.aberta&&t.som===false&&<li className="chip alerta" title="Na TV, toque em “Ativar som”"><Icon n="bell-off"/>som não ativado</li>}
+                      </ul>
+                    )}
+                    <p className="token" title={tv?'Código da TV':'Código do celular (se o link não abrir, cole no celular)'}><Icon n="key"/><code>{t.token}</code></p>
                     <footer className="card-acoes">
-                      <button type="button" className="btn btn-primary btn-sm" onClick={()=>copyURL(buildCamLink(t.token,{nodeId,conta:user.id,fallback:cfURL||flURL||backendUrl}))}><Icon n="link"/>Copiar link</button>
-                      <button type="button" className="ib sm perigo dica-dir" onClick={()=>delToken(t.token)} aria-label={'Remover '+t.nome} data-dica="Remover"><Icon n="trash"/></button>
+                      <button type="button" className="btn btn-primary btn-sm" onClick={()=>copyURL(link)}><Icon n="link"/>Copiar link</button>
+                      <button type="button" className="ib sm perigo dica-dir" onClick={()=>delToken(t)} aria-label={'Remover '+t.nome} data-dica="Remover"><Icon n="trash"/></button>
                     </footer>
                   </article>
                 </li>
-              ))}
+              );})}
             </ul>
           )}
+          {novoDisp&&<ModalNovoDispositivo onClose={()=>setNovoDisp(false)} onSave={criarDispositivo}/>}
         </Pagina>
-      )}
+        );
+      })()}
 
       {page==='config'&&(
         <Pagina ic="gear" titulo="Ajustes">
@@ -3717,9 +4124,9 @@ function App(){
                 </label>
               </li>
               <li>
-                <label className="pref" title="Toca um aviso quando alguém aparece sem o EPI obrigatório">
+                <label className="pref" title="A sirene e a voz saem na TV (Dispositivos > link de TV). Ligue aqui para ouvir a sirene também neste painel.">
                   <span className="pref-ico"><Icon n={alarmeLigado?'bell':'bell-off'}/></span>
-                  <span className="pref-nome">Alarme sonoro</span>
+                  <span className="pref-nome">Sirene neste painel</span>
                   <span className="switch">
                     <input type="checkbox" role="switch" checked={alarmeLigado} onChange={e=>trocarAlarme(e.target.checked)}/>
                     <span className="switch-trilho"/><span className="switch-bolha"/>
@@ -3737,7 +4144,13 @@ function App(){
           {/* o link para abrir o sistema em outro aparelho so aparecia no log do servidor */}
           {!semServidor&&<>
           <section className="bloco" aria-labelledby="titulo-acesso">
-            <header className="bloco-titulo"><Icon n="globe"/><h2 id="titulo-acesso">Abrir em outro aparelho</h2></header>
+            <header className="bloco-titulo"><Icon n="globe"/><h2 id="titulo-acesso">Abrir em outro aparelho</h2>
+              <Ajuda titulo="Abrir em outro aparelho" resumo="É o endereço do seu servidor na internet (não é do site). Muda quando o servidor reinicia.">
+                <p>Este link <b>não é do site</b>: é o endereço do <b>seu servidor</b> (o computador com o Argos EPI Servidor) na internet.</p>
+                <p>Ao ligar, o servidor abre um túnel pela Cloudflare (por isso o endereço termina em trycloudflare.com). É por ele que um celular, uma TV ou este painel alcançam o servidor de fora da rede, sem mexer no roteador.</p>
+                <p>Abrindo o link em outro aparelho você entra no painel servido direto pelo servidor. O endereço <b>muda cada vez que o servidor é reiniciado</b>; por isso os links de celular e de TV (em Dispositivos) usam o endereço fixo do site, que descobre o túnel atual sozinho.</p>
+                <p>“Na mesma rede Wi-Fi” é o endereço local do servidor: só funciona para aparelhos na mesma rede dele, e só se o servidor aceitar conexões da rede local.</p>
+              </Ajuda></header>
             {cfURL
               ? <div className="aj-linha">
                   <code className="chip" style={{fontSize:'.85rem'}}>{cfURL}</code>
@@ -3753,7 +4166,13 @@ function App(){
             <summary><Icon n="server"/><h2>Avançado</h2><Icon n="chevron" className="seta"/></summary>
             <div className="avancado-corpo">
               <section className="bloco" aria-labelledby={idServidor}>
-                <header className="bloco-titulo"><Icon n="server"/><h3 id={idServidor}>Servidor</h3></header>
+                <header className="bloco-titulo"><Icon n="server"/><h3 id={idServidor}>Servidor</h3>
+                  <Ajuda titulo="Servidor deste painel" resumo="Por qual servidor da conta este painel lê e grava os cadastros agora.">
+                    <p><b>Endereço</b>: é por onde este painel está falando com o servidor neste momento. Normalmente é o túnel do servidor (trycloudflare.com); se você abriu o painel no próprio computador do servidor, é o endereço local dele. Não dá para digitar: o painel acha os servidores da conta sozinho.</p>
+                    <p><b>Escolher o mais livre</b>: com mais de um servidor na conta, troca para o que estiver com mais folga.</p>
+                    <p><b>Modelo padrão</b>: o modelo de IA das câmeras novas. Cada câmera pode usar outro (Ajustes da câmera).</p>
+                    <p><b>Placa de vídeo ou CPU</b>: escolhido por servidor, na aba Servidores.</p>
+                  </Ajuda></header>
                 <form className="form-grade" onSubmit={enviar(()=>{})}>
                   <p className="field"><label htmlFor={idServidor+'-url'}><Icon n="globe"/>Endereço</label><input id={idServidor+'-url'} type="url" value={backendUrl} readOnly/></p>
                   <p className="field"><span className="field-rot"><Icon n="refresh"/>Escolha</span><button type="button" className="btn btn-secondary" onClick={()=>carregarServidores({trocarPrincipal:true})} disabled={buscandoServidores}><Icon n="refresh"/>{buscandoServidores?'Buscando...':'Escolher o mais livre'}</button></p>

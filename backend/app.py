@@ -51,6 +51,9 @@ import conta
 import malha
 import dependencias
 dependencias.preparar_caminho()   # TensorRT instalado pelo painel (volume do Docker)
+import avisos
+import rtc
+import voz
 from camera_discovery import discover_cameras, list_local_webcams
 from analysis_jobs import MODES as ANALYSIS_MODES, JobManager, valid_job_id
 import ppe_taxonomy as tax
@@ -66,7 +69,7 @@ except ImportError:  # sem flask-sock o tempo real usa so HTTP binario
 _TIPOS_ESTATICOS = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
                     '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml',
                     '.png': 'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon', '.woff2': 'font/woff2',
-                    '.webmanifest': 'application/manifest+json'}
+                    '.webmanifest': 'application/manifest+json', '.wav': 'audio/wav', '.mp3': 'audio/mpeg'}
 
 
 class _App(Flask):
@@ -1447,7 +1450,8 @@ def _info_servidor():
                      'dispositivo': preferencia_dispositivo(), 'gpu': gpu_disponivel()},
         'estado': {'availability': _availability_score(metrics), 'active_streams': ativos,
                    'cpu': metrics.get('cpu'), 'ram_pct': metrics.get('ram_pct'),
-                   'malha': malha.estado(), 'tunel': dict(tunel_estado)},
+                   'malha': malha.estado(), 'tunel': dict(tunel_estado),
+                   'rtc': rtc.situacao()},
     }
 
 
@@ -1873,7 +1877,7 @@ def _stream_info(p, sid):
     return {'stream_id': sid, 'config': p.public_config(), 'model': p.model_name, 'arquitetura': st.get('arquitetura'),
             'required_items': st['required_items'], 'required_labels': st['required_labels'],
             'epis_disponiveis': st['epis_disponiveis'], 'epis_da_camera': st['epis_da_camera'],
-            'ajuda': st.get('ajuda'),
+            'ajuda': st.get('ajuda'), 'direto': st.get('direto'),
             'classes': st['classes'], 'pose': st['pose'], 'pipeline': st['pipeline'],
             'runtime_backend': st['runtime_backend'], 'camera': st['camera'],
             'paused': _pausado(getattr(p, 'owner_uid', None))}
@@ -1966,6 +1970,9 @@ if sock:
                         state['cfg'] = cur.config_version
                         out.json({'type': 'config', 'config': cur.public_config(),
                                   'janela_s': cur.pipeline.janela_reenvio()})
+                    destino = mover_para.pop(sid, None)
+                    if destino and now - destino[1] < 60:    # o painel escolheu outro servidor para esta camera
+                        out.json({'type': 'mover', 'url': destino[0]})
                     if sub.fechado and sub is state['sub']:
                         with removed_streams_lock:
                             removed = sid in removed_streams
@@ -2024,6 +2031,7 @@ if sock:
             return
         sid = request.args.get('stream_id') or ''
         want_video = request.args.get('video', '1') != '0'
+        querer = {'video': want_video}
         stop = threading.Event()
 
         def reader():
@@ -2032,8 +2040,13 @@ if sock:
                     msg = ws.receive(timeout=20)
                     if msg is None:
                         break
-                    if isinstance(msg, str) and (json.loads(msg) or {}).get('type') == 'ping':
+                    if not isinstance(msg, str):
+                        continue
+                    d = json.loads(msg) or {}
+                    if d.get('type') == 'ping':
                         out.json({'type': 'pong'})
+                    elif d.get('type') == 'video':     # assistindo pelo video direto: so os resultados
+                        querer['video'] = bool(d.get('on'))
             except Exception:
                 pass
             stop.set()
@@ -2066,7 +2079,7 @@ if sock:
                     items = items[-8:]
                 for seq, t, texto, jpeg, _ in items:
                     out.text(texto)
-                    if want_video and jpeg:
+                    if querer['video'] and jpeg:
                         out.binary(pack_frame(seq or 0, t * 1000.0, jpeg))
                 now = time.monotonic()
                 if now - last_info >= 1.0:
@@ -2103,6 +2116,29 @@ def stream_config(sid):
     return jsonify({'config': pub,
                     'modos': {k: {'nome': v['nome'], 'atraso_s': v['atraso']} for k, v in MODOS.items()},
                     'fps': list(FPS_OPCOES), 'resolucoes': list(RES_OPCOES)})
+
+
+mover_para: dict = {}    # sid -> (endereco do servidor escolhido, quando)
+
+
+@app.route('/streams/<sid>/mover', methods=['POST'])
+def mover_stream(sid):
+    """Painel: esta camera de celular deve passar a mandar o video para outro servidor da conta.
+    O celular recebe o aviso pela conexao que ja tem com este servidor e reconecta no outro."""
+    u, err = _auth()
+    if err: return err
+    if '_cam_session' in u: return jsonify({'error': 'O servidor é escolhido no painel de controle'}), 403
+    if not _stream_permitido(u, sid): return _stream_negado()
+    d = request.get_json(force=True, silent=True) or {}
+    destino = next((p for p in conta.pares() if p.get('id') == d.get('servidor_id')), None)
+    if not destino or not destino.get('url'):
+        return jsonify({'error': 'O servidor escolhido não está com endereço de internet agora.'}), 409
+    with streams_lock:
+        p = streams.get(sid)
+    if not p or not p.running or not p.use_external:
+        return jsonify({'error': 'O celular desta câmera não está transmitindo agora.'}), 409
+    mover_para[sid] = (destino['url'], time.monotonic())
+    return jsonify({'ok': True, 'servidor': destino.get('nome')})
 
 
 @app.route('/streams', methods=['GET'])
@@ -2826,8 +2862,12 @@ def update_funcionario(func_id):
             func['nome'] = d.get('nome', func['nome'])
             func['cargo'] = d.get('cargo', func['cargo'])
             func['matricula'] = d.get('matricula', func['matricula'])
+            if not str(func['nome'] or '').strip():
+                return jsonify({"error":"Nome é obrigatório"}), 400
+            func['nome'] = str(func['nome']).strip()
             _save_json(_func_meta_path(u['id']), funcs)
             _atualizar_funcionarios_em_streams(u['id'])
+            _atualizar_galeria(u['id'])      # o nome novo vale na hora nas cameras ligadas
             return jsonify({"funcionario": func})
     return jsonify({"error":"Funcionário não encontrado"}), 404
 
@@ -3381,6 +3421,9 @@ def status():
                     "vinculado":conta.vinculado(),
                     "servidor_id":conta.servidor_id() or None,
                     "versao":"v20",
+                    "rtc":rtc.situacao(),
+                    "voz":voz.situacao()['status'],
+                    "tvs":len(avisos.tvs(u['id'])) if u and '_cam_session' not in u else 0,
                     "tensorrt_available":_tensorrt_export_available(),
                     "tensorrt_error":_tensorrt_dependency_error()})
 
@@ -3402,7 +3445,14 @@ def get_cam_tokens():
     u, err = _auth()
     if err: return err
     if '_cam_session' in u: return jsonify({"error":"Câmeras não podem acessar"}), 403
-    return jsonify({"tokens": user_mgr.list_cam_tokens(u['id'])})
+    tokens = user_mgr.list_cam_tokens(u['id'])
+    abertas = {t['token']: t for t in avisos.tvs(u['id'])}
+    for t in tokens:        # TV aberta agora neste servidor (com o volume em que ela esta)
+        if t['tipo'] == 'tv':
+            t['aberta'] = t['token'] in abertas
+            t['volume'] = (abertas.get(t['token']) or {}).get('volume')
+            t['som'] = (abertas.get(t['token']) or {}).get('som')
+    return jsonify({"tokens": tokens})
 
 @app.route('/cam_tokens', methods=['POST'])
 def create_cam_token_route():
@@ -3410,10 +3460,23 @@ def create_cam_token_route():
     if err: return err
     if '_cam_session' in u: return jsonify({"error":"Câmeras não podem acessar"}), 403
     d = request.get_json(force=True)
-    nome = d.get('nome', 'Câmera')
-    t = user_mgr.create_cam_token(u['id'], nome)
+    tipo = 'tv' if d.get('tipo') == 'tv' else 'camera'
+    nome = str(d.get('nome') or ('TV' if tipo == 'tv' else 'Câmera')).strip()[:60]
+    t = user_mgr.create_cam_token(u['id'], nome, tipo)
     if not t: return jsonify({"error":"Falha ao criar token"}), 500
     return jsonify({"token": t})
+
+
+@app.route('/cam_tokens/<token>', methods=['PUT'])
+def rename_cam_token_route(token):
+    u, err = _auth()
+    if err: return err
+    if '_cam_session' in u: return jsonify({"error":"Câmeras não podem acessar"}), 403
+    nome = str((request.get_json(force=True, silent=True) or {}).get('nome') or '').strip()[:60]
+    if not nome: return jsonify({"error":"Nome é obrigatório"}), 400
+    if not user_mgr.rename_cam_token(u['id'], token, nome):
+        return jsonify({"error":"Dispositivo não encontrado"}), 404
+    return jsonify({"success": True})
 
 @app.route('/cam_tokens/<token>', methods=['DELETE'])
 def delete_cam_token_route(token):
@@ -3421,6 +3484,236 @@ def delete_cam_token_route(token):
     if err: return err
     if '_cam_session' in u: return jsonify({"error":"Câmeras não podem acessar"}), 403
     return jsonify({"success": user_mgr.delete_cam_token(u['id'], token)})
+
+
+# ═══════════════════════════════════════════════════════════════
+# VIDEO DIRETO (WebRTC) — o aperto de maos passa por aqui; o video vai direto por UDP
+# ═══════════════════════════════════════════════════════════════
+@app.route('/rtc/ice', methods=['GET'])
+def rtc_ice():
+    """Servidores STUN/TURN para o navegador montar a conexao direta."""
+    _u, err = _auth()
+    if err: return err
+    return jsonify({'iceServers': rtc.servidores_ice(), **rtc.situacao()})
+
+
+def _sdp_do_pedido():
+    d = request.get_json(force=True, silent=True) or {}
+    sdp = str(d.get('sdp') or '')
+    return sdp if sdp.startswith('v=') and len(sdp) < 60000 else ''
+
+
+@app.route('/rtc/publicar/<sid>', methods=['POST'])
+def rtc_publicar(sid):
+    """A camera (celular ou navegador) oferece o video direto desta camera."""
+    u, err = _auth()
+    if err: return err
+    if not _stream_permitido(u, sid): return _stream_negado()
+    sdp = _sdp_do_pedido()
+    if not sdp: return jsonify({'error': 'Pedido de vídeo inválido.'}), 400
+    p = _ensure_external_stream_ready(u, sid)
+    if not p: return jsonify({'error': 'Stream removido'}), 410
+    if not p.public_config().get('imediato'):
+        return jsonify({'error': 'O vídeo direto vale só no modo tempo real.', 'codigo': 'modo'}), 409
+    try:
+        resposta, sessao = rtc.publicar(sid, sdp)
+    except Exception as e:
+        return jsonify({'error': str(e), 'codigo': 'indisponivel', **rtc.situacao()}), 503
+    p.ligar_direto(rtc.url_leitura(sid))
+    return jsonify({'sdp': resposta, 'sessao': sessao})
+
+
+@app.route('/rtc/assistir/<sid>', methods=['POST'])
+def rtc_assistir(sid):
+    """O painel pede o mesmo video que a camera esta mandando (sem recodificar)."""
+    u, err = _auth()
+    if err: return err
+    if '_cam_session' in u: return jsonify({'error': 'Câmeras não assistem.'}), 403
+    if not _stream_permitido(u, sid): return _stream_negado()
+    sdp = _sdp_do_pedido()
+    if not sdp: return jsonify({'error': 'Pedido de vídeo inválido.'}), 400
+    if not rtc.publicando(sid):
+        return jsonify({'error': 'Esta câmera não está mandando vídeo direto agora.', 'codigo': 'sem_video'}), 404
+    try:
+        resposta, sessao = rtc.assistir(sid, sdp)
+    except Exception as e:
+        return jsonify({'error': str(e), 'codigo': 'indisponivel'}), 503
+    return jsonify({'sdp': resposta, 'sessao': sessao})
+
+
+@app.route('/rtc/sessao/<sid>/<tipo>/<sessao>', methods=['DELETE'])
+def rtc_encerrar(sid, tipo, sessao):
+    u, err = _auth()
+    if err: return err
+    if not _stream_permitido(u, sid): return _stream_negado()
+    rtc.encerrar(sid, tipo, sessao)
+    return jsonify({'ok': True})
+
+
+# ═══════════════════════════════════════════════════════════════
+# TV — tela que toca a sirene e fala os avisos (link criado em Dispositivos)
+# ═══════════════════════════════════════════════════════════════
+def _auth_tv():
+    """Token de TV (tv_...). So abre as rotas da TV: nao le cadastros nem cameras."""
+    t = _token() or ''
+    if not t.startswith('tv_'):
+        return None
+    info = user_mgr.validate_cam_token(t)
+    if not info:
+        return None
+    u = user_mgr.get_user(info['uid'])
+    if not u or u.get('blocked'):
+        return None
+    return info
+
+
+def _faltas_agora(uid) -> dict:
+    """O que as cameras da conta estao vendo neste instante (a TV mostra enquanto durar)."""
+    with user_streams_lock:
+        sids = list(user_streams.get(uid, []))
+    cameras, pessoas, faltas = 0, 0, []
+    for sid in sids:
+        with streams_lock:
+            p = streams.get(sid)
+        if not p or not p.running:
+            continue
+        r = p.get_result() or {}
+        if p.pipeline.estatisticas()['sem_sinal']:
+            continue
+        cameras += 1
+        for q in r.get('persons') or []:
+            pessoas += 1
+            epis = q.get('epis') or {}
+            itens = [i for i in q.get('faltando') or [] if (epis.get(i) or {}).get('alerta')]
+            queda = 'Possível queda' in (q.get('alertas') or [])
+            if itens or queda:
+                faltas.append({'nome': q.get('nome') or '', 'itens': itens, 'area': q.get('area') or '',
+                               'camera': sid, 'queda': queda,
+                               'ha_s': max([float((epis.get(i) or {}).get('faltando_ha') or 0) for i in itens] or [0])})
+    return {'cameras': cameras, 'pessoas': pessoas, 'faltas': faltas[:12]}
+
+
+@app.route('/tv/estado', methods=['GET'])
+def tv_estado():
+    info = _auth_tv()
+    if not info: return jsonify({'error': 'Este link de TV foi removido. Peça um link novo no painel.'}), 401
+    return jsonify({'ok': True, 'nome': info['nome'], 'voz': voz.situacao(), 'repetir_s': avisos.REPETIR_S,
+                    'servidor': conta.servidor_nome() if hasattr(conta, 'servidor_nome') else '',
+                    **_faltas_agora(info['uid'])})
+
+
+@app.route('/tv/audio/<aid>.wav', methods=['GET'])
+def tv_audio(aid):
+    """O audio de um aviso. Espera alguns segundos se a frase ainda estiver sendo sintetizada."""
+    if not _auth_tv(): return jsonify({'error': 'Link de TV inválido.'}), 401
+    from flask import send_file
+    fim = time.time() + 6
+    caminho = voz.arquivo(aid)
+    while not caminho and time.time() < fim:
+        time.sleep(0.15)
+        caminho = voz.arquivo(aid)
+    if not caminho:
+        return jsonify({'error': 'A voz não está disponível neste servidor.', **voz.situacao()}), 404
+    return send_file(caminho, mimetype='audio/wav', max_age=86400)
+
+
+@app.route('/tv/falou', methods=['POST'])
+def tv_falou():
+    """A TV confirma o que tocou e em que volume (vai para o desempenho do funcionario)."""
+    info = _auth_tv()
+    if not info: return jsonify({'error': 'Link de TV inválido.'}), 401
+    d = request.get_json(force=True, silent=True) or {}
+    ok = avisos.falou(info['uid'], d.get('id'), info['nome'], d.get('volume'), tocou=bool(d.get('falou', True)),
+                      sirene=bool(d.get('sirene', True)))
+    return jsonify({'ok': ok})
+
+
+@app.route('/tv/teste', methods=['POST'])
+def tv_teste():
+    """Painel: manda um aviso de teste para as TVs da conta (confere som e volume)."""
+    u, err = _auth()
+    if err: return err
+    if '_cam_session' in u: return jsonify({'error': 'Câmeras não podem acessar'}), 403
+    if not avisos.tem_tv(u['id']):
+        return jsonify({'error': 'Nenhuma TV desta conta está aberta agora neste servidor.'}), 409
+    texto = 'Teste de som do Argos EPI. Se você ouviu este aviso, a TV está pronta.'
+    aviso = {'type': 'alerta', 'id': uuid.uuid4().hex[:16], 'ts': time.time(), 'tipo': 'teste', 'nome': '',
+             'itens': [], 'rotulos': [], 'area': '', 'camera': '', 'frase': texto,
+             'audio': voz.sintetizar_depois(texto), 'repeticao': 0}
+    n = avisos._enviar(u['id'], aviso)
+    return jsonify({'ok': True, 'tvs': n, 'voz': voz.situacao()})
+
+
+@app.route('/tv/conectadas', methods=['GET'])
+def tv_conectadas():
+    u, err = _auth()
+    if err: return err
+    if '_cam_session' in u: return jsonify({'error': 'Câmeras não podem acessar'}), 403
+    return jsonify({'tvs': avisos.tvs(u['id']), 'voz': voz.situacao()})
+
+
+if sock:
+    @sock.route('/ws/tv')
+    def ws_tv(ws):
+        """TV conectada (?token=tv_...). Servidor -> TV: 'pronto', 'alerta' (sirene + frase + audio),
+        'estado' (1 por segundo: cameras, pessoas e faltas em andamento). TV -> servidor: 'ping',
+        'estado' (volume, som liberado) e 'falou' (id do aviso, volume)."""
+        out = _WsSender(ws)
+        info = _auth_tv()
+        if not info:
+            out.json({'type': 'erro', 'error': 'Este link de TV foi removido. Peça um link novo no painel.'})
+            return
+        uid = info['uid']
+        tv = avisos.conectar(uid, info['nome'], info['token'])
+        stop = threading.Event()
+
+        def leitor():
+            try:
+                while not stop.is_set():
+                    msg = ws.receive(timeout=25)
+                    if msg is None:
+                        break
+                    if not isinstance(msg, str):
+                        continue
+                    d = json.loads(msg) or {}
+                    if d.get('type') == 'ping':
+                        out.json({'type': 'pong'})
+                    elif d.get('type') == 'estado':
+                        tv.som = bool(d.get('som'))
+                        try:
+                            tv.volume = max(0, min(100, int(d.get('volume'))))
+                        except (TypeError, ValueError):
+                            pass
+                    elif d.get('type') == 'falou':
+                        avisos.falou(uid, d.get('id'), tv.nome, d.get('volume'), tocou=bool(d.get('falou', True)),
+                                     sirene=bool(d.get('sirene', True)))
+            except Exception:
+                pass
+            stop.set()
+
+        threading.Thread(target=leitor, daemon=True, name=f'tv-rx-{tv.id}').start()
+        try:
+            out.json({'type': 'pronto', 'nome': tv.nome, 'voz': voz.situacao(), 'repetir_s': avisos.REPETIR_S})
+            # deixa prontos os avisos mais prováveis: cada funcionario com os EPIs mais comuns
+            try:
+                voz.aquecer([f.get('nome') for f in _load_json(_func_meta_path(uid)) if f.get('nome')])
+            except Exception:
+                pass
+            ultimo = 0.0
+            while not stop.is_set():
+                for item in tv.pegar(timeout=0.5):
+                    out.json(item)
+                agora = time.monotonic()
+                if agora - ultimo >= 1.0:
+                    ultimo = agora
+                    out.json({'type': 'estado', 'voz': voz.situacao()['status'], **_faltas_agora(uid)})
+        except Exception as ex:
+            if 'ConnectionClosed' not in type(ex).__name__:
+                print(f"[ws/tv] {type(ex).__name__}: {ex}")
+        finally:
+            stop.set()
+            avisos.desconectar(tv)
+
 
 # ═══════════════════════════════════════════════════════════════
 # FRONTEND SERVING
@@ -3438,6 +3731,10 @@ def index():
 @app.route('/cam')
 def cam_page():
     return app.send_static_file('cam.html')
+
+@app.route('/tv')
+def tv_page():
+    return app.send_static_file('tv.html')
 
 if __name__ == '__main__':
     if torch.cuda.is_available(): _device_global = '0'

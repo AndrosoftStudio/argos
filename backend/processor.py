@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import ajuda
 import areas as areas_mod
 import auditoria
+import avisos
 import face_id
 import ppe_taxonomy as tax
 from epi_detector import (MODELS_DIR, EpiDetector, info_do_modelo, is_cuda, merge_detections, modelo_de_reforco,
@@ -26,6 +27,20 @@ from reforco import Reforco
 from live_pipeline import CONFIG_PADRAO, MODOS, LivePipeline, _Taxa, config_publica, normalizar_config
 from ppe_analyzer import PPEAnalyzer, draw_analysis
 from yolo_runtime import precision_kwargs
+
+
+# O decodificador de video (FFmpeg) usa por padrao um thread por nucleo e cada thread segura um
+# quadro: num servidor de 16 nucleos a imagem da camera IP chegava meio segundo atrasada. Com um
+# thread o quadro sai assim que chega (medido: 540 ms -> 43 ms). ARGOS_DECODIFICAR_THREADS muda.
+THREADS_VIDEO = max(1, int(os.environ.get('ARGOS_DECODIFICAR_THREADS', '1') or 1))
+
+
+def abrir_rede(fonte):
+    """Abre uma camera de rede (RTSP/HTTP) sem fila no decodificador."""
+    try:
+        return cv2.VideoCapture(fonte, cv2.CAP_FFMPEG, [cv2.CAP_PROP_N_THREADS, THREADS_VIDEO])
+    except Exception:      # OpenCV antigo, sem este parametro
+        return cv2.VideoCapture(fonte, cv2.CAP_FFMPEG)
 
 
 class VideoProcessor:
@@ -147,23 +162,37 @@ class VideoProcessor:
                 continue
             # o t do pipeline e relogio de desempenho (perf_counter), nao data: gravado
             # assim, o episodio saia em 1970, a faxina apagava e cada quadro abria outro
+            agora = time.time()
+            # exigidos: o que estava sendo cobrado desta pessoa (os EPIs da camera ou os da area dela)
             comum = dict(stream_id=self.client_id, chave_pessoa=chave, func_id=func_id,
                          func_nome=func_nome, track_id=p.get('track_id'),
                          area_id=p.get('area_id'), area_nome=p.get('area'),
-                         img=img, box=p.get('bbox'), t=time.time())
+                         img=img, box=p.get('bbox'), t=agora, exigidos=list(epis.keys()))
+            linhas = []
             for item in confirmados:
                 try:
-                    auditoria.episodio(self.dados_dir, self.owner_uid, tipo='violacao',
-                                       epi=item, epi_label=tax.item_label(item),
-                                       forte=(epis.get(item) or {}).get('fonte') == 'ausencia_detectada', **comum)
+                    est = auditoria.episodio(self.dados_dir, self.owner_uid, tipo='violacao',
+                                             epi=item, epi_label=tax.item_label(item),
+                                             forte=(epis.get(item) or {}).get('fonte') == 'ausencia_detectada', **comum)
+                    linhas.append(est.get('rowid'))
                 except Exception as e:
                     self._log(f"auditoria (violacao) falhou: {e}")
-            if 'Possível queda' in (p.get('alertas') or []):
+            queda = 'Possível queda' in (p.get('alertas') or [])
+            if queda:
                 try:
-                    auditoria.episodio(self.dados_dir, self.owner_uid, tipo='queda',
-                                       detalhe='Possível queda detectada', **comum)
+                    est = auditoria.episodio(self.dados_dir, self.owner_uid, tipo='queda',
+                                             detalhe='Possível queda detectada', **comum)
+                    linhas.append(est.get('rowid'))
                 except Exception as e:
                     self._log(f"auditoria (queda) falhou: {e}")
+            # TV: sirene e voz ("Fulano, por favor, coloque o capacete"). Area com o alarme desligado nao avisa.
+            area = self._areas_por_id().get(p.get('area_id')) if p.get('area_id') else None
+            if area is None or area.get('alarme', True):
+                try:
+                    avisos.violacao(self.owner_uid, self.client_id, chave, func_id=func_id, func_nome=func_nome,
+                                    itens=confirmados, area=p.get('area') or '', rowids=linhas, queda=queda, t=agora)
+                except Exception as e:
+                    self._log(f"aviso da TV falhou: {e}")
 
     @classmethod
     def read_model_info(cls, model_path: str) -> dict:
@@ -304,6 +333,8 @@ class VideoProcessor:
         """Quadro de camera externa (celular, navegador). t = horario de captura em segundos."""
         if not self.running or not self.use_external:
             return False
+        if self.direto_ativo():       # o video direto ja esta trazendo os quadros desta camera
+            return False
         return self.pipeline.receber(seq, t, jpeg, sessao=session)
 
     def set_external_frame(self, img, seq=None):
@@ -312,6 +343,68 @@ class VideoProcessor:
             self.pipeline.receber_imagem(img, largura_max=MODOS[self.mode]['largura_envio'])
 
     set_external_frame_b = set_external_frame  # rota paralela antiga (/stream_frame2)
+
+    # ── Video direto (WebRTC) ───────────────────────────────────────
+    # O celular/navegador manda video de verdade (H.264/VP8) por WebRTC para o MediaMTX, que roda
+    # ao lado do servidor; aqui o quadro e lido do endereco local dele e entra no mesmo pipeline.
+    def ligar_direto(self, url):
+        """Comeca (ou mantem) a leitura do video direto desta camera."""
+        self._direto_url = url
+        th = getattr(self, '_direto_thread', None)
+        if th is not None and th.is_alive():
+            return
+        self._direto_parar = threading.Event()
+        self._direto_thread = threading.Thread(target=self._ler_direto, args=(self._direto_parar,), daemon=True,
+                                               name=f'direto-{self.client_id}')
+        self._direto_thread.start()
+
+    def desligar_direto(self):
+        ev = getattr(self, '_direto_parar', None)
+        if ev is not None:
+            ev.set()
+        self._direto_em = 0.0
+
+    def direto_ativo(self) -> bool:
+        """True enquanto os quadros estao chegando pelo video direto."""
+        return time.perf_counter() - getattr(self, '_direto_em', 0.0) < 1.5
+
+    def _ler_direto(self, parar):
+        cap, vazio_desde = None, time.perf_counter()
+        proximo = 0.0
+        while not parar.is_set() and self.running and self.use_external:
+            if cap is None:
+                cap = abrir_rede(self._direto_url)
+                if not cap.isOpened():
+                    cap.release()
+                    cap = None
+                    if time.perf_counter() - vazio_desde > 12:   # ninguem publicando: desiste
+                        break
+                    parar.wait(0.4)
+                    continue
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            ok, img = cap.read()
+            agora = time.perf_counter()
+            if not ok or img is None:
+                cap.release()
+                cap = None
+                if agora - vazio_desde > 12:
+                    break
+                parar.wait(0.2)
+                continue
+            vazio_desde = agora
+            self._direto_em = agora
+            if agora < proximo:         # respeita o fps escolhido no painel
+                continue
+            proximo = max(proximo + 1.0 / self.config['fps'], agora - 0.05)
+            h, w = img.shape[:2]
+            alvo = self.config['resolucao']
+            if h > alvo:
+                s = alvo / h
+                img = cv2.resize(img, (int(w * s) // 2 * 2, alvo), interpolation=cv2.INTER_AREA)
+            self.pipeline.receber_imagem(img, t=agora, largura_max=MODOS[self.mode]['largura_envio'], sessao='direto')
+        if cap is not None:
+            cap.release()
+        self._direto_em = 0.0
 
     def _run_capture(self):
         cap = self._open_camera(self.camera_source)
@@ -349,11 +442,11 @@ class VideoProcessor:
         self._log("Captura encerrada.")
 
     def _open_camera(self, source):
-        if isinstance(source, str) and source.startswith('rtsp://'):
-            cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+        if isinstance(source, str) and source.startswith(('rtsp://', 'rtsps://')):
+            cap = abrir_rede(source)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         elif isinstance(source, str) and source.startswith(('http://', 'https://')):
-            cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+            cap = abrir_rede(source)
         elif isinstance(source, str) and os.path.isfile(source):
             cap = cv2.VideoCapture(source)
         else:
@@ -369,6 +462,8 @@ class VideoProcessor:
         for extra in extras:
             try:
                 if os.path.basename(extra['path']) == 'funcionarios.pt':
+                    if not self.config.get('rosto', True):   # camera so confere EPIs: nao identifica ninguem
+                        continue
                     employees.extend(run_employee_model(extra['model'], img, self.device, is_cuda(self.device)))
                     continue
                 r = extra['model'].predict(img, device=self.device, verbose=False, conf=0.4, iou=0.45,
@@ -405,7 +500,7 @@ class VideoProcessor:
 
         pedido: os rostos deste quadro ja foram pedidos a outro servidor da conta. Se a resposta
         chegou (ou chega em menos tempo do que achar os rostos aqui), usa; senao faz aqui."""
-        if self.galeria is None or self.galeria.vazia:
+        if self.galeria is None or self.galeria.vazia or not self.config.get('rosto', True):
             return []
         rostos = None
         if pedido is not None and pedido.contar:
@@ -456,7 +551,8 @@ class VideoProcessor:
         p_rosto = p_epi = None
         ms_det = self._ms.get(('det', imgsz))
         if jpeg is not None and ajuda.ativa():
-            if self.galeria is not None and not self.galeria.vazia and 'rosto' in self._ms:
+            if (self.galeria is not None and not self.galeria.vazia and 'rosto' in self._ms
+                    and self.config.get('rosto', True)):
                 p_rosto = ajuda.pedir_rostos(jpeg, self._ms.get('pre', 0.0) + 0.8 * self._ms['rosto'])
             if run_det and ms_det is not None:
                 self._n_epi += 1
@@ -582,6 +678,7 @@ class VideoProcessor:
             'activity': r.get('activity', 'sem leitura'),
             'pose': self.pose_ok,
             'config': self.public_config(),
+            'direto': self.direto_ativo(),
             'pipeline': stats,
             'frames_recebidos': len(self.pipeline.taxa_entrada.ts),
             'frames_descartados': stats['pulados'],
@@ -604,6 +701,7 @@ class VideoProcessor:
                 auditoria.encerrar_stream(self.owner_uid, self.client_id)
             except Exception:
                 pass
+        self.desligar_direto()
         self.pipeline.parar()
         if self.thread and self.thread.is_alive() and self.thread is not threading.current_thread():
             self.thread.join(timeout=3)

@@ -15,6 +15,7 @@ $Placas = @($Placas | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Tri
 $m = Get-Content (Join-Path $Saida "latest.json") -Raw | ConvertFrom-Json
 New-Item -ItemType Directory -Force (Join-Path $Destino "win") | Out-Null
 $arquivos = @("latest.json", "ArgosEPI-Servidor-Setup.exe", $m.windows.base.url)
+if ($m.windows.midia) { $arquivos += $m.windows.midia.url }      # video direto e voz dos avisos
 foreach ($p in $Placas) {
   if (-not $m.windows.programa2.$p) { throw "placa desconhecida ou nao empacotada: $p (use cpu, dml ou nvidia)" }
   $arquivos += $m.windows.programa2.$p.url, $m.windows.nucleo.$p.url, $m.windows.motor.$p.url

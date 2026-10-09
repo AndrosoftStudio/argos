@@ -236,8 +236,8 @@ select{background:var(--sf);border:1px solid var(--bd);border-radius:10px;color:
 .bloco .vazio-titulo{font-size:1.25rem;}
 
 /* passo a passo em figuras, no lugar do texto de ajuda */
-.passos{display:flex;align-items:flex-start;gap:6px;flex-wrap:wrap;justify-content:center;}
-.passo{display:flex;align-items:flex-start;gap:6px;}
+
+
 .passo-item{display:flex;flex-direction:column;align-items:center;gap:7px;width:98px;font-size:.78rem;font-weight:600;text-align:center;line-height:1.25;}
 .passo-ico{width:54px;height:54px;border-radius:16px;display:grid;place-items:center;background:rgba(255,255,255,.14);border:2px solid rgba(255,255,255,.35);}
 .passo-ico .ic{width:28px;height:28px;}
@@ -850,3 +850,104 @@ dialog.modal.tela .modal-corpo{max-height:calc(100vh - 30px);}
 .baixar-arquivos{display:flex;flex-direction:column;gap:4px;margin-left:20px;}
 .baixar-arquivos a{font-weight:600;overflow-wrap:anywhere;}
 .baixar-arquivos span{color:var(--mt);}
+
+/* ═══ 20.4.0 ═══════════════════════════════════════════════════════ */
+/* Janelas: o fundo fica embaçado, e o que não é a janela sai de foco */
+dialog.modal::backdrop{background:rgba(3,4,40,.5);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}
+
+/* Ajuda "?": passar o mouse mostra o resumo; tocar abre a explicação inteira */
+.ajuda{width:24px;height:24px;border-radius:50%;display:inline-grid;place-items:center;flex-shrink:0;padding:0;cursor:pointer;
+  background:transparent;border:0;color:var(--mt);font-family:var(--font-body);transition:color .15s,background .15s;vertical-align:middle;}
+.ajuda .ic{width:20px;height:20px;}
+.ajuda:hover,.ajuda:focus-visible{color:var(--brand);background:var(--sf3);}
+.ajuda[data-dica]:hover::after,.ajuda[data-dica]:focus-visible::after{white-space:normal;width:max-content;max-width:min(290px,72vw);
+  text-align:left;line-height:1.35;font-size:.78rem;padding:8px 11px;}
+.modal .ajuda[data-dica]:hover::after,.modal .ajuda[data-dica]:focus-visible::after{left:auto;right:0;transform:none;}
+.ajuda-texto{display:flex;flex-direction:column;gap:10px;font-size:.93rem;line-height:1.55;color:var(--tx);max-width:62ch;}
+.ajuda-texto code{background:var(--sf2);border:1px solid var(--bd);border-radius:5px;padding:0 5px;font-size:.84rem;}
+.field label .ajuda,.field-rot .ajuda,.hw-rot .ajuda,.cam-modal-rot .ajuda{text-transform:none;letter-spacing:0;}
+
+/* Passo a passo: explicação para ler (numerada, sem moldura), não botões */
+.passos-caixa{display:flex;flex-direction:column;align-items:center;gap:8px;}
+.passos-rot{font-size:.72rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;opacity:.7;}
+.passos{display:flex;align-items:center;gap:6px 18px;flex-wrap:wrap;justify-content:center;list-style:none;margin:0;padding:0;}
+.passo{display:flex;align-items:center;gap:7px;font-size:.88rem;font-weight:600;cursor:default;}
+.passo .ic{width:18px;height:18px;opacity:.8;}
+.passo-num{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:.76rem;font-weight:800;
+  background:rgba(255,255,255,.2);flex-shrink:0;}
+.bloco .passo-num{background:var(--sf3);color:var(--brand-ink);}
+.passo+.passo::before{content:'›';opacity:.5;margin-right:8px;font-size:1.1rem;line-height:1;}
+
+/* Filtros de lista */
+.barra-filtros{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
+.barra-filtros .btn{margin-left:auto;}
+.seg.filtros{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.28);}
+.seg.filtros .seg-btn{color:#fff;}
+.seg.filtros .seg-btn:hover{background:rgba(255,255,255,.2);color:#fff;}
+.seg.filtros .seg-btn.ativo{background:var(--gold);color:var(--navy);}
+.barra-filtros>.ajuda{color:#fff;opacity:.85;}
+.barra-filtros>.ajuda:hover,.barra-filtros>.ajuda:focus-visible{background:rgba(255,255,255,.2);color:#fff;opacity:1;}
+.bloco .seg.filtros{background:var(--sf2);border-color:var(--bd);}
+.bloco .seg.filtros .seg-btn{color:var(--mt);}
+.bloco .seg.filtros .seg-btn:hover{background:var(--sf3);color:var(--ac2);}
+.bloco .seg.filtros .seg-btn.ativo{background:var(--brand);color:#fff;}
+.vazio-filtro{color:#fff;margin:6px 0 14px;}
+.servidores-resumo{display:flex;flex-direction:column;gap:10px;}
+.servidores-resumo .bloco-titulo{margin-bottom:0;}
+
+/* Janela de ajustes da câmera */
+.cam-modal{display:flex;flex-direction:column;gap:14px;}
+.cam-modal .field{margin-bottom:0;}
+.cam-modal .field>select{width:100%;}
+.cam-modal-grupo{display:flex;flex-direction:column;gap:8px;padding-top:12px;border-top:1px solid var(--bd);}
+.cam-modal-rot{display:flex;align-items:center;gap:7px;font-size:.78rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--mt);}
+.cam-modal-rot>.ic{width:16px;height:16px;}
+.cam-modal-rot .chip{margin-left:auto;text-transform:none;letter-spacing:0;cursor:pointer;}
+.cam-modal select{padding:9px 11px;background:var(--sf);border:1px solid var(--bd);border-radius:10px;color:var(--tx);font-size:.9rem;}
+.pref.compacta{border-top:0;padding:0;gap:10px;cursor:pointer;}
+.pref.compacta .pref-ico{width:36px;height:36px;border-radius:10px;}
+.pref.compacta .pref-ico .ic{width:19px;height:19px;}
+.pref.compacta .pref-nome{font-size:.95rem;flex:0 1 auto;min-width:0;}
+.pref.compacta .switch{margin-left:auto;}
+.cam-modal-diag{border-top:1px solid var(--bd);padding-top:10px;}
+.cam-modal-diag summary{cursor:pointer;display:flex;align-items:center;gap:7px;font-size:.82rem;font-weight:700;color:var(--mt);list-style:none;}
+.cam-modal-diag summary::-webkit-details-marker{display:none;}
+.cam-modal-diag summary .ic{width:16px;height:16px;}
+.cam-modal-diag .diag{margin-top:10px;}
+.cam-modal .modal-actions{align-items:center;}
+@media (max-width:560px){.cam-modal .field-row{grid-template-columns:1fr;}}
+
+/* Dispositivos: tipo do link e cartão de TV */
+.seg.tipo-disp{display:grid;grid-template-columns:1fr 1fr;width:100%;}
+.seg.tipo-disp .seg-btn{justify-content:center;padding:12px 10px;}
+.card-tv .card-ico{background:var(--gold);color:var(--navy);}
+.card .diag .dot{width:8px;height:8px;border-radius:50%;background:var(--mt);display:inline-block;}
+.card .diag .dot.on{background:var(--ok);}
+
+/* Download: marca do sistema na escolha */
+.seg.so .seg-btn{padding:10px 16px;font-size:.92rem;}
+.seg.so .seg-btn .ic{width:22px;height:22px;}
+.baixar-acao .dica-linha .chip{cursor:pointer;margin-left:6px;}
+.bloco-titulo .ajuda{font-family:var(--font-body);}
+.baixar .bloco-titulo .chip{margin-left:auto;}
+.hw-rot{display:flex;align-items:center;gap:7px;}
+
+/* Desempenho: cada falta com período, EPIs exigidos, área e o que a TV falou */
+.evento-quando{min-width:64px;line-height:1.35;}
+.evento-dados{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px 16px;margin:8px 0 2px;}
+.evento-dados>div{min-width:0;}
+.evento-dados dt{display:flex;align-items:center;gap:5px;font-size:.68rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--mt);margin-bottom:3px;}
+.evento-dados dt .ic{width:13px;height:13px;}
+.evento-dados dd{margin:0;font-size:.84rem;font-weight:600;color:var(--tx);overflow-wrap:anywhere;}
+.evento-dados .mudo{color:var(--mt);font-weight:500;}
+.evento-avisos{list-style:none;margin:8px 0 0;padding:8px 10px;background:var(--sf2);border:1px solid var(--bd);border-radius:10px;display:flex;flex-direction:column;gap:6px;}
+.evento-avisos li{display:flex;gap:8px;align-items:flex-start;font-size:.8rem;color:var(--tx);line-height:1.4;}
+.evento-avisos .ic{width:16px;height:16px;flex-shrink:0;margin-top:1px;color:var(--brand-ink);}
+.evento-avisos q{display:block;font-style:italic;color:var(--mt);}
+.selo-andamento{display:inline-flex;align-items:center;gap:4px;font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--dn-bg);border:1px solid var(--dn);color:var(--dn-ink);}
+.selo-andamento .ic{width:12px;height:12px;}
+
+/* Busca de câmeras: senha no cartão da câmera */
+.inline-cred .scan-form{grid-template-columns:1fr 1fr auto;}
+@media (max-width:620px){.inline-cred .scan-form{grid-template-columns:1fr;}}
+.net-corpo>.dica-linha{margin:8px 0 2px;}

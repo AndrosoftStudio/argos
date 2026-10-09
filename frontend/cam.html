@@ -12,7 +12,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
 <script src="config.js"></script>
-<script src="argos-stream.js?v=20260923"></script>
+<script src="argos-stream.js?v=20261008"></script>
 <link rel="stylesheet" href="cam.css?v=20260922">
 </head>
 <body>
@@ -195,6 +195,9 @@ function _motivoSemServidor(){
 async function resolverBackend(tok){
   if (BASE_RESOLVIDO) return BASE;
   if (await _mesmaOrigemEhBackend()) { BASE = ''; BASE_RESOLVIDO = true; return BASE; }
+  // servidor escolhido no painel para esta camera (Ajustes da camera > Servidor)
+  const preferido = limpaUrl(localStorage.getItem('cam_servidor_' + tok) || '');
+  if (preferido && await _tokenServe(preferido, tok) === 'ok') { BASE = preferido; BASE_RESOLVIDO = true; return BASE; }
   let candidatos = [];
   // servidor ligando: o endereco publico leva alguns segundos para sair
   for (let vez = 0; vez < 5; vez++) {
@@ -246,6 +249,8 @@ function showConfig(cfg){
   $('mode-name').textContent = m.nome;
   $('mode-opts').textContent = `· ${config.fps} fps · ${config.resolucao}p`;
   $('mode-info').title = m.descricao + ' Escolhido no painel de controle.';
+  // tempo real: a tela mostra a camera ao vivo e so as caixas vem do servidor
+  if (player) player.setLive(config.imediato ? video : null);
 }
 showConfig();
 
@@ -343,16 +348,20 @@ function startSending(){
   sender = new ArgosStream.LiveSender({
     video, token, streamId, backendUrl: BASE,
     onConfig,
+    onMove: mudarDeServidor,
     onInfo: (d) => d.config && showConfig(d.config),
     onResult: (d) => { if (player) player.pushResult(d); showMissing(d); },
     onStats: (s) => {
       fpsLbl.textContent = playerStats ? `${Math.round(playerStats.fps)} fps` : '';
       netTag.hidden = false;
-      netTag.textContent = s.transport === 'ws' ? 'WS' : s.transport === 'http' ? 'HTTP' : 'SEM REDE';
+      netTag.textContent = s.direto ? (s.rota === 'retransmitida' ? 'DIRETO · TURN' : 'DIRETO')
+        : s.transport === 'ws' ? 'WS' : s.transport === 'http' ? 'HTTP' : 'SEM REDE';
+      netTag.title = s.direto ? 'Vídeo indo direto para o servidor (WebRTC)' : (s.diretoMotivo ? 'Sem vídeo direto: ' + s.diretoMotivo : '');
       if (!DEBUG) return;
       const info = ArgosStream.trackInfo(camStream);
       dbgEl.textContent = `câmera ${info.width}x${info.height}@${Math.round(info.fps || 0)} · envio ${s.sentFps.toFixed(0)} q/s` +
-        ` (${Math.round(s.quality * 100)}% qual., ${Math.round(s.scale * 100)}% tam.) · ${(s.kbps / 1000).toFixed(1)} Mb/s` +
+        (s.direto ? ` (vídeo direto${s.rota ? ', rota ' + s.rota : ''})` : ` (${Math.round(s.quality * 100)}% qual., ${Math.round(s.scale * 100)}% tam.)`) +
+        (!s.direto && s.diretoMotivo ? ` [sem direto: ${s.diretoMotivo}]` : '') + ` · ${(s.kbps / 1000).toFixed(1)} Mb/s` +
         (s.pending ? ` · ${s.pending} na fila` : '') +
         ` · atraso ${s.serverDelay ?? '—'} ms · GPU ${s.serverFps ?? '—'} q/s`;
     },
@@ -368,7 +377,21 @@ function startSending(){
     getFrame: (seq) => sender && sender.frameBlob(seq),
     onStats: (st) => { playerStats = st; },
   });
+  player.setLive(config.imediato ? video : null);
   sender.start();
+}
+
+/* O painel escolheu outro servidor para esta camera: para aqui e recomeca la. */
+async function mudarDeServidor(url){
+  url = limpaUrl(url);
+  if (!url || url === BASE) return;
+  dbgEl.textContent = 'Mudando de servidor...';
+  await stopAll();
+  if (await _tokenServe(url, token) !== 'ok') { dbgEl.textContent = 'O servidor escolhido no painel não respondeu.'; btnStart.click(); return; }
+  localStorage.setItem('cam_servidor_' + token, url);
+  BASE = url; BASE_RESOLVIDO = true;
+  dbgEl.textContent = '';
+  btnStart.click();
 }
 
 /* Ícone de um EPI que falta: o mesmo desenho do vídeo (ArgosStream.EPI_ICONS),

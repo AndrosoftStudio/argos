@@ -57,7 +57,8 @@ Os dados ficam em `dados\` dentro da pasta do programa e nunca são apagados ao 
 **Atualizar** (botão do programa, no Windows) não instala tudo de novo: bibliotecas, modelos e
 banco ficam como estão e só o programa em si é trocado (cerca de 3 MB a partir da 20.3.2; a
 passagem de uma versão anterior para a 20.3.2 ainda baixa uns 45 MB, uma vez só). As bibliotecas
-só voltam a ser baixadas quando uma delas muda de versão.
+só voltam a ser baixadas quando uma delas muda de versão. A passagem para a 20.4.0 baixa, uma
+vez só, o pacote do vídeo direto e da voz dos avisos (cerca de 105 MB).
 
 ## Vários servidores na mesma conta
 
@@ -82,6 +83,61 @@ câmera nunca viaja pela internet para isso. `ARGOS_AJUDA=0` desliga.
   modelo falhou: a falta fica em verificação e só vale se durar 4 s. No histórico, a falta curta
   que o modelo só deduziu e que terminou com o EPI de volta é marcada como **provável engano** e
   sai dos gráficos (dá para desfazer, ou marcar outra na mão, na ficha do funcionário).
+
+## Tempo real e vídeo direto
+
+No modo **Tempo real** o servidor não guarda mais segundos de vídeo: analisa sempre o quadro
+mais novo e mostra o resultado na hora. **Detalhado** (1,5 s) e **Super detalhado** (4 s)
+continuam com atraso de propósito, porque olham um trecho do vídeo antes de decidir.
+
+Ainda no Tempo real, a câmera do celular (link de **Dispositivos**) ou do navegador manda
+**vídeo direto** para o servidor (WebRTC), em vez de foto por foto pelo túnel:
+
+- O túnel do Cloudflare (ou a rede local) serve só para combinar a conexão. O vídeo vai por UDP
+  direto para o computador do servidor, e o painel assiste esse mesmo vídeo, sem recodificar.
+- Quando a rede não deixa fechar a conexão direta, tudo volta sozinho para o caminho antigo
+  (o card da câmera mostra "direto" quando o vídeo direto está valendo).
+- Quem faz esse trabalho é o **MediaMTX**, um programa separado que fica em `midia/mediamtx`.
+  O instalador do programa já traz; no `iniciar.bat`, `iniciar.sh` e Docker ele é baixado
+  sozinho na primeira vez (`ARGOS_MIDIA_BAIXAR=0` impede).
+- Na primeira vez o Windows pode perguntar sobre o **Firewall** para o `mediamtx.exe` (porta
+  UDP 8189): clique em **Permitir**. Se cancelar, o sistema continua funcionando pelo caminho
+  antigo ou pela conexão que o próprio servidor abre.
+- **TURN (opcional):** para redes que bloqueiam a conexão direta (4G de algumas operadoras,
+  rede de empresa), crie uma chave em Cloudflare → Realtime → TURN e cadastre **só na Vercel**
+  as variáveis `CF_TURN_KEY_ID` e `CF_TURN_API_TOKEN`. Sem elas o sistema usa só o STUN
+  (gratuito) e o caminho antigo como reserva.
+- Ajustes no `.env` do servidor: `ARGOS_RTC=0` desliga o vídeo direto; `ARGOS_RTC_PORTA_UDP`
+  troca a porta (padrão 8189); `ARGOS_RTC_HOSTS=ip` anuncia um endereço a mais (Docker: o IP do
+  computador na rede).
+
+## TV de avisos (sirene e voz)
+
+A sirene e os avisos falados saem numa **TV**, não no painel:
+
+1. No site, **Dispositivos → + Link → TV de avisos**, dê um nome e copie o link.
+2. Abra o link no navegador da TV (ou num computador ligado à TV por HDMI) e toque em
+   **Ativar som** (o navegador só libera áudio depois de um toque).
+3. Quando alguém aparece sem EPI, a TV toca a sirene e fala, por exemplo: "André Jorge, por
+   favor, coloque o capacete e os óculos de proteção, na área Solda." Se a pessoa continuar sem
+   o EPI, o aviso se repete a cada 30 s (`ARGOS_AVISO_REPETIR_S`).
+
+- O volume, a sirene e a voz são ajustados na própria TV (ficam guardados nela). Em
+  **Dispositivos** dá para ver se a TV está aberta, o volume dela e mandar um aviso de teste.
+- Cada aviso fica no **desempenho do funcionário**: a frase falada, a TV e o volume, junto do
+  período sem o EPI, dos EPIs exigidos, da área e da câmera.
+- A voz é gerada no próprio servidor pelo **Piper** (`midia/piper`, voz `pt_BR-faber-medium`),
+  sem internet. Enquanto a voz não estiver instalada, a TV toca só a sirene.
+- No painel a sirene vem desligada; quem não tem TV liga em **Ajustes → Sirene neste painel**.
+- Área com o alarme desligado não gera aviso na TV.
+
+## Ajustes da câmera
+
+O botão de ajustes do card da câmera abre uma janela com tudo: nome, fonte do vídeo, modelo,
+modo de análise, EPIs cobrados, **Reconhecer o rosto** (desligue em computador fraco: o sistema
+continua dizendo se há EPI, só não diz quem é) e **Servidor** (qual servidor da conta processa
+esta câmera). **Salvar alterações** aplica no servidor mesmo com a câmera ligada; tocar fora
+da janela pergunta se quer salvar.
 
 ## Placa de vídeo ou processador
 
@@ -167,6 +223,7 @@ de novo é seguro: ele aproveita o que já foi baixado e não apaga o banco.
 | `models/argos_epi_v1.pt` (+ `.json`) | modelo treinado que detecta os EPIs | **não** (peça a pasta `models`) |
 | `models/yolo26*.pt`, `models/yolo26*-pose.pt` | pessoas e pose | **não** (vêm no pacote) |
 | `models/insightface/` | reconhecimento de rosto | **não** (vêm no pacote) |
+| `midia/` (MediaMTX, Piper e a voz) | vídeo direto e avisos falados | **não** (baixado sozinho na primeira vez) |
 
 A pasta `models` não fica no GitHub porque é pesada. Ela vai no pacote `.zip` enviado pelo
 André. Quem clonar o repositório precisa copiar essa pasta para dentro do projeto.
@@ -222,6 +279,15 @@ Cloudflare ligado (padrão).
 - **O Windows pergunta sobre o Firewall** ao ligar o `iniciar.bat`: sem administrador, pode
   cancelar. O painel em `localhost` e o link do Cloudflare continuam funcionando; só o acesso
   pelo IP da rede local fica bloqueado.
+- **O Windows pergunta sobre o Firewall para o `mediamtx.exe`**: é o vídeo direto das câmeras
+  (ver "Tempo real e vídeo direto"). Permitir deixa a conexão direta mais fácil; cancelar não
+  quebra nada.
+- **A TV não fala, só toca a sirene**: a voz ainda está sendo baixada ou o download falhou
+  (procure `[midia]` e `[voz]` no registro). O teste em **Dispositivos → Testar som das TVs**
+  diz se a voz está instalada.
+- **A câmera não mostra "direto"**: a rede não deixou fechar a conexão direta e o sistema está
+  no caminho antigo (funciona, com um pouco mais de atraso). Veja o TURN em "Tempo real e vídeo
+  direto".
 - **Erro de DLL ou "Visual C++"** no `configurar.bat`: falta o Visual C++ Redistributable
   (https://aka.ms/vs/17/release/vc_redist.x64.exe). Quase todo PC já tem.
 - **Erro de GPU**: atualize o driver da NVIDIA ou use `instalar_docker.bat cpu`.
@@ -273,5 +339,5 @@ Se você é uma IA ajudando a instalar o Argos EPI v20 nesta máquina Windows, s
    sozinho): o **usuário** entra na conta dele e clica em Vincular. Você não aprova o vínculo nem pede a senha dele. Depois disso a
    resposta vira `vinculado`. Não apague a tabela `servidor_local` do banco (é a
    credencial do servidor).
-6. **Não envie para o git**: `.env`, `dados/`, `models/`, `*.pt`, `cloudflared.exe`, `bin/`, `python/`
+6. **Não envie para o git**: `.env`, `dados/`, `models/`, `*.pt`, `cloudflared.exe`, `bin/`, `python/`, `midia/`
    (já estão no `.gitignore`). `dados/` tem fotos e rostos de pessoas reais.

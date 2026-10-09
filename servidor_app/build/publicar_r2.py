@@ -70,6 +70,8 @@ def main():
     # o que o latest.json aponta (e as copias do instalador por placa, que o site baixa)
     w = m['windows']
     arquivos = [w['setup']['url'], w['base']['url']]
+    if (w.get('midia') or {}).get('url'):       # video direto e voz dos avisos
+        arquivos.append(w['midia']['url'])
     arquivos += [p['url'] for p in (w.get('motor') or {}).values()]
     arquivos += [p['url'] for p in (w.get('nucleo') or {}).values()]
     arquivos += [p['url'] for p in (w.get('programa2') or {}).values()]

@@ -11,6 +11,8 @@
  *   SUPABASE_SECRET_KEY   sb_secret_...
  *   ARGOS_CHAVE_PRIVADA   chave Ed25519 (PEM ou so a linha base64 do PEM)
  *   FIREBASE_PROJECT_ID   opcional, padrao "argos-epi" (login com o Google)
+ *   CF_TURN_KEY_ID        opcional: chave TURN da Cloudflare (Realtime > TURN). Com ela, o video
+ *   CF_TURN_API_TOKEN     direto (WebRTC) funciona tambem em redes que barram a conexao direta.
  *
  * Todas as rotas chegam aqui pelo vercel.json (/api/... -> /api/argos).
  */
@@ -415,6 +417,47 @@ async function sinalServidor(req) {
   };
 }
 
+// ── Video direto (WebRTC): servidores STUN e TURN ───────────────────
+// STUN (descobre o endereco publico) e de graca e vai sempre. O TURN (o video passa por ele quando
+// a conexao direta nao fecha) so entra se as chaves estiverem nas variaveis da Vercel. A credencial
+// e temporaria (24 h), pedida a Cloudflare aqui: as chaves nunca saem deste servidor.
+const TURN_ID = String(process.env.CF_TURN_KEY_ID || '').trim();
+const TURN_TOKEN = String(process.env.CF_TURN_API_TOKEN || '').trim();
+const STUN = [{ urls: ['stun:stun.cloudflare.com:3478'] }];
+let iceGuardado = { ate: 0, lista: null };
+
+async function servidoresIce() {
+  if (!TURN_ID || !TURN_TOKEN) return { iceServers: STUN, turn: false, validade_s: 3600 };
+  if (iceGuardado.lista && agora() < iceGuardado.ate) {
+    return { iceServers: iceGuardado.lista, turn: true, validade_s: Math.round(iceGuardado.ate - agora()) };
+  }
+  try {
+    const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(TURN_ID)}/credentials/generate-ice-servers`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TURN_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ttl: 86400 }),
+    });
+    if (!r.ok) throw new Error('TURN ' + r.status);
+    const d = await r.json();
+    let lista = d.iceServers;
+    if (lista && !Array.isArray(lista)) lista = [lista];
+    // a porta 53 e barrada pelos navegadores e so atrasa a conexao
+    lista = (lista || []).map((s) => ({ ...s, urls: [].concat(s.urls || []).filter((u) => !/:53(\?|$)/.test(u)) }))
+      .filter((s) => s.urls.length);
+    if (!lista.some((s) => s.credential)) throw new Error('TURN sem credencial');
+    iceGuardado = { ate: agora() + 6 * 3600, lista };
+    return { iceServers: lista, turn: true, validade_s: 6 * 3600 };
+  } catch (e) {
+    console.error('[ice]', e.message);
+    return { iceServers: STUN, turn: false, validade_s: 600 };
+  }
+}
+
+async function iceDoServidor(req) {
+  await exigirServidor(req);
+  return servidoresIce();
+}
+
 // ── Vinculo (pareamento) de servidor ────────────────────────────────
 const ALFABETO = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // sem 0/O e 1/I
 const novoCodigo = () => {
@@ -501,7 +544,7 @@ async function rotear(req, caminho) {
   const p = caminho.split('/').filter(Boolean);
   const [a, b, c] = p;
   if (a === 'saude' && m === 'GET') {
-    return { ok: true, supabase: Boolean(SB_URL && SB_KEY), chave: Boolean(CHAVE_PRIVADA) };
+    return { ok: true, supabase: Boolean(SB_URL && SB_KEY), chave: Boolean(CHAVE_PRIVADA), turn: Boolean(TURN_ID && TURN_TOKEN) };
   }
   if (a === 'chave' && m === 'GET') {
     if (!CHAVE_PUBLICA) falha(503, 'Chave não configurada.');
@@ -522,6 +565,7 @@ async function rotear(req, caminho) {
   if (a === 'servidores') {
     if (!b && m === 'GET') return listarServidores(req);
     if (b === 'sinal' && m === 'POST') return sinalServidor(req);
+    if (b === 'ice' && m === 'POST') return iceDoServidor(req);
     if (b === 'desvincular' && m === 'POST') return desvincularServidor(req);
     if (b && !c && m === 'PATCH') return renomearServidor(req, b);
     if (b && !c && m === 'DELETE') return removerServidor(req, b);

@@ -168,6 +168,12 @@ CREATE INDEX IF NOT EXISTS ix_auditoria_tipo ON auditoria(uid, tipo, ts DESC);
 -- 'confirmada' = a pessoa conferiu e foi falta mesmo. So 'engano' sai dos graficos.
 ALTER TABLE auditoria ADD COLUMN IF NOT EXISTS validacao TEXT;
 ALTER TABLE auditoria ADD COLUMN IF NOT EXISTS validacao_motivo TEXT;
+-- exigidos: os EPIs cobrados daquela pessoa naquele momento (da camera ou da area em que ela estava).
+-- avisos: o que a TV falou sobre esta falta (frase, TV, volume, hora).
+ALTER TABLE auditoria ADD COLUMN IF NOT EXISTS exigidos JSONB;
+ALTER TABLE auditoria ADD COLUMN IF NOT EXISTS avisos JSONB;
+-- tipo: 'camera' (celular usado como camera) ou 'tv' (tela que toca a sirene e fala os avisos)
+ALTER TABLE cam_tokens ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'camera';
 """
 
 

@@ -25,9 +25,10 @@ except Exception:
 CAMERA_PORTS = (80, 443, 554, 8554, 8000, 8080, 8081, 8899, 5000, 5001)
 RTSP_PORTS = (554, 8554)
 HTTP_PORTS = (80, 443, 8000, 8080, 8081, 8899, 5000, 5001)
+# palavra inteira: "xm" solto casava com "xmlns" de qualquer pagina (roteador virava camera)
 CAMERA_HINT_RE = re.compile(
-    r"(camera|ipcam|ipc|onvif|rtsp|hikvision|dahua|intelbras|axis|"
-    r"icsee|xmeye|xm|yoosee|gwell|network video|nvr|dvr)",
+    r"\b(c[aâ]meras?|ip ?cam(era)?s?|ipc|onvif|rtsp|hikvision|dahua|intelbras|axis|"
+    r"icsee|xmeye|yoosee|gwell|netsurveillance|network video|nvr|dvr)\b",
     re.I,
 )
 
@@ -44,6 +45,8 @@ def discover_cameras(
     timeout = max(0.15, min(float(timeout or 0.35), 2.5))
     username = str(username or "").strip()
     password = str(password or "")
+    if password and not username:
+        username = "admin"      # camera que so pede a senha: o usuario de fabrica e admin
     networks = _requested_networks(subnet) if subnet else _local_networks()
     devices = {}
 
@@ -72,6 +75,9 @@ def discover_cameras(
 
     for rec in devices.values():
         _add_rtsp_guesses(rec, username=username, password=password)
+    _conferir_rtsp(devices, username, password, timeout=max(0.8, min(timeout * 4, 2.0)))
+
+    for rec in devices.values():
         rec["discovery"] = sorted(set(rec.get("discovery") or []))
         rec["streams"] = _dedupe_streams(rec.get("streams") or [])
         rec["stream_count"] = len(rec["streams"])
@@ -91,6 +97,122 @@ def discover_cameras(
         "count": len(result),
         "elapsed_sec": round(time.time() - started, 2),
     }
+
+
+# ── Conferencia por RTSP: a camera pede senha? o endereco existe? ────
+def _rtsp_pedir(ip, port, uri, username, password, timeout):
+    """Pergunta a camera por um endereco (DESCRIBE). Devolve o codigo da resposta:
+    200 = existe e abriu; 401 = pede usuario/senha (ou a senha esta errada); 404 = nao existe;
+    0 = nao respondeu. Atende as duas formas de senha que as cameras usam (Basic e Digest)."""
+    limpo = _sem_credenciais(uri)
+
+    def pedido(extra=""):
+        return (f"DESCRIBE {limpo} RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n"
+                f"User-Agent: ArgosEPI\r\n{extra}\r\n").encode("utf-8")
+
+    def conversar(extra=""):
+        with socket.create_connection((ip, int(port)), timeout=timeout) as sk:
+            sk.settimeout(timeout)
+            sk.sendall(pedido(extra))
+            dados = b""
+            while b"\r\n\r\n" not in dados and len(dados) < 8192:
+                parte = sk.recv(2048)
+                if not parte:
+                    break
+                dados += parte
+        texto = dados.decode("latin-1", "ignore")
+        m = re.match(r"RTSP/\d\.\d\s+(\d{3})", texto)
+        return (int(m.group(1)) if m else 0), texto
+
+    try:
+        codigo, texto = conversar()
+        if codigo != 401 or not username:
+            return codigo
+        desafio = re.search(r"WWW-Authenticate:\s*Digest\s+(.*)", texto, re.I)
+        if desafio:
+            campos = dict(re.findall(r'(\w+)="([^"]*)"', desafio.group(1)))
+            realm, nonce = campos.get("realm", ""), campos.get("nonce", "")
+            md5 = lambda v: hashlib.md5(v.encode("utf-8")).hexdigest()
+            resposta = md5(f"{md5(f'{username}:{realm}:{password}')}:{nonce}:{md5('DESCRIBE:' + limpo)}")
+            extra = (f'Authorization: Digest username="{username}", realm="{realm}", nonce="{nonce}", '
+                     f'uri="{limpo}", response="{resposta}"\r\n')
+        else:
+            cred = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+            extra = f"Authorization: Basic {cred}\r\n"
+        return conversar(extra)[0]
+    except Exception:
+        return 0
+
+
+def _sem_credenciais(uri):
+    try:
+        partes = urllib.parse.urlsplit(uri)
+        if not partes.username:
+            return uri
+        host = partes.hostname or ""
+        if partes.port:
+            host += f":{partes.port}"
+        return urllib.parse.urlunsplit((partes.scheme, host, partes.path, partes.query, partes.fragment))
+    except Exception:
+        return uri
+
+
+def _conferir_camera(rec, username, password, timeout):
+    """Marca na camera: precisa de senha? a senha informada serviu? quais enderecos existem de fato?"""
+    ip = rec.get("ip")
+    porta = next((p for p in rec.get("open_ports") or [] if p in RTSP_PORTS), None)
+    rec["precisa_senha"] = False
+    rec["senha_ok"] = False
+    rec["senha_errada"] = False
+    if not porta:
+        # respondeu por ONVIF mas nao entregou os perfis: o mais provavel e estar pedindo login.
+        # Quem so tem pagina na web (sem ONVIF nem RTSP) nao recebe pedido de senha: pode nem ser camera.
+        onvif = bool(rec.get("xaddrs")) or bool(set(rec.get("open_ports") or []).intersection((8000, 8899)))
+        if onvif and not rec.get("streams"):
+            rec["precisa_senha"] = True
+            rec["senha_errada"] = bool(username)
+        return
+    host = ip if int(porta) == 554 else f"{ip}:{porta}"
+    sem_senha = _rtsp_pedir(ip, porta, f"rtsp://{host}/", "", "", timeout)
+    if sem_senha == 0:
+        return                      # nao respondeu a tempo: ficam as sugestoes, sem conferir
+    candidatos = [st for st in rec.get("streams") or [] if st.get("source") == "rtsp_guess"]
+    prazo = time.time() + 6.0
+    achou, negou = False, sem_senha == 401
+    for st in candidatos:
+        if time.time() > prazo:
+            break
+        codigo = _rtsp_pedir(ip, porta, st["uri"], username, password, timeout)
+        st["codigo"] = codigo
+        if codigo == 200:
+            st["verified"] = True
+            achou = True
+        elif codigo == 401:
+            negou = True
+    if achou:
+        # sobram so os enderecos que a camera confirmou (e os perfis ONVIF, ja confiaveis)
+        rec["streams"] = [st for st in rec["streams"] if st.get("verified")]
+        rec["senha_ok"] = bool(username) and negou or bool(username) and sem_senha == 401
+    elif negou:
+        rec["precisa_senha"] = True
+        rec["senha_errada"] = bool(username)
+        if not username:
+            rec["streams"] = [st for st in rec["streams"] if st.get("source") != "rtsp_guess"]
+    for st in rec.get("streams") or []:
+        st.pop("codigo", None)
+
+
+def _conferir_rtsp(devices, username, password, timeout):
+    alvos = list(devices.values())
+    if not alvos:
+        return
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(24, max(4, len(alvos)))) as ex:
+        for fut in concurrent.futures.as_completed([ex.submit(_conferir_camera, d, username, password, timeout)
+                                                    for d in alvos]):
+            try:
+                fut.result()
+            except Exception:
+                pass
 
 
 def list_local_webcams(limit=10):
@@ -123,6 +245,9 @@ def _blank_device(ip):
         "http": None,
         "streams": [],
         "discovery": [],
+        "precisa_senha": False,
+        "senha_ok": False,
+        "senha_errada": False,
     }
 
 
@@ -267,9 +392,11 @@ def _probe_http(ip, port, timeout):
         title = ""
         m = re.search(r"<title[^>]*>(.*?)</title>", text, flags=re.I | re.S)
         if m:
-            title = re.sub(r"\s+", " ", m.group(1)).strip()
+            title = re.sub(r"\s+", " ", html.unescape(m.group(1))).strip()
         server = r.headers.get("Server", "")
-        combined = f"{title} {server} {text[:512]}"
+        # so o que a pagina mostra: nome de arquivo, endereco e marcacao nao dizem que e camera
+        visivel = re.sub(r"<[^>]*>", " ", re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", text[:2048]))
+        combined = f"{title} {server} {html.unescape(visivel)[:512]}"
         return {
             "url": url,
             "status": r.status_code,
@@ -702,9 +829,11 @@ def _display_name(device):
     if label:
         return f"{label} ({device.get('ip')})"
     http_info = device.get("http") or {}
-    if http_info.get("title"):
-        return f"{http_info['title']} ({device.get('ip')})"
-    return f"Camera {device.get('ip')}"
+    titulo = str(http_info.get("title") or "").strip()
+    # pagina de erro do servidorzinho da camera ("404 - Not Found") nao e nome de camera
+    if titulo and not re.search(r"^\d{3}\b|not found|error|erro|forbidden|unauthorized|index of|document", titulo, re.I):
+        return f"{titulo[:60]} ({device.get('ip')})"
+    return f"Câmera {device.get('ip')}"
 
 
 def _notes_for_device(device):
