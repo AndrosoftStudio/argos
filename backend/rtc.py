@@ -26,10 +26,13 @@ pede administrador (porta fixa de escuta faz ele perguntar).
 """
 import atexit
 import os
+import re
 import socket
+import struct
 import subprocess
 import threading
 import time
+from collections import deque
 
 import requests
 
@@ -253,6 +256,158 @@ def chegada(sid):
             rec += int(s.get('inboundRTPPackets') or s.get('rtpPacketsReceived') or 0)
             per += int(s.get('inboundRTPPacketsLost') or s.get('rtpPacketsLost') or 0)
     return (rec, per) if achou else None
+
+
+class RelogioRtp(threading.Thread):
+    """Descobre o tempo RTP dos quadros que a analise recebe.
+
+    Quem assiste pelo painel sabe, de cada quadro que o navegador mostra, o tempo RTP dele (o numero
+    que o celular carimbou ao filmar; o MediaMTX repassa igual). O leitor de video da analise (OpenCV)
+    so informa o tempo contado a partir do primeiro quadro que ELE leu. Para a caixa cair exatamente
+    no quadro em que foi calculada, falta a ponte entre os dois, e ela sai dos quadros-chave: esta
+    thread le o mesmo video por RTSP so olhando os cabecalhos (sem decodificar) e anota o tempo RTP e
+    a hora de chegada de cada quadro-chave; o OpenCV diz quais dos quadros dele sao quadros-chave. Um
+    par basta (eles vem a cada ~2 s); o segundo confirma e a thread encerra."""
+
+    def __init__(self, url, segundos=20.0):
+        super().__init__(daemon=True, name='relogio-rtp')
+        self.url = url
+        self.segundos = segundos
+        self.chaves = deque(maxlen=12)      # (tempo rtp, hora de chegada em perf_counter)
+        self.fim = threading.Event()
+        self.erro = ''
+
+    def parar(self):
+        self.fim.set()
+
+    def base_para(self, ticks, lido_em):
+        """Quadro-chave lido pelo OpenCV em lido_em (perf_counter), com tempo proprio 'ticks' (1/90000 s).
+        Devolve o que somar a qualquer tempo proprio para ter o tempo RTP, ou None se ainda nao da
+        para ter certeza (nenhum quadro-chave visto perto dessa hora, ou mais de um)."""
+        perto = [rtp for rtp, chegou in list(self.chaves) if -0.1 < lido_em - chegou < 0.7]
+        if len(perto) != 1:
+            return None
+        return (perto[0] - int(ticks)) & 0xFFFFFFFF
+
+    def run(self):
+        try:
+            self._ler()
+        except Exception as e:      # e so uma ajuda: sem ela o painel usa a estimativa pelos relogios
+            self.erro = str(e)[:120]
+
+    def _ler(self):
+        m = re.match(r'rtsp://([^:/]+):(\d+)/', self.url)
+        s = socket.create_connection((m.group(1), int(m.group(2))), timeout=4)
+        try:
+            s.settimeout(4)
+            buf = b''
+            cseq = [0]
+
+            def pedir(metodo, alvo, extra=''):
+                nonlocal buf
+                cseq[0] += 1
+                s.sendall(f'{metodo} {alvo} RTSP/1.0\r\nCSeq: {cseq[0]}\r\nUser-Agent: argos\r\n{extra}\r\n'.encode())
+                while b'\r\n\r\n' not in buf:
+                    parte = s.recv(65536)
+                    if not parte:
+                        raise OSError('conexao fechada')
+                    buf += parte
+                cab, buf = buf.split(b'\r\n\r\n', 1)
+                cab = cab.decode('latin1')
+                if ' 200 ' not in cab.split('\r\n', 1)[0]:
+                    raise OSError(cab.split('\r\n', 1)[0])
+                tam = re.search(r'Content-Length:\s*(\d+)', cab, re.I)
+                corpo = b''
+                if tam:
+                    n = int(tam.group(1))
+                    while len(buf) < n:
+                        buf += s.recv(65536)
+                    corpo, buf = buf[:n], buf[n:]
+                return cab, corpo.decode('latin1')
+
+            pedir('OPTIONS', self.url)
+            _, sdp = pedir('DESCRIBE', self.url, 'Accept: application/sdp\r\n')
+            codec = (re.search(r'a=rtpmap:\d+ ([A-Za-z0-9]+)/90000', sdp) or [None, ''])[1].upper()
+            if codec not in ('H264', 'VP8'):
+                self.erro = f'codec {codec or "desconhecido"}'
+                return
+            faixas = [c for c in re.findall(r'a=control:(\S+)', sdp) if c != '*']
+            if not faixas:
+                raise OSError('sem faixa de video')
+            alvo = faixas[0] if faixas[0].startswith('rtsp://') else self.url.rstrip('/') + '/' + faixas[0]
+            cab, _ = pedir('SETUP', alvo, 'Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n')
+            sessao = re.search(r'Session:\s*([^;\r\n]+)', cab).group(1)
+            pedir('PLAY', self.url, f'Session: {sessao}\r\nRange: npt=0.000-\r\n')
+            fim = time.perf_counter() + self.segundos
+            ultimo = None
+            while not self.fim.is_set() and time.perf_counter() < fim:
+                while len(buf) < 4:
+                    parte = s.recv(65536)
+                    if not parte:
+                        return
+                    buf += parte
+                if buf[0] != 0x24:              # resposta RTSP no meio (nao esperada): acha o proximo pacote
+                    i = buf.find(b'$', 1)
+                    buf = buf[i:] if i >= 0 else b''
+                    continue
+                canal, n = buf[1], struct.unpack('>H', buf[2:4])[0]
+                while len(buf) < 4 + n:
+                    parte = s.recv(65536)
+                    if not parte:
+                        return
+                    buf += parte
+                pkt, buf = buf[4:4 + n], buf[4 + n:]
+                if canal != 0 or n < 14:
+                    continue
+                inicio = 12 + 4 * (pkt[0] & 0x0F)
+                if pkt[0] & 0x10 and len(pkt) >= inicio + 4:       # cabecalho com extensao
+                    inicio += 4 + 4 * struct.unpack('>H', pkt[inicio + 2:inicio + 4])[0]
+                if len(pkt) < inicio + 2:
+                    continue
+                tempo = struct.unpack('>I', pkt[4:8])[0]
+                try:
+                    chave = tempo != ultimo and _quadro_chave(codec, pkt, inicio)
+                except IndexError:              # pacote curto demais para dizer
+                    chave = False
+                if chave:
+                    ultimo = tempo
+                    self.chaves.append((tempo, time.perf_counter()))
+        finally:
+            try:
+                s.close()
+            except OSError:
+                pass
+
+
+def _quadro_chave(codec, pkt, i):
+    """Este pacote RTP pertence a um quadro-chave?"""
+    if codec == 'H264':
+        nal = pkt[i] & 0x1F
+        if nal in (5, 7):                       # IDR ou SPS
+            return True
+        if nal == 28:                           # FU-A: pedaco de uma unidade maior
+            return (pkt[i + 1] & 0x1F) == 5
+        if nal == 24:                           # STAP-A: varias unidades pequenas juntas
+            j = i + 1
+            while j + 2 < len(pkt):
+                tam = struct.unpack('>H', pkt[j:j + 2])[0]
+                if (pkt[j + 2] & 0x1F) in (5, 7):
+                    return True
+                j += 2 + tam
+        return False
+    # VP8: descritor do pacote e, no comeco do quadro, o bit P do proprio VP8 (0 = quadro-chave)
+    b = pkt[i]
+    j = i + 1
+    if b & 0x80:
+        x = pkt[j]
+        j += 1
+        if x & 0x80:
+            j += 2 if pkt[j] & 0x80 else 1
+        if x & 0x40:
+            j += 1
+        if x & 0x30:
+            j += 1
+    return bool(b & 0x10) and (b & 0x07) == 0 and j < len(pkt) and not pkt[j] & 0x01
 
 
 def servidores_ice() -> list:

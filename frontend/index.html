@@ -16,7 +16,7 @@
 <meta name="twitter:card" content="summary_large_image">
 <script src="config.js"></script>
 <script type="module" src="google-login.js"></script>
-<script src="argos-stream.js?v=20261009"></script>
+<script src="argos-stream.js?v=20261010"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
@@ -1394,8 +1394,12 @@ function StreamCard({streamId,token,backendUrl,availableModels,defaultModel,devi
 
   // câmera deste navegador em tempo real: a tela mostra o vídeo ao vivo e só as caixas vêm do servidor
   useEffect(()=>{
-    if(usingCam&&playerRef.current) playerRef.current.setLive(config.imediato?videoRef.current:null);
-  },[usingCam,config.imediato]);
+    if(!usingCam||!playerRef.current) return;
+    // vídeo direto: a prévia sai com um atraso mínimo e a caixa de cada quadro no lugar (Alinhador)
+    const snd=senderRef.current;
+    playerRef.current.atrasar=Boolean(snd&&snd.diretoLigado);
+    playerRef.current.setLive(config.imediato?videoRef.current:null,{alinhador:snd&&snd.diretoLigado?snd.alinhador:null});
+  },[usingCam,config.imediato,Boolean(net&&net.direto)]);
 
   const enterFs=()=>{
     const el=videoOuterRef.current;

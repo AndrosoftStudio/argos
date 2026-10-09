@@ -23,7 +23,7 @@ import avisos
 import face_id
 import ppe_taxonomy as tax
 from epi_detector import (MODELS_DIR, EpiDetector, info_do_modelo, is_cuda, merge_detections, modelo_de_reforco,
-                          pose_model_path, resolve_device, run_employee_model)
+                          pose_model_path, resolve_device, run_employee_model, trava_gpu)
 from reforco import Reforco
 from live_pipeline import CONFIG_PADRAO, MODOS, LivePipeline, _Taxa, config_publica, normalizar_config
 from ppe_analyzer import PPEAnalyzer, draw_analysis
@@ -55,6 +55,34 @@ def _rtsp_por_tcp():
 
 
 _rtsp_por_tcp()
+
+
+def _sem_modo_de_eficiencia():
+    """O Windows 11 poe programa sem janela no "modo de eficiencia": nucleos lentos e relogio baixo.
+    O servidor roda assim, em segundo plano, e a analise ficava com metade da velocidade (medido
+    numa RTX 4060 Ti com processador de nucleos mistos: 25 analises por segundo, 50 fora do modo).
+    Aqui o processo pede para ficar de fora. Vale so para ele e nao precisa de administrador.
+    ARGOS_ECONOMIA=1 deixa como o Windows quiser."""
+    if os.name != 'nt' or os.environ.get('ARGOS_ECONOMIA', '').strip().lower() in ('1', 'true', 'sim', 'on'):
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _Estado(ctypes.Structure):
+            _fields_ = [('Version', wintypes.ULONG), ('ControlMask', wintypes.ULONG), ('StateMask', wintypes.ULONG)]
+
+        k = ctypes.WinDLL('kernel32', use_last_error=True)
+        k.GetCurrentProcess.restype = wintypes.HANDLE
+        k.SetProcessInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        # ProcessPowerThrottling (4): ControlMask = velocidade de execucao, StateMask = 0 (sem freio)
+        estado = _Estado(1, 0x1, 0)
+        return bool(k.SetProcessInformation(k.GetCurrentProcess(), 4, ctypes.byref(estado), ctypes.sizeof(estado)))
+    except Exception:
+        return False
+
+
+SEM_ECONOMIA = _sem_modo_de_eficiencia()
 
 
 def abrir_rede(fonte):
@@ -98,6 +126,8 @@ class VideoProcessor:
         self._areas_cache = (0.0, {})
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f'det-{client_id}')
         self.pipeline = LivePipeline(self._analyze_key, self._reset_tracking, nome=client_id, log=self._log)
+        # o JPEG do quadro inteiro so e feito quando outro servidor da conta vai ajudar na analise
+        self.pipeline.quer_jpeg_inteiro = ajuda.ativa
         self._annot = (-1, None)
         self._annot_lock = threading.Lock()
         # tempos medidos aqui (ms, media movel) e o que outro servidor da conta adiantou (ver ajuda.py)
@@ -291,6 +321,13 @@ class VideoProcessor:
                     self.analyzers = {}
             self.device = device
             self.detector = EpiDetector(model_path, self.device, use_tensorrt=True, log=self._log)
+            self._tam = None
+            perfil = MODOS[self.mode]
+            # tamanhos que esta camera vai usar (ver _tamanho_analise), ja aquecidos antes de ela ligar
+            tam_pose = perfil['imgsz']
+            if perfil.get('imediato') and is_cuda(self.device):
+                tam_pose = max(tam_pose, self._teto_do_lado(self.config['resolucao'] * 16 // 9))
+            self.detector.aquecer(self._tamanho_detector(tam_pose, perfil))
             self.model_path = model_path
             self.inference_model_path = self.detector.runtime_path
             self.runtime_backend = self.detector.backend
@@ -301,7 +338,9 @@ class VideoProcessor:
             self._aplicar_epis()
             self.reforco = Reforco(self.detector, self._detector_extra(model_path))
             self.pose_ok = True
-            self._analyzer_for(MODOS[self.mode])
+            pose = self._analyzer_for(perfil)
+            if pose is not None:
+                pose.aquecer(tam_pose)
             if camera_source is not None:
                 if camera_source == "webcam":
                     self.use_external = True
@@ -427,11 +466,37 @@ class VideoProcessor:
         """True enquanto os quadros estao chegando pelo video direto."""
         return time.perf_counter() - getattr(self, '_direto_em', 0.0) < 1.5
 
+    def _limitar(self, img):
+        """Reduz ate a resolucao escolhida no painel, contada no lado menor: 1080 e Full HD com o
+        celular em pe (1080x1920) ou deitado (1920x1080). Antes contava so a altura, e o celular em
+        pe chegava a analise com 608x1080."""
+        h, w = img.shape[:2]
+        alvo = self.config['resolucao']
+        if min(h, w) > alvo:
+            s = alvo / min(h, w)
+            img = cv2.resize(img, (int(w * s) // 2 * 2, int(h * s) // 2 * 2), interpolation=cv2.INTER_AREA)
+        return img
+
+    def _largura_max(self):
+        # tempo real: a analise recebe a imagem inteira (nada fica guardado, entao nao pesa);
+        # nos outros modos cada quadro vira JPEG no buffer e o limite continua
+        perfil = MODOS[self.mode]
+        return None if perfil.get('imediato') else perfil['largura_envio']
+
+    def direto_chegando(self):
+        """O que o video direto esta entregando de verdade: {'w', 'h', 'fps'} ou None."""
+        info = getattr(self, '_direto_info', None)
+        if not info or not self.direto_ativo():
+            return None
+        return {'w': info['w'], 'h': info['h'], 'fps': info['taxa'].valor(time.perf_counter())}
+
     def _ler_direto(self, parar):
         cap, vazio_desde = None, time.perf_counter()
         proximo = 0.0
         perda, conferir_em = {}, time.perf_counter() + 2.0
         self._direto_perda = 0.0
+        self._direto_info = info = {'w': 0, 'h': 0, 'taxa': _Taxa()}
+        base_rtp, relogio_rtp, confirmado = None, None, False
         while not parar.is_set() and self.running and self.use_external:
             if time.perf_counter() >= conferir_em:
                 conferir_em = time.perf_counter() + 2.0
@@ -447,8 +512,16 @@ class VideoProcessor:
                     parar.wait(0.4)
                     continue
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                # cada abertura recomeca a contagem do tempo do video: quem assiste precisa saber
+                self._direto_epoca = getattr(self, '_direto_epoca', 0) + 1
+                if relogio_rtp is not None:
+                    relogio_rtp.parar()
+                base_rtp, confirmado = None, False
+                relogio_rtp = rtc.RelogioRtp(self._direto_url)
+                relogio_rtp.start()
             ok, img = cap.read()
             agora = time.perf_counter()
+            relogio = time.time()
             if not ok or img is None:
                 cap.release()
                 cap = None
@@ -458,17 +531,37 @@ class VideoProcessor:
                 continue
             vazio_desde = agora
             self._direto_em = agora
-            if agora < proximo:         # respeita o fps escolhido no painel
-                continue
+            info['h'], info['w'] = img.shape[:2]
+            info['taxa'].marcar(agora)
+            tv = cap.get(cv2.CAP_PROP_POS_MSEC)
+            if relogio_rtp is not None:
+                # nos quadros-chave (um a cada ~2 s) acerta o tempo deste leitor com o tempo RTP do video
+                if tv and tv > 0 and int(cap.get(cv2.CAP_PROP_FRAME_TYPE)) == 73:      # 73 = 'I'
+                    nova = relogio_rtp.base_para(round(tv * 90), agora)
+                    if nova is not None:
+                        confirmado = base_rtp == nova
+                        base_rtp = nova
+                if confirmado or not relogio_rtp.is_alive():
+                    relogio_rtp.parar()
+                    relogio_rtp = None
+            if agora < proximo - 0.004:     # respeita o fps escolhido no painel (4 ms de folga: a 60 q/s
+                continue                    # o quadro que chega um pouco adiantado nao e jogado fora)
             proximo = max(proximo + 1.0 / self.config['fps'], agora - 0.05)
-            h, w = img.shape[:2]
-            alvo = self.config['resolucao']
-            if h > alvo:
-                s = alvo / h
-                img = cv2.resize(img, (int(w * s) // 2 * 2, alvo), interpolation=cv2.INTER_AREA)
-            self.pipeline.receber_imagem(img, t=agora, largura_max=MODOS[self.mode]['largura_envio'], sessao='direto')
+            # Hora deste quadro, para o painel e o celular porem as caixas no quadro certo:
+            # rtp = tempo RTP do quadro (o mesmo numero que o navegador de quem assiste ve em cada
+            #       quadro): com ele o acerto e exato. Aparece depois do primeiro quadro-chave;
+            # tv = tempo do video contado por este leitor (ms); ts = relogio deste computador quando
+            #      o quadro chegou; ep = muda quando a leitura reabre. Servem enquanto nao ha o rtp.
+            extra = {'tv': round(tv, 3) if tv and tv > 0 else None, 'ts': round(relogio * 1000, 1),
+                     'ep': self._direto_epoca}
+            if base_rtp is not None and extra['tv'] is not None:
+                extra['rtp'] = (base_rtp + round(tv * 90)) & 0xFFFFFFFF
+            self.pipeline.receber_imagem(self._limitar(img), t=agora, largura_max=self._largura_max(),
+                                         sessao='direto', extra=extra)
         if cap is not None:
             cap.release()
+        if relogio_rtp is not None:
+            relogio_rtp.parar()
         self._direto_em = 0.0
 
     def _run_capture(self):
@@ -495,12 +588,7 @@ class VideoProcessor:
             # respeita o fps escolhido no painel e limita a resolucao enviada ao pipeline
             if t0 >= next_t:
                 next_t = max(next_t + 1.0 / self.config['fps'], t0 - 0.05)
-                h, w = img.shape[:2]
-                alvo = self.config['resolucao']
-                if h > alvo:
-                    s = alvo / h
-                    img = cv2.resize(img, (int(w * s) // 2 * 2, alvo), interpolation=cv2.INTER_AREA)
-                self.pipeline.receber_imagem(img, t=t0, largura_max=MODOS[self.mode]['largura_envio'])
+                self.pipeline.receber_imagem(self._limitar(img), t=t0, largura_max=self._largura_max())
             if is_file:  # arquivo toca na velocidade original
                 time.sleep(max(0.0, file_delay - (time.perf_counter() - t0)))
         cap.release()
@@ -576,7 +664,8 @@ class VideoProcessor:
         if rostos is None:
             t0 = time.perf_counter()
             try:
-                rostos = face_id.detectar(img, self.device)
+                with trava_gpu():
+                    rostos = face_id.detectar(img, self.device)
             except Exception as e:
                 self._log(f'reconhecimento de rosto falhou: {e}')
                 return []
@@ -600,11 +689,75 @@ class VideoProcessor:
                 'missing_items': missing, 'missing': [tax.item_label(i) for i in missing], 'alerts': [],
                 '_sem_pose': True}
 
+    # Tempo real: quem esta longe ocupa poucos pontos da imagem e some quando ela e encolhida para
+    # 640. Com a placa de video a rede roda quase no mesmo tempo com a imagem inteira (medido numa
+    # RTX 4060 Ti: pose 12 ms em 640 e 13 ms em 1920), entao o tamanho sobe ate o da propria imagem
+    # enquanto a analise couber no tempo; se ficar lenta, desce de novo.
+    TAMANHOS = (640, 960, 1280, 1600, 1920)
+    ALVO_ANALISE_S = 0.05           # 20 analises por segundo
+    DETECTOR_MAX = 1280             # o detector de EPIs foi treinado em 640: acima disto nao ganha
+
+    def _teto_do_lado(self, lado):
+        return next((s for s in self.TAMANHOS if s >= lado), self.TAMANHOS[-1])    # nunca amplia a imagem
+
+    def _tamanho_analise(self, img, perfil):
+        base = perfil['imgsz']
+        if not perfil.get('imediato') or str(self.device) == 'cpu':
+            return base
+        teto = self._teto_do_lado(max(img.shape[:2]))
+        agora = time.perf_counter()
+        if agora < getattr(self, '_tam_teto_ate', 0.0):
+            teto = min(teto, self._tam_teto)
+        teto = max(teto, base)
+        tam = getattr(self, '_tam', None)
+        if tam is None:
+            # placa NVIDIA: ja comeca no tamanho da imagem; as outras sobem aos poucos, medindo
+            tam = teto if is_cuda(self.device) else base
+            self._tam_em = agora + 5.0      # as primeiras analises num tamanho novo sao lentas: nao contam
+            self._tam_prova = None
+        tam = max(base, min(tam, teto))
+        if agora - self._tam_em >= 1.5:
+            self._tam_em = agora
+            proc = self.pipeline.proc_s
+            i = self.TAMANHOS.index(tam)
+            prova = getattr(self, '_tam_prova', None)
+            if prova is not None:
+                # acabou de diminuir: so vale se a analise ficou mesmo mais rapida. Em muita placa o
+                # tempo quase nao depende do tamanho (o peso e do processador), e ai encolher a
+                # imagem so tiraria a visao de longe: volta ao tamanho de antes e nao mexe mais.
+                self._tam_prova = None
+                if proc > 0.85 * prova[1]:
+                    tam = prova[0]
+                    self._tam_em = agora + 300.0
+                else:
+                    self._tam_teto, self._tam_teto_ate = tam, agora + 60     # nao sobe de novo por 1 min
+            elif proc > self.ALVO_ANALISE_S * 1.3 and tam > base:
+                self._tam_prova = (tam, proc)
+                tam = self.TAMANHOS[i - 1]
+                self._tam_em = agora + 3.0
+            elif proc < self.ALVO_ANALISE_S * 0.7 and tam < teto:
+                tam = self.TAMANHOS[i + 1]
+                self._tam_em = agora + 3.0
+        self._tam = tam
+        return tam
+
+    def _tamanho_detector(self, tam_pose, perfil):
+        """Tamanho da imagem para o detector de EPIs. No tempo real com o modelo convertido em
+        TensorRT ele fica no tamanho da conversao (5 ms por quadro) e quem esta longe e conferido
+        pelo recorte ampliado (segunda olhada); sem TensorRT o modelo original roda quase no mesmo
+        tempo em qualquer tamanho, entao acompanha a pose ate 1280."""
+        if not perfil.get('imediato'):
+            return perfil['imgsz']
+        if self.detector is not None and self.detector.backend == 'tensorrt':
+            return perfil['imgsz']
+        return min(tam_pose, max(perfil['imgsz'], self.DETECTOR_MAX))
+
     def _analyze_key(self, img, t, perfil, jpeg=None):
         det = self.detector
         h, w = img.shape[:2]
         inicio = time.perf_counter()
-        imgsz = perfil['imgsz']
+        tam_pose = self._tamanho_analise(img, perfil)
+        imgsz = self._tamanho_detector(tam_pose, perfil)
         resolvedor = self._resolvedor(w, h)
         # com zonas, o detector precisa procurar tudo que qualquer area possa exigir
         required = resolvedor.todos_os_itens() if resolvedor is not None else list(self.required_items)
@@ -626,7 +779,9 @@ class VideoProcessor:
         contar_epi = p_epi is not None and p_epi.contar
         # detector e pose rodam juntos na GPU (modelos diferentes, threads diferentes)
         fut = self._pool.submit(self._detectar, img, imgsz, perfil['conf']) if run_det and not contar_epi else None
-        people = analyzer.detect_people(img) if analyzer is not None else None
+        t_pose = time.perf_counter()
+        people = analyzer.detect_people(img, tam_pose) if analyzer is not None else None
+        self._medir('pose', t_pose)
         if contar_epi:
             # espera o par ate o tempo que o detector daqui levaria; passou disso, roda aqui
             d = p_epi.resultado(esperar_s=ms_det * 1.1 / 1000 - (time.perf_counter() - inicio))
@@ -642,11 +797,17 @@ class VideoProcessor:
                                                             conf=perfil['conf']))
         if self.reforco is not None and people and run_det:
             # so quem esta encoberto ou sem evidencia de algum EPI ganha a segunda olhada
+            t_ref = time.perf_counter()
             dets = self.reforco.aplicar(img, people, dets, required, t, ja_recortou=perfil['recortes'],
                                         conf=perfil['conf'])
+            self._medir('reforco', t_ref)
         employees = self._run_extra_models(img, dets)
         self._medir('pre', inicio)
-        employees += self._reconhecer_rostos(img, p_rosto)
+        # tempo real: o rosto e conferido 4 vezes por segundo (o nome fica guardado na pessoa
+        # rastreada); em toda analise ele custava mais que a pose e segurava as caixas
+        if not perfil.get('imediato') or p_rosto is not None or t - getattr(self, '_rosto_em', -1e9) >= 0.25:
+            self._rosto_em = t
+            employees += self._reconhecer_rostos(img, p_rosto)
         if analyzer is not None:
             analysis = analyzer.analyze(img, dets, required, det.supported, t=t, employees=employees,
                                         people=people, resolvedor=resolvedor)
@@ -668,17 +829,18 @@ class VideoProcessor:
         return self.pipeline.ultimo_resultado
 
     def _annotated_jpeg(self):
-        with self.pipeline.cond:
-            count = self.pipeline.exibidos
-            result, jpeg = self.pipeline.ultimo_resultado, self.pipeline.ultimo_jpeg
-        if jpeg is None:
+        count, result, img = self.pipeline.imagem_atual()
+        if img is None:
             return None
         with self._annot_lock:
             if self._annot[0] == count:
                 return self._annot[1]
-        img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            return None
+        if isinstance(img, bytes):
+            img = cv2.imdecode(np.frombuffer(img, np.uint8), cv2.IMREAD_COLOR)
+            if img is None:
+                return None
+        else:
+            img = img.copy()      # o desenho nao pode cair na imagem que a analise ainda usa
         dets = [{'item': d['item'], 'present': d['present'], 'conf': d['confidence'], 'box': d['bbox'],
                  'label': d['label']} for d in (result or {}).get('detections', [])]
         draw_analysis(img, result or {}, dets, zonas=self.zonas, areas_por_id=self._areas_por_id())
@@ -725,8 +887,9 @@ class VideoProcessor:
             'client_id': self.client_id,
             'model': self.model_name,
             'arquitetura': self.detector.arquitetura if self.detector else None,
-            'runtime_backend': self.runtime_backend,
+            'runtime_backend': self.detector.backend if self.detector else self.runtime_backend,
             'inference_model_path': self.inference_model_path,
+            'tamanho_analise': getattr(self, '_tam', None),
             'classes': list(self.model_classes),
             'required_items': list(self.required_items),
             'required_labels': [tax.item_label(i) for i in self.required_items],
@@ -744,6 +907,7 @@ class VideoProcessor:
             'pose': self.pose_ok,
             'config': self.public_config(),
             'direto': self.direto_ativo(),
+            'direto_chegando': self.direto_chegando(),
             'direto_perda': getattr(self, '_direto_perda', 0.0) if self.direto_ativo() else None,
             'direto_espera_s': round(self.direto_espera()),
             'pipeline': stats,

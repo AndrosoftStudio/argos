@@ -1,12 +1,12 @@
 {
-    "versao":  "20.4.1",
+    "versao":  "20.4.2",
     "data":  "2026-10-09",
-    "notas":  "Sem pedir permissao de administrador nem aviso do Firewall (video direto sem porta fixa, cameras RTSP so por TCP, tunel so por TCP). TV mostra as cameras ao vivo. Volta sozinho ao envio normal quando a rede perde pacotes. Modelos e TensorRT por servidor, com andamento no painel e no programa. Atualizacao em uma janelinha que reabre o programa.",
+    "notas":  "Full HD a 60 q/s de verdade, gente longe reconhecida, caixa no quadro certo, analise sem erros no TensorRT e duas vezes mais rapida",
     "windows":  {
                     "setup":  {
                                   "url":  "ArgosEPI-Servidor-Setup.exe",
                                   "tamanho":  141312,
-                                  "sha256":  "83dcfa6b618c665f3bd8a5020bd66be6ff7b9f10b021c16b67cb4d848a229337"
+                                  "sha256":  "c4c3501d5a3c5451b6483c504fa61f6e7b71c5a10694d2da74f254d0dab7a12e"
                               },
                     "base":  {
                                  "id":  "3335d94196",
@@ -24,22 +24,22 @@
                               },
                     "programa2":  {
                                       "nvidia":  {
-                                                     "url":  "win/argos-programa-20.4.1-nvidia.zip",
-                                                     "tamanho":  2755262,
-                                                     "sha256":  "fb96bc864e12b39ce9b0a405f6ee7fb2093be88937ad754b969143f3d38ead33",
-                                                     "descompactado":  3425509
+                                                     "url":  "win/argos-programa-20.4.2-nvidia.zip",
+                                                     "tamanho":  2778419,
+                                                     "sha256":  "b320583caa182afdf4a0610921890c5a07e215084adff08109c2f56a42d1521f",
+                                                     "descompactado":  3448647
                                                  },
                                       "dml":  {
-                                                  "url":  "win/argos-programa-20.4.1-dml.zip",
-                                                  "tamanho":  2755262,
-                                                  "sha256":  "e9782791a7a214d0087ff907b075e05e4e1d8a28bbe6aa30be4cb1b4333ee751",
-                                                  "descompactado":  3425509
+                                                  "url":  "win/argos-programa-20.4.2-dml.zip",
+                                                  "tamanho":  2778419,
+                                                  "sha256":  "650b6f214488553dfe4cfe9f3ba4806b9db24b85121a31927ed3eae3dcd8c3d3",
+                                                  "descompactado":  3448647
                                               },
                                       "cpu":  {
-                                                  "url":  "win/argos-programa-20.4.1-cpu.zip",
-                                                  "tamanho":  2755262,
-                                                  "sha256":  "a20e8830113703a02a592983e300404f06554cfba75f370be491ec65c9e5edbf",
-                                                  "descompactado":  3425509
+                                                  "url":  "win/argos-programa-20.4.2-cpu.zip",
+                                                  "tamanho":  2778419,
+                                                  "sha256":  "d12b77d4212b0b8309ab4d84dee6e7cd20d12d8c07e79879e3c92340f221ebde",
+                                                  "descompactado":  3448647
                                               }
                                   },
                     "nucleo":  {

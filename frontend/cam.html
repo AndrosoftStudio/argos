@@ -12,8 +12,8 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
 <script src="config.js"></script>
-<script src="argos-stream.js?v=20261009"></script>
-<link rel="stylesheet" href="cam.css?v=20260922">
+<script src="argos-stream.js?v=20261010"></script>
+<link rel="stylesheet" href="cam.css?v=20261010">
 </head>
 <body>
 
@@ -44,6 +44,7 @@
   <p class="mode-info" id="mode-info" role="status" title="Escolhido no painel de controle">
     <span id="mode-icon"></span><b id="mode-name">Tempo real</b><span id="mode-opts">—</span>
   </p>
+  <p class="mode-aviso" id="mode-aviso" role="status" hidden></p>
   <button type="button" class="btn-redondo iniciar" id="btn-start" hidden>
     <span class="circulo"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.8v14.4a.8.8 0 0 0 1.2.7l11.3-7.2a.8.8 0 0 0 0-1.4L8.2 4.1A.8.8 0 0 0 7 4.8z" fill="currentColor"/></svg></span>
     <span>Iniciar</span>
@@ -247,10 +248,37 @@ function showConfig(cfg){
   $('mode-icon').innerHTML = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
     + (ICONE_MODO[config.modo] || ICONE_MODO.tempo_real) + '</svg>';
   $('mode-name').textContent = m.nome;
-  $('mode-opts').textContent = `· ${config.fps} fps · ${config.resolucao}p`;
+  mostrarEnvio(null);
   $('mode-info').title = m.descricao + ' Escolhido no painel de controle.';
-  // tempo real: a tela mostra a camera ao vivo e so as caixas vem do servidor
-  if (player) player.setLive(config.imediato ? video : null);
+  acertarPrevia();
+}
+
+/* Video direto: a tela mostra a camera com um atraso minimo e a caixa de cada quadro no lugar
+   (ArgosStream.Alinhador). Envio por quadros: mostra o proprio quadro analisado com a caixa dele. */
+function acertarPrevia(){
+  if (player) player.setLive(config.imediato && sender && sender.diretoLigado ? video : null);
+}
+
+/* O que esta saindo de verdade (nao o que foi pedido): resolucao pelo lado menor e quadros por segundo.
+   Quando sai menos que o pedido no painel, diz o motivo. */
+function mostrarEnvio(s){
+  const pedido = `· ${config.fps} fps · ${config.resolucao}p`;
+  const el = $('mode-opts');
+  const aviso = $('mode-aviso');
+  if (!s || !active) { el.textContent = pedido; aviso.hidden = true; return; }
+  const cam = ArgosStream.trackInfo(camStream);
+  const lado = Math.min(s.largura || cam.width, s.altura || cam.height) || 0;
+  const fps = Math.round(s.sentFps || 0);
+  if (!lado || !fps) { el.textContent = pedido; return; }
+  el.textContent = `· ${fps} fps · ${lado}p`;
+  const camLado = Math.min(cam.width, cam.height) || 0, camFps = Math.round(cam.fps || 0);
+  const motivos = [];
+  if (camLado && camLado < config.resolucao * 0.9) motivos.push(`a câmera deste aparelho abriu em ${camLado}p`);
+  if (camFps && camFps < config.fps * 0.8) motivos.push(`a câmera deste aparelho entrega ${camFps} fps nessa resolução`);
+  if (s.limite === 'bandwidth') motivos.push('a rede não está dando conta de mais');
+  if (s.limite === 'cpu') motivos.push('o aparelho não está dando conta de codificar mais');
+  aviso.hidden = !motivos.length;
+  if (motivos.length) aviso.textContent = `Pedido no painel: ${config.fps} fps em ${config.resolucao}p. Está saindo menos porque ${motivos.join(' e ')}.`;
 }
 showConfig();
 
@@ -353,6 +381,9 @@ function startSending(){
     onResult: (d) => { if (player) player.pushResult(d); showMissing(d); },
     onStats: (s) => {
       fpsLbl.textContent = playerStats ? `${Math.round(playerStats.fps)} fps` : '';
+      fpsLbl.title = 'Análises por segundo no servidor';
+      mostrarEnvio(s);
+      acertarPrevia();
       netTag.hidden = false;
       netTag.textContent = s.direto ? (s.rota === 'retransmitida' ? 'DIRETO · TURN' : 'DIRETO')
         : s.transport === 'ws' ? 'WS' : s.transport === 'http' ? 'HTTP' : 'SEM REDE';
@@ -363,7 +394,9 @@ function startSending(){
         (s.direto ? ` (vídeo direto${s.rota ? ', rota ' + s.rota : ''})` : ` (${Math.round(s.quality * 100)}% qual., ${Math.round(s.scale * 100)}% tam.)`) +
         (!s.direto && s.diretoMotivo ? ` [sem direto: ${s.diretoMotivo}]` : '') + ` · ${(s.kbps / 1000).toFixed(1)} Mb/s` +
         (s.pending ? ` · ${s.pending} na fila` : '') +
-        ` · atraso ${s.serverDelay ?? '—'} ms · GPU ${s.serverFps ?? '—'} q/s`;
+        ` · atraso ${s.serverDelay ?? '—'} ms · GPU ${s.serverFps ?? '—'} q/s` +
+        (s.direto ? ` · caixas ${playerStats && playerStats.exato ? 'no quadro exato' : playerStats && playerStats.alinhado ? 'alinhadas pelos relógios' : 'sem alinhar'}` +
+          (playerStats && playerStats.atrasoPrevia !== null ? ` (prévia ${playerStats.atrasoPrevia} ms atrás)` : '') : '');
     },
     onStatus: (st, msg) => {
       if (st === 'removido') { alert('Esta câmera foi removida no painel.'); stopAll(); }
@@ -376,8 +409,9 @@ function startSending(){
     canvas: playerCanvas,
     getFrame: (seq) => sender && sender.frameBlob(seq),
     onStats: (st) => { playerStats = st; },
+    alinhador: sender.alinhador, atrasar: true,
   });
-  player.setLive(config.imediato ? video : null);
+  acertarPrevia();
   sender.start();
 }
 

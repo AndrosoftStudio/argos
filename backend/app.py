@@ -1803,7 +1803,7 @@ def get_frame():
     p = _stream(sid, u['id'])
     if not p: return ('', 204)
     if request.args.get('cru'):   # editor de areas: a imagem limpa, sem caixas nem desenhos por cima
-        jpeg = p.pipeline.ultimo_jpeg
+        jpeg = p.pipeline.jpeg_atual()
         fb = base64.b64encode(jpeg).decode() if jpeg else None
     else:
         fb = p.get_frame_b64()
@@ -1928,7 +1928,8 @@ def _stream_info(p, sid):
     return {'stream_id': sid, 'config': p.public_config(), 'model': p.model_name, 'arquitetura': st.get('arquitetura'),
             'required_items': st['required_items'], 'required_labels': st['required_labels'],
             'epis_disponiveis': st['epis_disponiveis'], 'epis_da_camera': st['epis_da_camera'],
-            'ajuda': st.get('ajuda'), 'direto': st.get('direto'),
+            'ajuda': st.get('ajuda'), 'direto': st.get('direto'), 'direto_chegando': st.get('direto_chegando'),
+            'tamanho_analise': st.get('tamanho_analise'),
             'classes': st['classes'], 'pose': st['pose'], 'pipeline': st['pipeline'],
             'runtime_backend': st['runtime_backend'], 'camera': st['camera'],
             'paused': _pausado(getattr(p, 'owner_uid', None))}
@@ -2063,7 +2064,9 @@ if sock:
                     continue
                 d = json.loads(msg) or {}
                 if d.get('type') == 'ping':
-                    out.json({'type': 'pong', 't': d.get('t')})
+                    # 's' = relogio deste computador (ms): o celular acerta o dele por aqui para
+                    # por as caixas no quadro certo
+                    out.json({'type': 'pong', 't': d.get('t'), 's': round(time.time() * 1000, 1)})
                 elif d.get('type') == 'parar':
                     break
         except Exception:
@@ -2085,7 +2088,7 @@ if sock:
             return
         sid = request.args.get('stream_id') or ''
         want_video = request.args.get('video', '1') != '0'
-        querer = {'video': want_video}
+        querer = {'video': want_video, 'sub': None}
         stop = threading.Event()
 
         def reader():
@@ -2098,9 +2101,11 @@ if sock:
                         continue
                     d = json.loads(msg) or {}
                     if d.get('type') == 'ping':
-                        out.json({'type': 'pong'})
+                        out.json({'type': 'pong', 't': d.get('t'), 's': round(time.time() * 1000, 1)})
                     elif d.get('type') == 'video':     # assistindo pelo video direto: so os resultados
                         querer['video'] = bool(d.get('on'))
+                        if querer['sub'] is not None:   # sem ninguem pedindo imagem, o servidor nem faz o JPEG
+                            querer['sub'].video = querer['video']
             except Exception:
                 pass
             stop.set()
@@ -2122,7 +2127,8 @@ if sock:
                 if atual is not p:
                     if p is not None:
                         p.pipeline.cancelar(sub)
-                    p, sub = atual, (atual.pipeline.assinar(video=want_video, maxlen=240) if atual else None)
+                    p, sub = atual, (atual.pipeline.assinar(video=querer['video'], maxlen=240) if atual else None)
+                    querer['sub'] = sub
                     out.json({'type': 'aguardando', 'stream_id': sid} if p is None
                              else {'type': 'pronto', **_stream_info(p, sid)})
                 if p is None:

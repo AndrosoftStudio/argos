@@ -116,8 +116,28 @@ Ainda no Tempo real, a câmera do celular (link de **Dispositivos**) ou do naveg
   pacote, então o Firewall do Windows deixa a resposta voltar sem perguntar nada.
 - **Rede ruim:** o servidor mede os pacotes perdidos do vídeo direto. Se a perda passa de 2% por
   6 segundos (imagem com blocos e manchas), ele volta sozinho ao envio normal (foto por foto,
-  que não se corrompe) e só tenta o direto de novo depois de 2, 5 e 10 minutos. O vídeo direto
-  também usa menos banda agora (até 2,8 Mb/s em 1080p, 1,6 em 720p e 0,9 em 480p).
+  que não se corrompe) e só tenta o direto de novo depois de 2, 5 e 10 minutos.
+- **Resolução e quadros por segundo de verdade (20.4.2):** o vídeo direto tem banda para o que
+  foi escolhido no painel (até 12 Mb/s em 1080p a 60 q/s; 8 a 30 q/s; 4 em 720p; 1,5 em 480p) e,
+  quando a rede aperta, cai o ritmo, não a resolução: é a resolução que deixa ver quem está
+  longe. Com o teto antigo (2,8 Mb/s) o celular mostrava "60 fps · 1080p", mas o navegador
+  encolhia a imagem para caber e saía borrada. A tela do celular agora mostra o que está saindo
+  de fato e, se for menos que o pedido, diz o motivo (a câmera do aparelho não dá, a rede não
+  dá, o aparelho não dá conta). "1080p" conta o lado menor: vale com o celular em pé ou deitado.
+- **Gente longe:** no Tempo real com placa NVIDIA a imagem vai inteira para a análise (antes era
+  encolhida para 640 pontos e quem estava longe sumia). A rede de pose roda no tamanho da
+  imagem enquanto a análise couber em 20 por segundo; se ficar lenta, ela diminui sozinha. Quem
+  está sem EPI confirmado ganha um recorte ampliado (segunda olhada). Em teste com 30 pessoas de
+  ~65 pontos de altura numa imagem Full HD: antes 10 a 12 achadas, agora 30.
+- **Caixa no quadro certo:** cada resultado diz de que quadro do vídeo ele é (o número que a
+  câmera carimba em cada quadro), e o painel, a TV e o próprio celular desenham em cada quadro a
+  caixa daquele quadro, segurando a imagem uma fração de segundo (100 a 200 ms) até a caixa dela
+  chegar. Antes a caixa mais nova ia por cima da imagem do momento e ficava para trás de quem
+  corre. Medido com um vídeo de teste a 60 q/s: a caixa ficava 45 ms atrás da pessoa (mais pelo
+  túnel); agora fica a 3–5 ms, em média 5 pontos da posição certa numa imagem de 1920.
+- **Modo de eficiência do Windows:** o Windows 11 deixa programa sem janela com os núcleos lentos
+  do processador. O servidor agora pede para ficar de fora (não precisa de administrador): numa
+  RTX 4060 Ti a análise passou de 25 para 50 quadros por segundo. `ARGOS_ECONOMIA=1` desfaz.
 - Quem assiste o painel de **outro computador** pode não conseguir o vídeo direto (o Firewall do
   servidor não aceita conexão de entrada): nesse caso o painel mostra as imagens pelo caminho
   normal, sem ninguém precisar fazer nada. No próprio computador do servidor o direto funciona.
@@ -318,7 +338,14 @@ Cloudflare ligado (padrão).
   segundos; o card deixa de mostrar "direto". Ver "Tempo real e vídeo direto".
 - **A detecção para e volta**: normalmente é o computador sem folga (veja "Livre" em
   Servidores). Converter um modelo para TensorRT, por exemplo, ocupa a placa de vídeo por
-  alguns minutos.
+  alguns minutos. Na 20.4.0 e 20.4.1 havia também dois erros com o modelo em TensorRT, que
+  perdiam quadros inteiros ("input size ... not equal to max model size" quando havia duas ou
+  mais pessoas para a segunda olhada, e "operation not permitted when stream is capturing" logo
+  ao ligar a câmera). Corrigidos na 20.4.2; se o TensorRT falhar 3 vezes seguidas, o servidor
+  passa a usar o modelo original sozinho.
+- **O celular diz "60 fps · 1080p" mas a imagem chega menor**: a partir da 20.4.2 a tela do
+  celular mostra o que sai de verdade e o motivo de sair menos. Muito celular só filma 60 q/s em
+  720p: escolha 30 q/s no painel para ter 1080p.
 - **A TV não fala, só toca a sirene**: a voz ainda está sendo baixada ou o download falhou
   (procure `[midia]` e `[voz]` no registro). O teste em **Dispositivos → Testar som das TVs**
   diz se a voz está instalada.

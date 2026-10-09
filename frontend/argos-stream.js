@@ -3,8 +3,9 @@
 
    Tempo real é imediato: nada é guardado. A câmera manda vídeo de verdade (H.264/VP8) por WebRTC,
    direto para o servidor (UDP; o aperto de mãos passa pelo endereço de sempre). A tela mostra o
-   vídeo ao vivo e, por cima, as caixas do resultado mais novo. Se a conexão direta não fecha, o
-   envio volta sozinho para quadros JPEG pelo WebSocket, ainda sem atraso proposital.
+   vídeo e, por cima, as caixas do MESMO quadro: cada resultado traz a hora do quadro analisado e
+   a tela segura a imagem alguns centésimos de segundo até a caixa dela chegar (Alinhador). Se a
+   conexão direta não fecha, o envio volta sozinho para quadros JPEG pelo WebSocket.
 
    Detalhado e super continuam com atraso fixo: a câmera manda quadros com o horário de captura,
    o servidor analisa e devolve o resultado de cada quadro no ritmo original.
@@ -233,7 +234,20 @@
     const video = { frameRate: { ideal: fps }, height: { ideal: height } };
     if (screen) return navigator.mediaDevices.getDisplayMedia({ video, audio: false });
     try {
-      return await navigator.mediaDevices.getUserMedia({ video: { ...video, facingMode }, audio: false });
+      const s = await navigator.mediaDevices.getUserMedia({ video: { ...video, facingMode }, audio: false });
+      // Muita câmera de celular só dá 60 q/s em resolução menor, e o navegador, entre os dois pedidos,
+      // pode ficar com o ritmo e largar a resolução. A resolução vale mais (é ela que mostra quem está
+      // longe): se veio menor que a pedida, tenta de novo a 30 q/s e fica com o que for maior.
+      const track = s.getVideoTracks()[0];
+      const lado = () => { const c = track.getSettings ? track.getSettings() : {}; return Math.min(c.width || 0, c.height || 0); };
+      const antes = lado();
+      if (fps > 30 && antes && antes < height * 0.9 && track.applyConstraints) {
+        try {
+          await track.applyConstraints({ ...video, frameRate: { ideal: 30 } });
+          if (lado() <= antes) await track.applyConstraints(video);
+        } catch (e) { /* fica como abriu */ }
+      }
+      return s;
     } catch (e) {
       if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) throw e;
       // aparelho recusou fps/resolução pedidos: abre com o padrão dele
@@ -314,8 +328,8 @@
         pc.addTransceiver('video', { direction: 'recvonly' });
         pc.ontrack = (ev) => {
           // sem fila no navegador: mostra o quadro assim que chega
-          try { ev.receiver.jitterBufferTarget = 0; } catch (e) { /* */ }
-          try { ev.receiver.playoutDelayHint = 0; } catch (e) { /* */ }
+          this.receiver = ev.receiver;
+          this.atrasar(0);
           this.onTrack && this.onTrack(ev.streams[0] || new MediaStream([ev.track]));
         };
       }
@@ -331,23 +345,63 @@
         { method: 'POST', body: { sdp: pc.localDescription.sdp }, timeout: 20000 });
       if (this.estado === 'fechado') return;
       this.sessao = d.sessao || '';
-      await pc.setRemoteDescription({ type: 'answer', sdp: d.sdp });
-      if (this.modo === 'enviar') this._limites();
+      if (this.modo === 'enviar') {
+        // começa já perto da taxa certa: sem isto o navegador parte de 0,3 Mb/s e os primeiros
+        // segundos saem borrados
+        try { await pc.setRemoteDescription({ type: 'answer', sdp: this._comTaxaInicial(d.sdp) }); }
+        catch (e) { await pc.setRemoteDescription({ type: 'answer', sdp: d.sdp }); }
+        this._limites();
+      } else {
+        await pc.setRemoteDescription({ type: 'answer', sdp: d.sdp });
+      }
       // não fechou em 10 s: a rede não deixou (sem caminho direto e sem TURN)
       this._prazo = setTimeout(() => { if (this.estado === 'conectando') this._set('caiu', 'prazo'); }, 10000);
+    }
+
+    /* Teto da taxa do vídeo (bits por segundo) para a resolução e o ritmo pedidos no painel.
+       Full HD a 60 q/s precisa de uns 12 Mb/s para sair nítido; com o teto baixo (2,8 Mb/s na
+       20.4.1) o navegador encolhia a imagem para caber e quem estava longe virava um borrão. */
+    _taxaMaxima() {
+      const base = this.altura <= 480 ? 1500000 : this.altura <= 720 ? 4000000 : 8000000;   // a 30 q/s
+      return Math.round(base * (this.fps > 40 ? 1.5 : this.fps < 20 ? 0.7 : 1));
+    }
+
+    _comTaxaInicial(sdp) {
+      const kbps = Math.round(Math.min(this._taxaMaxima() / 2, 4000000) / 1000);
+      const extra = 'x-google-start-bitrate=' + kbps;
+      const linhas = sdp.split('\r\n');
+      const video = linhas.findIndex((l) => l.startsWith('m=video'));
+      if (video < 0) return sdp;
+      let fim = linhas.findIndex((l, i) => i > video && l.startsWith('m='));
+      if (fim < 0) fim = linhas.length;
+      for (let i = video; i < fim; i++) {
+        if (linhas[i].startsWith('a=fmtp:') && !linhas[i].includes('x-google-start-bitrate')) linhas[i] += ';' + extra;
+      }
+      return linhas.join('\r\n');
     }
 
     async _limites() {
       try {
         const p = this.sender.getParameters();
         if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-        // Taxa contida de propósito: a análise não ganha nada com mais, e menos pacotes por segundo
-        // dão tempo de a retransmissão chegar quando o Wi-Fi perde algum (com 3,5 Mb/s a imagem quebrava).
-        p.encodings[0].maxBitrate = this.altura <= 480 ? 900000 : this.altura <= 720 ? 1600000 : 2800000;
+        p.encodings[0].maxBitrate = this._taxaMaxima();
         p.encodings[0].maxFramerate = this.fps;
-        p.degradationPreference = 'maintain-framerate';
+        p.encodings[0].scaleResolutionDownBy = 1;
+        // rede apertada: cai o ritmo, não o tamanho da imagem (é o tamanho que deixa ver quem está longe)
+        p.degradationPreference = 'maintain-resolution';
         await this.sender.setParameters(p);
       } catch (e) { /* o navegador escolhe */ }
+    }
+
+    /* Quem assiste: segura o vídeo por ms milissegundos (fila do próprio navegador), para o quadro
+       só aparecer quando a caixa dele já chegou. false = este navegador não sabe fazer isso. */
+    atrasar(ms) {
+      const r = this.receiver;
+      if (!r) return false;
+      let ok = false;
+      try { if ('jitterBufferTarget' in r) { r.jitterBufferTarget = ms; ok = true; } } catch (e) { /* */ }
+      try { if ('playoutDelayHint' in r) { r.playoutDelayHint = ms / 1000; ok = true; } } catch (e) { /* */ }
+      return ok;
     }
 
     async trocarTrack(track, fps, altura) {
@@ -374,20 +428,32 @@
       if (!this.pc || this.estado !== 'ligado') return null;
       try {
         const st = await this.pc.getStats();
-        let r = null;
+        let r = null, par = null, volta = null;
         const tipo = this.modo === 'enviar' ? 'outbound-rtp' : 'inbound-rtp';
-        st.forEach((v) => { if (v.type === tipo && (v.kind === 'video' || v.mediaType === 'video')) r = v; });
+        st.forEach((v) => {
+          if (v.type === tipo && (v.kind === 'video' || v.mediaType === 'video')) r = v;
+          else if (v.type === 'candidate-pair' && v.nominated && v.state === 'succeeded') par = v;
+          else if (v.type === 'remote-inbound-rtp' && v.kind === 'video') volta = v;
+        });
         if (!r) return null;
         const bytes = this.modo === 'enviar' ? r.bytesSent : r.bytesReceived;
         const quadros = this.modo === 'enviar' ? r.framesEncoded : r.framesDecoded;
         const t = now();
         const ant = this._stats;
-        this._stats = { t, bytes, quadros };
+        const codif = r.totalEncodeTime || 0, espera = r.totalPacketSendDelay || 0, pacotes = r.packetsSent || 0;
+        this._stats = { t, bytes, quadros, codif, espera, pacotes };
         const dt = ant.t ? (t - ant.t) / 1000 : 0;
+        const nq = quadros - (ant.quadros || 0), np = pacotes - (ant.pacotes || 0);
+        // ida e volta na rede (ms): a do par de endereços escolhido; a do relatório do outro lado serve de reserva
+        const rtt = ((par && par.currentRoundTripTime) || (volta && volta.roundTripTime) || 0) * 1000;
         return {
-          fps: dt ? Math.max(0, (quadros - ant.quadros) / dt) : (r.framesPerSecond || 0),
+          fps: dt ? Math.max(0, nq / dt) : (r.framesPerSecond || 0),
           kbps: dt ? Math.max(0, (bytes - ant.bytes) * 8 / 1000 / dt) : 0,
-          largura: r.frameWidth || 0, altura: r.frameHeight || 0, rota: this.rota,
+          largura: r.frameWidth || 0, altura: r.frameHeight || 0, rota: this.rota, rtt,
+          limite: r.qualityLimitationReason || '',
+          // envio: tempo médio para codificar um quadro e para o pacote sair (ms)
+          codificar: ant.t && nq > 0 ? Math.max(0, (codif - ant.codif) * 1000 / nq) : 0,
+          sair: ant.t && np > 0 ? Math.max(0, (espera - ant.espera) * 1000 / np) : 0,
         };
       } catch (e) { return null; }
     }
@@ -407,6 +473,264 @@
       }
     }
   }
+
+  /* ── Caixas no quadro certo (vídeo direto) ─────────────────────────
+     No vídeo direto a imagem e o resultado andam por caminhos diferentes: a imagem aparece na hora
+     e a caixa só depois da análise e da volta pela rede. Desenhar "o resultado mais novo" deixava a
+     caixa para trás de quem anda ou corre. Agora cada resultado diz de que quadro ele é, e a tela
+     desenha, em cada quadro mostrado, a caixa daquele quadro (entre os dois resultados vizinhos).
+
+     rtp = tempo RTP do quadro analisado: o número que a câmera carimbou ao filmar.
+       Quem assiste lê o mesmo número em cada quadro que o navegador mostra: o acerto é exato.
+       Na câmera, o tempo de cada quadro (mediaTime) é esse mesmo relógio a menos de uma constante;
+       ela é estimada pelos relógios (abaixo) e depois encaixada nos quadros de verdade, que nunca
+       saem em intervalos perfeitamente iguais: só um encaixe faz os resultados caírem em cima deles.
+     tv, ts, ep = reserva enquanto o servidor não tem o rtp (antes do primeiro quadro-chave): tv é
+       o tempo do vídeo contado pelo leitor do servidor, ts o relógio do servidor quando o quadro
+       chegou lá, ep muda quando a leitura reabre. A constante sai da diferença entre os relógios
+       (pelos pings, como o NTP) e do menor atraso visto de cada lado. Erra por um ou dois quadros. */
+  const entre = (a, b, f) => a + (b - a) * f;
+
+  function iouCaixa(a, b) {
+    const ix = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0]));
+    const iy = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+    const inter = ix * iy;
+    const uniao = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter;
+    return uniao > 0 ? inter / uniao : 0;
+  }
+
+  /* Resultado no ponto f (0..1) entre dois resultados seguidos: pessoas pelo ID, EPIs pela sobreposição. */
+  function entreResultados(a, b, f) {
+    if (!a || f >= 1) return b;
+    if (!b || f <= 0) return a;
+    const perto = f < 0.5 ? a : b;
+    const porId = new Map();
+    for (const p of b.persons || []) if (p.track_id !== null && p.track_id !== undefined) porId.set(p.track_id, p);
+    const persons = [];
+    const usados = new Set();
+    for (const pa of a.persons || []) {
+      const pb = pa.track_id !== null && pa.track_id !== undefined ? porId.get(pa.track_id) : null;
+      if (!pb) { if (f < 0.5) persons.push(pa); continue; }
+      usados.add(pa.track_id);
+      const q = { ...(f < 0.5 ? pa : pb), bbox: pa.bbox.map((v, i) => entre(v, pb.bbox[i], f)) };
+      const ka = pa.keypoints || [], kb = pb.keypoints || [];
+      if (ka.length && ka.length === kb.length) {
+        q.keypoints = ka.map((k, i) => [entre(k[0], kb[i][0], f), entre(k[1], kb[i][1], f), Math.min(k[2], kb[i][2])]);
+      }
+      persons.push(q);
+    }
+    if (f >= 0.5) for (const pb of b.persons || []) if (pb.track_id === null || pb.track_id === undefined || !usados.has(pb.track_id)) persons.push(pb);
+    const outros = (f < 0.5 ? b : a).detections || [];
+    const detections = (perto.detections || []).map((d) => {
+      let par = null, melhor = 0.15;
+      for (const o of outros) {
+        if (o.item !== d.item || o.present !== d.present) continue;
+        const v = iouCaixa(o.bbox, d.bbox);
+        if (v > melhor) { melhor = v; par = o; }
+      }
+      if (!par) return d;
+      const [x, y] = f < 0.5 ? [d, par] : [par, d];
+      return { ...d, bbox: x.bbox.map((v, i) => entre(v, y.bbox[i], f)) };
+    });
+    return { ...perto, persons, detections };
+  }
+
+  const percentil = (lista, p) => {
+    if (!lista.length) return 0;
+    const o = lista.slice().sort((a, b) => a - b);
+    return o[Math.min(o.length - 1, Math.floor(o.length * p))];
+  };
+
+  class Alinhador {
+    /* local: true na câmera (o vídeo na tela é o da própria câmera); false em quem assiste. */
+    constructor({ local = false } = {}) {
+      this.local = local;
+      this.dif = null;            // relógio do servidor − relógio daqui (ms)
+      this.rttMelhor = Infinity;
+      this.subida = Alinhador.LEITURA_MS + 10;   // câmera: menor tempo da captura até o servidor ler o quadro (ms)
+      this.dv = 0;                // quem assiste: tempo do vídeo na rede (ms)
+      this.zerar();
+    }
+
+    zerar() {
+      this.ep = null;
+      this.res = [];              // [{tv, r}] em ordem; tv na linha do tempo RTP (ms) quando há rtp
+      this.comRtp = false;
+      this.dRtp = 0;              // tv do servidor − tempo RTP (ms): constante
+      this.mins = [];             // [quando, ts − tv]
+      this.ys = [];               // quem assiste: [quando, chegada − tempo do vídeo]
+      this.k = null;              // tempo do vídeo daqui − tempo do resultado
+      this.kEst = null;           // o mesmo, estimado pelos relógios
+      this.kExato = null;         // câmera: o mesmo, encaixado nos quadros
+      this.exato = false;
+      this.atrasos = [];          // [quando, quanto o resultado chegou depois do quadro dele]
+      this.intervalos = [];
+      this.cRec = null;           // quem assiste: hora de chegada do quadro − tempo do vídeo (a menor)
+      this.off = null;            // câmera: hora da captura − tempo do vídeo
+      this.taus = [];             // câmera: tempo dos últimos quadros
+      this._ref = null;
+      this._encaixeEm = 0;
+    }
+
+    /* Contador RTP (32 bits, 90 kHz, dá a volta a cada 13 h) → ms numa linha contínua. */
+    _rtpMs(v) {
+      if (this._ref === null) this._ref = v;
+      let d = (v - this._ref) % 4294967296;
+      if (d >= 2147483648) d -= 4294967296; else if (d < -2147483648) d += 4294967296;
+      const u = this._ref + d;
+      if (u > this._ref) this._ref = u;
+      return u / 90;
+    }
+
+    /* Resposta de um ping: t0 = quando saiu daqui, s = relógio do servidor ao responder. */
+    pong(t0, s) {
+      if (typeof t0 !== 'number' || typeof s !== 'number') return;
+      const t1 = now();
+      const rtt = t1 - t0;
+      if (!(rtt >= 0) || rtt > 3000) return;
+      // vale a ida e volta mais curta (a menos torta); ela envelhece para o relógio não ficar parado numa medida antiga
+      if (rtt <= this.rttMelhor) { this.rttMelhor = rtt; this.dif = s - (t0 + t1) / 2; this._calcular(); }
+      else this.rttMelhor += Math.max(0.5, this.rttMelhor * 0.03);
+    }
+
+    pronto() { return this.k !== null; }
+
+    _calcular() {
+      if (!this.local && this.comRtp) { this.k = 0; this.exato = true; return; }      // mesmo relógio: nada a estimar
+      let est = null;
+      if (this.dif !== null && this.mins.length) {
+        let m = Infinity;
+        for (const x of this.mins) if (x[1] < m) m = x[1];
+        if (this.local) {
+          if (this.off !== null) est = m - this.dif - this.subida - this.off + (this.comRtp ? this.dRtp : 0);
+        } else if (this.cRec !== null) {
+          est = (m - this.dif) - this.cRec - Alinhador.LEITURA_MS + this.dv;
+        }
+      }
+      this.kEst = est;
+      this.exato = this.kExato !== null;
+      this.k = this.exato ? this.kExato : est;
+    }
+
+    /* Um resultado chegou. true = ele tem a hora do quadro (dá para alinhar). */
+    resultado(r) {
+      if (typeof r.tv !== 'number' || typeof r.ts !== 'number') return false;
+      const t = now();
+      if (r.ep !== this.ep) { this.zerar(); this.ep = r.ep; }
+      const comRtp = typeof r.rtp === 'number';
+      if (comRtp !== this.comRtp) {         // o servidor passou a mandar o rtp: a linha do tempo dos resultados muda
+        this.comRtp = comRtp;
+        this.res = []; this.atrasos = []; this.intervalos = []; this.kExato = null;
+      }
+      const tr = comRtp ? this._rtpMs(r.rtp) : r.tv;
+      if (comRtp) this.dRtp = r.tv - tr;
+      const ult = this.res[this.res.length - 1];
+      if (ult && tr <= ult.tv) return true;
+      if (ult) { this.intervalos.push(tr - ult.tv); if (this.intervalos.length > 40) this.intervalos.shift(); }
+      this.res.push({ tv: tr, r });
+      if (this.res.length > 120) this.res.shift();
+      this.mins.push([t, r.ts - r.tv]);
+      while (t - this.mins[0][0] > 15000) this.mins.shift();
+      this._calcular();
+      if (this.local && comRtp && t - this._encaixeEm > 400) { this._encaixeEm = t; this._encaixar(); }
+      // quanto este resultado chegou depois do quadro dele (da captura, na câmera; da chegada, em quem assiste)
+      const base = this.local ? this.off : this.cRec;
+      if (this.k !== null && base !== null) {
+        this.atrasos.push([t, t - (tr + this.k + base)]);
+        while (t - this.atrasos[0][0] > 4000) this.atrasos.shift();
+      }
+      return true;
+    }
+
+    /* Um quadro do vídeo foi apresentado (dados do requestVideoFrameCallback). Devolve o tempo dele (ms). */
+    quadro(meta) {
+      const t = now();
+      if (this.local) {
+        const tau = typeof meta.mediaTime === 'number' ? meta.mediaTime * 1000 : (meta.presentationTime || t);
+        const captura = typeof meta.captureTime === 'number' ? meta.captureTime : (meta.presentationTime || t) - 12;
+        const o = captura - tau;
+        this.off = this.off === null || Math.abs(o - this.off) > 60 ? o : this.off * 0.9 + o * 0.1;
+        const n = this.taus.length;
+        if (!n || tau > this.taus[n - 1]) { this.taus.push(tau); if (n > 300) this.taus.shift(); }
+        return tau;
+      }
+      if (typeof meta.rtpTimestamp !== 'number') return null;
+      const tau = this._rtpMs(meta.rtpTimestamp);
+      const chegada = typeof meta.receiveTime === 'number' ? meta.receiveTime : (meta.presentationTime || t);
+      this.ys.push([t, chegada - tau]);
+      while (t - this.ys[0][0] > 15000) this.ys.shift();
+      let y = Infinity;
+      for (const x of this.ys) if (x[1] < y) y = x[1];
+      this.cRec = y;
+      return tau;
+    }
+
+    /* Câmera: acha a constante que põe os resultados exatamente em cima dos quadros filmados.
+       Os quadros nunca saem em intervalos iguais (variam alguns milissegundos), então só o
+       encaixe certo faz quase todos os resultados caírem a menos de 1 ms de um quadro. */
+    _encaixar() {
+      const taus = this.taus;
+      const ult = this.res.slice(-40);
+      if (ult.length < 12 || taus.length < 30) return;
+      const centroK = this.kExato !== null ? this.kExato : this.kEst;
+      if (centroK === null) return;
+      const perto = (x) => {
+        let lo = 0, hi = taus.length - 1;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (taus[mid] < x) lo = mid + 1; else hi = mid; }
+        const a = taus[lo] - x, b = lo > 0 ? taus[lo - 1] - x : Infinity;
+        return Math.abs(a) < Math.abs(b) ? a : b;
+      };
+      const nota = (k) => {
+        let certos = 0, n = 0, soma = 0;
+        for (const e of ult) {
+          const x = e.tv + k;
+          if (x < taus[0] - 1 || x > taus[taus.length - 1] + 1) continue;
+          n++;
+          const d = perto(x);
+          if (Math.abs(d) < 0.9) { certos++; soma += d; }
+        }
+        return n >= 10 ? { taxa: certos / n, ajuste: certos ? soma / certos : 0 } : null;
+      };
+      const r0 = ult[ult.length - 1];
+      let melhor = null, segunda = 0;
+      for (const tau of taus) {
+        if (Math.abs(tau - (r0.tv + centroK)) > 80) continue;
+        const k = tau - r0.tv;
+        const v = nota(k);
+        if (!v) continue;
+        if (!melhor || v.taxa > melhor.taxa) { if (melhor) segunda = Math.max(segunda, melhor.taxa); melhor = { k: k + v.ajuste, taxa: v.taxa }; }
+        else segunda = Math.max(segunda, v.taxa);
+      }
+      if (melhor && melhor.taxa >= 0.6 && segunda <= melhor.taxa * 0.6) this.kExato = melhor.k;
+      else if (this.kExato !== null) { const v = nota(this.kExato); if (v && v.taxa < 0.3) this.kExato = null; }
+      this._calcular();
+    }
+
+    /* Resultado para o quadro de tempo tau: entre os dois vizinhos. null = sem como alinhar agora. */
+    paraQuadro(tau) {
+      const res = this.res;
+      if (this.k === null || !res.length) return null;
+      const tv = tau - this.k;
+      let i = res.length - 1;
+      if (tv >= res[i].tv) return tv - res[i].tv > 600 ? null : res[i].r;    // o deste quadro ainda não chegou: vale o mais novo
+      while (i > 0 && res[i - 1].tv > tv) i--;
+      if (i === 0) return res[0].r;
+      const a = res[i - 1], b = res[i];
+      // buraco grande entre duas análises: não desliza a caixa por meio segundo, fica com a mais perto
+      if (b.tv - a.tv > 400) return tv - a.tv < b.tv - tv ? a.r : b.r;
+      return entreResultados(a.r, b.r, (tv - a.tv) / (b.tv - a.tv));
+    }
+
+    /* Quanto segurar a imagem (ms) para o quadro sair já com a caixa dele: na câmera, contado da
+       captura; em quem assiste, da chegada do quadro. */
+    espera() {
+      if (!this.atrasos.length) return this.local ? 120 : 0;
+      const intervalo = Math.min(200, percentil(this.intervalos, 0.5) || 40);
+      return percentil(this.atrasos.map((x) => x[1]), 0.95) + intervalo + 8;
+    }
+  }
+  // reserva (sem rtp): tempo que o servidor leva para receber e abrir um quadro depois que o vídeo chega nele (ms)
+  Alinhador.LEITURA_MS = 20;
 
   /* ── Envio ─────────────────────────────────────────────────────── */
   class LiveSender {
@@ -443,6 +767,7 @@
       this.diretoLigado = false;
       this.diretoFalhas = 0;
       this.diretoMotivo = '';
+      this.alinhador = new Alinhador({ local: true });
     }
 
     get targetFps() { return Math.max(3, this.config.fps * this.fpsFactor); }
@@ -497,6 +822,7 @@
       const l = this.link;
       this.link = null;
       this.diretoLigado = false;
+      this.alinhador.zerar();
       if (l) l.fechar();
     }
 
@@ -600,7 +926,10 @@
           case 'config': this._applyConfig(d.config, d.janela_s); break;
           case 'mover': this.onMove && this.onMove(d.url); break;
           case 'direto': if (d.usar === false) this._diretoCaiu('a rede estava perdendo pacotes: voltou ao envio normal', 'instavel', d.espera_s); break;
-          case 'pong': if (d.t) this.rtt = this.rtt ? this.rtt * 0.7 + (now() - d.t) * 0.3 : now() - d.t; break;
+          case 'pong':
+            if (d.t) this.rtt = this.rtt ? this.rtt * 0.7 + (now() - d.t) * 0.3 : now() - d.t;
+            this.alinhador.pong(d.t, d.s);
+            break;
           case 'removido': this.onStatus && this.onStatus('removido'); this.stop(); break;
           case 'erro': this.onStatus && this.onStatus('erro', d.error); break;
           default: break;
@@ -789,6 +1118,7 @@
     _onResult(d) {
       if (typeof d.seq === 'number' && d.seq > this.lastResultSeq) this.lastResultSeq = d.seq;
       this.c.results++;
+      if (this.diretoLigado) this.alinhador.resultado(d);
       this.onResult && this.onResult(d);
     }
 
@@ -832,7 +1162,13 @@
         pending: this.outbox.filter((e) => !e.sent).length,
         serverDelay: this.server.atraso_ms, serverFps: this.server.fps_analise, shownFps: this.server.fps_exibido,
       };
-      if (rtc) { s.captureFps = s.sentFps = rtc.fps; s.kbps = rtc.kbps; s.quality = 1; s.scale = 1; s.pending = 0; }
+      if (rtc) {
+        s.captureFps = s.sentFps = rtc.fps; s.kbps = rtc.kbps; s.quality = 1; s.scale = 1; s.pending = 0;
+        s.largura = rtc.largura; s.altura = rtc.altura; s.limite = rtc.limite;
+        // menor tempo entre a captura e o servidor ler o quadro: codificar + sair + metade da ida e volta + leitura
+        this.alinhador.subida = rtc.codificar + rtc.sair + rtc.rtt / 2 + Alinhador.LEITURA_MS;
+        s.alinhado = this.alinhador.pronto();
+      }
       this.c = { captured: 0, sent: 0, bytes: 0, dropped: 0, results: 0 };
       this._statsAt = t;
       this.onStats && this.onStats(s);
@@ -841,11 +1177,21 @@
 
   /* ── Exibição ──────────────────────────────────────────────────── */
   class LivePlayer {
-    constructor({ canvas, getFrame = null, onStats = null, showBoxes = true }) {
+    constructor({ canvas, getFrame = null, onStats = null, showBoxes = true, alinhador = null, atrasar = false }) {
       this.canvas = canvas;
       this.getFrame = getFrame;
       this.onStats = onStats;
       this.showBoxes = showBoxes;
+      // vídeo ao vivo: quem acerta a caixa com o quadro (Alinhador). atrasar: a própria tela segura a
+      // imagem (câmera: guarda os quadros e mostra com um pequeno atraso, já com a caixa de cada um).
+      this.alinhador = alinhador;
+      this.atrasar = atrasar;
+      this.fila = [];            // [{tau, bmp}] quadros da prévia esperando a vez
+      this.quadroVivo = null;
+      this.atrasoVivo = null;
+      this.ultimoVivo = null;
+      this._capturando = 0;
+      this._falhasPrevia = 0;
       this.entries = new Map();  // seq -> {seq, t, result, blob, bitmap, arrival}
       this.offsets = [];         // [chegada, chegada - t]
       this.base = null;
@@ -864,20 +1210,114 @@
 
     /* Vídeo ao vivo por baixo (câmera local ou vídeo direto): o canvas fica transparente e leva só
        as caixas do resultado mais novo. null volta ao modo de quadros. */
-    setLive(video) {
-      if (this.live === video) return;
+    setLive(video, { alinhador } = {}) {
+      if (alinhador !== undefined) this.alinhador = alinhador;
+      if (this.live === video) {
+        // mesmo vídeo, alinhador novo (o vídeo direto ligou ou caiu): acompanha os quadros ou solta a prévia
+        if (!this.alinhador || !this.atrasar) this._soltarPrevia();
+        if (this.live && this._seguindo !== this.live) this._seguirQuadros(this.live);
+        return;
+      }
+      this._soltarPrevia();
       this.live = video || null;
       this.liveResult = null;
+      this.ultimoVivo = null;
       for (const e of this.entries.values()) if (e.bitmap) e.bitmap.close();
       this.entries.clear();
       if (this.current && this.current.bitmap) this.current.bitmap.close();
       this.current = null;
+      if (this.live) this._seguirQuadros(this.live);
       this._paint();
+    }
+
+    /* Acompanha cada quadro que o vídeo apresenta: é nessa hora que se sabe o tempo dele. */
+    _seguirQuadros(v) {
+      if (!this.alinhador || !v.requestVideoFrameCallback) return;
+      this._seguindo = v;
+      const aoQuadro = (agora, meta) => {
+        if (this.closed || this.live !== v) { if (this._seguindo === v) this._seguindo = null; return; }
+        v.requestVideoFrameCallback(aoQuadro);
+        const al = this.alinhador;
+        const tau = al ? al.quadro(meta) : null;
+        if (tau === null || !al.pronto()) return;
+        if (this.atrasar) this._guardar(v, tau);
+        else {
+          const r = al.paraQuadro(tau);
+          this.liveResult = r || this.ultimoVivo;
+          this._paint();
+        }
+      };
+      v.requestVideoFrameCallback(aoQuadro);
+    }
+
+    /* Câmera: cópia reduzida do quadro, guardada até a caixa dele chegar. */
+    _guardar(v, tau) {
+      if (this._falhasPrevia > 8 || this._capturando > 2 || !window.createImageBitmap) return;
+      if (tau - (this._tauGuardado || 0) < 24) return;          // prévia a no máximo ~40 quadros por segundo
+      const vw = v.videoWidth, vh = v.videoHeight;
+      if (!vw || !vh) return;
+      this._tauGuardado = tau;
+      const dpr = window.devicePixelRatio || 1;
+      const e = Math.min(1, 960 / Math.max(vw, vh),
+        Math.max(this.canvas.clientWidth * dpr / vw, this.canvas.clientHeight * dpr / vh) || 1);
+      // O quadro que o navegador entrega aqui às vezes já é o seguinte ao que ele acabou de anunciar.
+      // O VideoFrame traz o tempo do próprio conteúdo: é esse que vale para a caixa.
+      let fonte = v, quadro = null;
+      if (window.VideoFrame) {
+        try { quadro = new VideoFrame(v); fonte = quadro; if (typeof quadro.timestamp === 'number') tau = quadro.timestamp / 1000; }
+        catch (err) { quadro = null; fonte = v; }
+      }
+      this._capturando++;
+      createImageBitmap(fonte, { resizeWidth: Math.max(2, Math.round(vw * e)), resizeHeight: Math.max(2, Math.round(vh * e)), resizeQuality: 'low' })
+        .finally(() => { if (quadro) quadro.close(); })
+        .then((bmp) => {
+          this._capturando--;
+          if (this.closed || this.live !== v) { bmp.close(); return; }
+          let i = this.fila.length;
+          while (i > 0 && this.fila[i - 1].tau > tau) i--;
+          this.fila.splice(i, 0, { tau, bmp });
+          while (this.fila.length > 60) this.fila.shift().bmp.close();
+        }, () => { this._capturando--; this._falhasPrevia++; });
+    }
+
+    _soltarPrevia() {
+      for (const q of this.fila) q.bmp.close();
+      this.fila = [];
+      if (this.quadroVivo) { this.quadroVivo.bmp.close(); this.quadroVivo = null; }
+      this.atrasoVivo = null;
+      this._tauGuardado = 0;
+    }
+
+    /* Câmera, a cada quadro da tela: mostra o quadro guardado cuja hora chegou, com a caixa dele. */
+    _mostrarPrevia(t) {
+      const al = this.alinhador;
+      if (!al || !al.pronto() || this._falhasPrevia > 8) {
+        if (this.quadroVivo || this.fila.length) { this._soltarPrevia(); this.liveResult = this.ultimoVivo; this._paint(); }
+        return false;
+      }
+      const alvo = Math.min(700, al.espera());
+      // o atraso sobe depressa (senão a caixa falta) e desce devagar (senão a imagem dá pulos)
+      this.atrasoVivo = this.atrasoVivo === null ? alvo : this.atrasoVivo + Math.max(-0.3, Math.min(4, alvo - this.atrasoVivo));
+      // a fila guarda o tempo do vídeo de cada quadro; al.off leva esse tempo para o relógio daqui (hora da captura)
+      const limite = t - this.atrasoVivo - (al.off || 0);
+      let novo = null;
+      while (this.fila.length && this.fila[0].tau <= limite) {
+        if (novo) novo.bmp.close();
+        novo = this.fila.shift();
+      }
+      if (novo) {
+        if (this.quadroVivo) this.quadroVivo.bmp.close();
+        this.quadroVivo = novo;
+        this.liveResult = al.paraQuadro(novo.tau) || this.ultimoVivo;
+        this._paint();
+      }
+      return true;
     }
 
     close() {
       this.closed = true;
       cancelAnimationFrame(this._raf);
+      this._soltarPrevia();
       this.clear();
     }
 
@@ -904,10 +1344,15 @@
 
     pushResult(r) {
       if (this.closed) return;
-      if (this.live) {            // vídeo ao vivo: o resultado mais novo vale na hora
-        this.liveResult = r;
+      if (this.live) {
         this.lastArrival = now();
         this.shown++;
+        this.ultimoVivo = r;
+        // alinhado: o desenho acompanha os quadros do vídeo (cada um com a caixa da hora dele);
+        // sem como alinhar (servidor antigo, navegador sem o recurso), o mais novo vale na hora
+        const al = this.alinhador;
+        if (al && al.pronto() && this.live.requestVideoFrameCallback && (!this.atrasar || this._falhasPrevia <= 8)) return;
+        this.liveResult = r;
         this._paint();
         return;
       }
@@ -1000,15 +1445,22 @@
         this.shown++;
         this._paint();
       } else if (this.live) {
-        if (t - this.lastArrival > 1200 && this.liveResult) { this.liveResult = null; this._paint(); }   // resultado velho some
-        else if (t - (this._livePaint || 0) > 500) this._paint();
+        const previa = this.atrasar && this._mostrarPrevia(t);
+        if (t - this.lastArrival > 1200 && this.liveResult) {      // resultado velho some
+          this.liveResult = this.ultimoVivo = null;
+          if (previa) this._soltarPrevia();
+          this._paint();
+        } else if (t - (this._livePaint || 0) > 500) this._paint();
       } else if (this.annotated || (this.current && t - this.lastArrival > 1500) || !this.current) {
         this._paint();
       }
       if (t - this._statsAt >= 1000) {
         const dt = (t - this._statsAt) / 1000;
         this.onStats && this.onStats({ fps: this.shown / dt, buffer: Math.round(this.jb), pending: this.entries.size,
-          stalled: this.lastArrival > 0 && t - this.lastArrival > 1500 });
+          stalled: this.lastArrival > 0 && t - this.lastArrival > 1500,
+          alinhado: Boolean(this.live && this.alinhador && this.alinhador.pronto()),
+          exato: Boolean(this.live && this.alinhador && this.alinhador.pronto() && this.alinhador.exato),
+          atrasoPrevia: this.quadroVivo && this.atrasoVivo !== null ? Math.round(this.atrasoVivo) : null });
         this.shown = 0;
         this._statsAt = t;
       }
@@ -1029,6 +1481,13 @@
       ctx.clearRect(0, 0, cw, ch);
       if (this.live) {
         this._livePaint = now();
+        const q = this.quadroVivo;
+        if (q) {                  // câmera: o quadro guardado cobre o vídeo ao vivo que está por baixo
+          const e = Math.min(cw / q.bmp.width, ch / q.bmp.height);
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, cw, ch);
+          ctx.drawImage(q.bmp, (cw - q.bmp.width * e) / 2, (ch - q.bmp.height * e) / 2, q.bmp.width * e, q.bmp.height * e);
+        }
         if (this.liveResult) drawOverlay(canvas, this.liveResult, { showBoxes: this.showBoxes, clear: false });
         if (this.message) this._texto(ctx, cw, ch, this.message, false);
         return;
@@ -1079,6 +1538,8 @@
       this.diretoLigado = false;
       this.diretoFalhas = 0;
       this.info = null;
+      this.alinhador = new Alinhador({ local: false });
+      this.atrasoVideo = 0;      // ms que o vídeo está sendo segurado para a caixa chegar junto
     }
 
     start() {
@@ -1086,12 +1547,28 @@
       this._connect();
       this._timer = setInterval(() => this._heartbeat(), 2000);
       this._timerDireto = setInterval(() => this._cuidarDoDireto().catch(() => {}), 1000);
+      this._timerAtraso = setInterval(() => this._acertarAtraso(), 400);
+    }
+
+    /* Segura o vídeo o bastante para cada quadro aparecer já com a caixa dele (e não mais que isso). */
+    _acertarAtraso() {
+      const al = this.alinhador, l = this.link;
+      if (!this.diretoLigado || !l) return;
+      if (++this._voltasAtraso % 8 === 1) l.medir().then((m) => { if (m && this.link === l) al.dv = m.rtt / 2; }).catch(() => {});
+      if (!al.pronto() || !al.atrasos.length) return;
+      const pedido = Math.max(0, Math.min(600, al.espera()));
+      // sobe logo (senão o quadro aparece antes da caixa) e desce devagar (senão o vídeo acelera e freia à toa)
+      const alvo = this.atrasoVideo + Math.max(-5, Math.min(60, pedido - this.atrasoVideo));
+      if (Math.abs(alvo - this.atrasoVideo) < 1) return;
+      this.atrasoVideo = alvo;
+      if (!l.atrasar(alvo)) this.atrasoVideo = 0;
     }
 
     stop() {
       this.active = false;
       clearInterval(this._timer);
       clearInterval(this._timerDireto);
+      clearInterval(this._timerAtraso);
       this._fecharDireto();
       clearTimeout(this._retry);
       this.polling = false;
@@ -1123,8 +1600,11 @@
             if (this.link !== link || this.diretoLigado) return;
             this.diretoLigado = true;
             this.diretoFalhas = 0;
+            this._voltasAtraso = 0;
+            this.atrasoVideo = 0;
+            this.alinhador.zerar();
             this._pedirVideo(false);
-            this.player.setLive(v);
+            this.player.setLive(v, { alinhador: this.alinhador });
             this.onDireto && this.onDireto(true, link);
             this._status('direto');
           };
@@ -1182,12 +1662,14 @@
         let d;
         try { d = JSON.parse(ev.data); } catch (e) { return; }
         if (d.type === 'quadro') {
-          if (this.diretoLigado) this.player.pushResult(d);   // caixas sobre o vídeo ao vivo
+          if (this.diretoLigado) { this.alinhador.resultado(d); this.player.pushResult(d); }   // caixas sobre o vídeo ao vivo
           else {
             this.pending.set(d.seq, d);
             if (this.pending.size > 240) this.pending.delete(this.pending.keys().next().value);
           }
           this.onResult && this.onResult(d);
+        } else if (d.type === 'pong') {
+          this.alinhador.pong(d.t, d.s);
         } else if (d.type === 'pronto' || d.type === 'estado') {
           if (!ready) {
             ready = true; clearTimeout(giveUp); this.ws = ws; this.attempt = 0; this.failures = 0; this.polling = false; this.player.setMessage('');
@@ -1222,7 +1704,7 @@
       const ws = this.ws;
       if (!ws || ws.readyState !== 1) return;
       if (now() - this.lastMsgAt > 8000) { try { ws.close(); } catch (e) { /* */ } return; }  // servidor manda 'estado' a cada 1 s
-      try { ws.send(JSON.stringify({ type: 'ping' })); } catch (e) { /* */ }
+      try { ws.send(JSON.stringify({ type: 'ping', t: now() })); } catch (e) { /* */ }
     }
 
     /* Reserva: imagem anotada pelo servidor, ~8 q/s, até o WebSocket voltar. */
@@ -1380,7 +1862,7 @@
   }
 
   window.ArgosStream = {
-    openCamera, trackInfo, LiveSender, LivePlayer, LiveViewer, DirectLink, uploadAnalysisFile, drawOverlay,
+    openCamera, trackInfo, LiveSender, LivePlayer, LiveViewer, DirectLink, Alinhador, entreResultados, uploadAnalysisFile, drawOverlay,
     drawEpiIcon, drawEpiRow, EPI_ICONS,
     packFrame, unpackFrame, itemLabel, formatDuration, LABELS, COLORS, POSTURE, HEAD, MODES, FPS_OPTIONS, RES_OPTIONS,
   };

@@ -167,3 +167,115 @@ def test_sem_medida_nao_derruba(monkeypatch):
 
     monkeypatch.setattr(rtc, 'chegada', lambda sid: None)
     assert Falso()._conferir_perda({}) is False
+
+
+# ── 20.4.2: Full HD de verdade, caixa no quadro certo, analise sem erro no TensorRT ─────
+def test_resolucao_conta_o_lado_menor():
+    """1080p e Full HD com o celular em pe ou deitado: a imagem em pe (1080x1920) nao pode ser
+    encolhida para 608x1080, e acima do pedido ela desce pelo lado menor."""
+    import numpy as np
+    import processor
+
+    class Falso:
+        config = {'resolucao': 1080}
+        _limitar = processor.VideoProcessor._limitar
+
+    p = Falso()
+    assert p._limitar(np.zeros((1920, 1080, 3), np.uint8)).shape[:2] == (1920, 1080)
+    assert p._limitar(np.zeros((1080, 1920, 3), np.uint8)).shape[:2] == (1080, 1920)
+    p.config = {'resolucao': 720}
+    assert p._limitar(np.zeros((1920, 1080, 3), np.uint8)).shape[:2] == (1280, 720)
+
+
+def test_tempo_real_nao_encolhe_a_imagem_antes_da_analise():
+    """Quem esta longe some quando a imagem e encolhida: no tempo real ela vai inteira."""
+    import numpy as np
+    from live_pipeline import LivePipeline
+    pl = LivePipeline(lambda *a: None, nome='t')
+    pl.configurar('tempo_real')
+    img = np.zeros((1080, 1920, 3), np.uint8)
+    pl.receber_imagem(img, t=1.0, largura_max=None, sessao='direto', extra={'tv': 20.0, 'ts': 1.0, 'ep': 1, 'rtp': 7})
+    q = pl.quadros[-1]
+    assert (q.w, q.h) == (1920, 1080) and q.img is img
+    assert q.extra['rtp'] == 7                      # a hora do quadro vai junto ate o resultado
+    pl.receber_imagem(img, t=2.0, largura_max=960)  # os outros caminhos continuam com o limite
+    assert pl.quadros[-1].w == 960
+
+
+def test_quadro_chave_h264_e_vp8():
+    """O relogio do video so precisa achar os quadros-chave nos cabecalhos, sem decodificar."""
+    import rtc
+    rtp = bytes(12)
+    assert rtc._quadro_chave('H264', rtp + bytes([0x65, 0]), 12)            # IDR
+    assert rtc._quadro_chave('H264', rtp + bytes([0x67, 0]), 12)            # SPS
+    assert not rtc._quadro_chave('H264', rtp + bytes([0x41, 0]), 12)        # quadro comum
+    assert rtc._quadro_chave('H264', rtp + bytes([0x7C, 0x85]), 12)         # FU-A comecando um IDR
+    assert not rtc._quadro_chave('H264', rtp + bytes([0x7C, 0x81]), 12)
+    stap = bytes([0x78, 0, 2, 0x67, 0, 0, 2, 0x68, 0])                      # STAP-A com SPS dentro
+    assert rtc._quadro_chave('H264', rtp + stap, 12)
+    assert rtc._quadro_chave('VP8', rtp + bytes([0x10, 0x00, 0, 0]), 12)   # comeco de quadro-chave
+    assert not rtc._quadro_chave('VP8', rtp + bytes([0x10, 0x01, 0, 0]), 12)
+
+
+def test_ponte_do_relogio_do_video():
+    """Um quadro-chave visto pelos dois lados (leitura crua e OpenCV) da a base; nenhum ou dois perto: sem base."""
+    import rtc
+    r = rtc.RelogioRtp('rtsp://127.0.0.1:1/x')
+    r.chaves.append((1000000, 10.0))
+    assert r.base_para(90000, 10.05) == 1000000 - 90000
+    assert r.base_para(90000, 20.0) is None
+    r.chaves.append((1001000, 10.2))
+    assert r.base_para(90000, 10.25) is None
+
+
+def test_tensorrt_recortes_um_de_cada_vez():
+    """O modelo convertido aceita uma imagem por vez: os recortes da segunda olhada iam juntos e o
+    quadro inteiro se perdia ('input size [2, 3, 640, 640] not equal to max model size')."""
+    import numpy as np
+    import epi_detector
+
+    class Modelo:
+        def __init__(self):
+            self.chamadas = []
+
+        def predict(self, fonte, **k):
+            self.chamadas.append(fonte)
+            if isinstance(fonte, list) and len(fonte) > 1:
+                raise RuntimeError('input size not equal to max model size')
+            return [type('R', (), {'boxes': None})()]
+
+    d = epi_detector.EpiDetector.__new__(epi_detector.EpiDetector)
+    d.model, d.backend, d.device, d.half, d.arquitetura = Modelo(), 'tensorrt', '0', False, 'yolo'
+    d._falhas_trt, d.tam_trt, d.log = 0, 640, lambda *a: None
+    img = np.zeros((720, 1280, 3), np.uint8)
+    assert d.detect_crops(img, [(0, 0, 200, 400), (300, 0, 500, 400), (600, 0, 800, 400)]) == []
+    assert len(d.model.chamadas) == 3 and not any(isinstance(c, list) for c in d.model.chamadas)
+
+
+def test_tensorrt_que_falha_volta_ao_modelo_original(monkeypatch):
+    import numpy as np
+    import epi_detector
+    import ultralytics
+
+    class Quebrado:
+        def predict(self, *a, **k):
+            raise RuntimeError('CUDA error')
+
+    class Original:
+        names = {0: 'capacete'}
+
+        def __init__(self, caminho):
+            self.caminho = caminho
+
+        def predict(self, *a, **k):
+            return [type('R', (), {'boxes': None})()]
+
+    monkeypatch.setattr(ultralytics, 'YOLO', Original)
+    d = epi_detector.EpiDetector.__new__(epi_detector.EpiDetector)
+    d.model, d.backend, d.device, d.half, d.arquitetura = Quebrado(), 'tensorrt', 'cpu', False, 'yolo'
+    d._falhas_trt, d.tam_trt, d.log, d.model_path = 0, 640, lambda *a: None, 'argos.pt'
+    img = np.zeros((64, 64, 3), np.uint8)
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            d.detect(img)
+    assert d.detect(img) == [] and d.backend == 'pytorch' and d.model.caminho == 'argos.pt'

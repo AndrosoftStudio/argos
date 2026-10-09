@@ -611,9 +611,26 @@ class PPEAnalyzer:
         self._t_ant = self._dt = None
         self.pose.predictor = None  # recria o rastreador na proxima chamada
 
-    def detect_people(self, frame):
-        res = self.pose.track(frame, persist=True, tracker=self.tracker, imgsz=self.imgsz, conf=0.3,
-                              device=self.device, verbose=False, **precision_kwargs(self.half))[0]
+    def aquecer(self, imgsz=None):
+        """Primeira inferencia da pose, sozinha na placa, antes de a camera comecar. A primeira vez
+        em cada tamanho de imagem leva segundos (a placa prepara os nucleos): melhor aqui do que com
+        a camera ja ligada."""
+        from epi_detector import trava_gpu
+        try:
+            with trava_gpu():
+                for tam in dict.fromkeys((self.imgsz, imgsz or self.imgsz)):
+                    self.pose.predict(np.zeros((tam * 9 // 16 // 32 * 32, tam, 3), np.uint8), imgsz=tam,
+                                      device=self.device, verbose=False, **precision_kwargs(self.half))
+        except Exception:
+            pass
+
+    def detect_people(self, frame, imgsz=None):
+        """imgsz: tamanho da imagem para a rede nesta chamada (o tempo real aumenta quando a placa
+        tem folga, para enxergar gente longe); None = o do perfil."""
+        from epi_detector import trava_gpu
+        with trava_gpu():
+            res = self.pose.track(frame, persist=True, tracker=self.tracker, imgsz=imgsz or self.imgsz, conf=0.3,
+                                  device=self.device, verbose=False, **precision_kwargs(self.half))[0]
         if res.boxes is None or res.keypoints is None or len(res.boxes) == 0:
             return []
         boxes = res.boxes.xyxy.cpu().numpy()

@@ -289,11 +289,12 @@ class _Revisor:
 
 # ── Pecas internas ──────────────────────────────────────────────────
 class _Quadro:
-    __slots__ = ('seq', 't', 'jpeg', 'w', 'h', 'chegada', 'img')
+    __slots__ = ('seq', 't', 'jpeg', 'w', 'h', 'chegada', 'img', 'extra')
 
-    def __init__(self, seq, t, jpeg, w, h, chegada, img=None):
+    def __init__(self, seq, t, jpeg, w, h, chegada, img=None, extra=None):
         self.seq, self.t, self.jpeg, self.w, self.h, self.chegada = seq, t, jpeg, w, h, chegada
         self.img = img      # imagem ja aberta (fontes do proprio servidor no modo imediato)
+        self.extra = extra  # hora do quadro no video direto (tv, ts, ep): vai junto no resultado
 
 
 class _Chave:
@@ -358,6 +359,7 @@ class Assinante:
 # ── Pipeline ────────────────────────────────────────────────────────
 class LivePipeline:
     OCIOSO_RESET_S = 30.0     # sem quadros por este tempo: esquece rastreio e linha do tempo
+    LADO_PAINEL = 1024        # imediato: lado maior do JPEG mandado a quem assiste sem o video direto
     SEM_SINAL_S = 2.0
     ATRASO_TOLERADO_S = 0.4   # quadro que ja passou da hora por mais que isto e pulado
     LIMITE_QUADROS = 720
@@ -379,6 +381,8 @@ class LivePipeline:
         self._zerar_linha_do_tempo()
         self.ultimo_resultado = None
         self.ultimo_jpeg = None
+        self.ultimo_img = None      # imediato: a imagem analisada, aberta (o JPEG so e feito se alguem pedir)
+        self.quer_jpeg_inteiro = lambda: False   # outro servidor da conta vai receber o quadro?
         self.exibidos = 0
         self.taxa_entrada, self.taxa_analise, self.taxa_saida = _Taxa(), _Taxa(), _Taxa()
         self.pulados = 0
@@ -449,6 +453,7 @@ class LivePipeline:
             self._zerar_linha_do_tempo()
             self.ultimo_resultado = None
             self.ultimo_jpeg = None
+            self.ultimo_img = None
             self.cond.notify_all()
 
     def fechar(self):
@@ -461,7 +466,7 @@ class LivePipeline:
             s.fechar()
 
     # ── entrada ─────────────────────────────────────────────────────
-    def receber(self, seq, t, jpeg, sessao=None, w=None, h=None, img=None):
+    def receber(self, seq, t, jpeg, sessao=None, w=None, h=None, img=None, extra=None):
         """Um quadro JPEG (ou a imagem ja aberta, em img). t = horario de captura em segundos
         (None = usa a hora de chegada)."""
         agora = time.perf_counter()
@@ -509,7 +514,7 @@ class LivePipeline:
                     self.pulados += 1
                     return False
                 self.pulados += len(self.quadros)
-                self.quadros, self.ts = [_Quadro(seq, t, jpeg, w, h, agora, img)], [t]
+                self.quadros, self.ts = [_Quadro(seq, t, jpeg, w, h, agora, img, extra)], [t]
                 self.cond.notify_all()
                 return True
             self.quadros.insert(i, _Quadro(seq, t, jpeg, w, h, agora, img))
@@ -521,16 +526,17 @@ class LivePipeline:
             self.cond.notify_all()
         return True
 
-    def receber_imagem(self, img, t=None, qualidade=80, largura_max=1280, sessao='servidor'):
-        """Quadro de uma fonte do proprio servidor (RTSP, HTTP, webcam, arquivo, video direto)."""
+    def receber_imagem(self, img, t=None, qualidade=80, largura_max=1280, sessao='servidor', extra=None):
+        """Quadro de uma fonte do proprio servidor (RTSP, HTTP, webcam, arquivo, video direto).
+        largura_max=None: a imagem segue inteira."""
         h, w = img.shape[:2]
-        if w > largura_max:
+        if largura_max and w > largura_max:
             s = largura_max / w
             img = cv2.resize(img, (int(w * s) // 2 * 2, int(h * s) // 2 * 2), interpolation=cv2.INTER_AREA)
             h, w = img.shape[:2]
         if self.perfil.get('imediato'):
             # imediato: a imagem vai aberta; o JPEG so e feito do quadro que for analisado
-            self.receber(None, t, None, sessao=sessao, w=w, h=h, img=img)
+            self.receber(None, t, None, sessao=sessao, w=w, h=h, img=img, extra=extra)
             return
         ok, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, qualidade])
         if ok:
@@ -661,11 +667,10 @@ class LivePipeline:
                     img = cv2.imdecode(np.frombuffer(q.jpeg, np.uint8), cv2.IMREAD_COLOR)
                     if img is None:
                         continue
-                elif q.jpeg is None:
+                elif q.jpeg is None and self.quer_jpeg_inteiro():
                     ok, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                    if not ok:
-                        continue
-                    q.jpeg, q.img = buf.tobytes(), None
+                    if ok:
+                        q.jpeg = buf.tobytes()
                 t0 = time.perf_counter()
                 # o JPEG original vai junto: outro servidor da conta pode adiantar parte do trabalho
                 analysis, dets, employees = self.analisar(img, q.t, perfil, q.jpeg)
@@ -704,7 +709,14 @@ class LivePipeline:
             return
         resultado['estimado'] = False
         texto = json.dumps({'type': 'quadro', **resultado}, ensure_ascii=False, separators=(',', ':'))
-        item = (q.seq, q.t, texto, q.jpeg, resultado)
+        # JPEG so para quem assiste pelo WebSocket (sem o video direto), e reduzido: codificar a
+        # imagem inteira em toda analise gastava tempo e banda com quem nao estava vendo
+        jpeg = q.jpeg
+        if q.img is not None:
+            with self.cond:
+                quer = any(s.video for s in self.assinantes)
+            jpeg = self._jpeg_do_painel(q.img) if quer else None
+        item = (q.seq, q.t, texto, jpeg, resultado)
         with self.cond:
             if geracao != self.geracao:
                 return
@@ -712,7 +724,8 @@ class LivePipeline:
             self.ultima_exibicao = agora
             self.recentes.append(item)
             self.ultimo_resultado = resultado
-            self.ultimo_jpeg = q.jpeg
+            self.ultimo_jpeg = q.jpeg if q.img is None else None
+            self.ultimo_img = q.img
             self.exibidos += 1
             self.taxa_saida.marcar(agora)
             subs = list(self.assinantes) + list(self.http.values())
@@ -773,6 +786,7 @@ class LivePipeline:
                 self.recentes.append(item)
                 self.ultimo_resultado = resultado
                 self.ultimo_jpeg = q.jpeg
+                self.ultimo_img = None
                 self.exibidos += 1
                 self.taxa_saida.marcar(agora)
                 subs = list(self.assinantes) + list(self.http.values())
@@ -805,6 +819,7 @@ class LivePipeline:
             **resumo,
             'seq': q.seq,
             't': round(q.t, 4),
+            **(q.extra or {}),
             'frame_w': w,
             'frame_h': h,
             'detections': [public_detection(d) for d in dets],
@@ -820,7 +835,30 @@ class LivePipeline:
             'atraso_ms': round(atraso * 1000),
         }
 
+    def _jpeg_do_painel(self, img):
+        h, w = img.shape[:2]
+        if max(h, w) > self.LADO_PAINEL:
+            s = self.LADO_PAINEL / max(h, w)
+            img = cv2.resize(img, (int(w * s) // 2 * 2, int(h * s) // 2 * 2), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        return buf.tobytes() if ok else None
+
     # ── leitura ─────────────────────────────────────────────────────
+    def imagem_atual(self):
+        """(contagem, resultado, imagem) do ultimo quadro exibido. A imagem vem aberta (matriz, no
+        tamanho da analise) ou em JPEG (bytes); None se ainda nao ha."""
+        with self.cond:
+            return self.exibidos, self.ultimo_resultado, (self.ultimo_img if self.ultimo_img is not None
+                                                          else self.ultimo_jpeg)
+
+    def jpeg_atual(self):
+        """JPEG do ultimo quadro exibido, sem desenhos (editor de areas, foto da camera)."""
+        _, _, img = self.imagem_atual()
+        if img is None or isinstance(img, bytes):
+            return img
+        ok, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return buf.tobytes() if ok else None
+
     def estatisticas(self):
         agora = time.perf_counter()
         with self.cond:

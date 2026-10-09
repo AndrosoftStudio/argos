@@ -199,6 +199,29 @@ def arquitetura_do_arquivo(caminho):
         return 'yolo'
 
 
+# TensorRT e PyTorch na mesma placa, em threads diferentes: enquanto o TensorRT prepara os nucleos
+# dele (primeiras execucoes), qualquer operacao do PyTorch na placa derruba as duas ("operation not
+# permitted when stream is capturing") e o quadro e perdido. Com um modelo TensorRT carregado, as
+# inferencias passam uma de cada vez por esta trava; sem TensorRT nada muda (rodam em paralelo).
+TRAVA_GPU = threading.RLock()
+_usa_trt = False
+
+
+class _SemTrava:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+_SEM_TRAVA = _SemTrava()
+
+
+def trava_gpu():
+    return TRAVA_GPU if _usa_trt else _SEM_TRAVA
+
+
 def _iou(a, b):
     ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
     iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
@@ -234,6 +257,14 @@ class EpiDetector:
         self.arquitetura = arquitetura_de(self.model) if backend == 'pytorch' else arquitetura_do_arquivo(model_path)
         self.device = device
         self.half = bool(is_cuda(device) and backend != 'tensorrt')
+        self.log = log
+        self._falhas_trt = 0
+        self.tam_trt = 640          # tamanho com que o modelo foi convertido (lido no aquecimento)
+        self._gemeo = None          # o mesmo modelo em PyTorch, para tamanhos que o convertido nao aceita
+        self._gemeo_trava = threading.Lock()
+        if backend == 'tensorrt':
+            global _usa_trt
+            _usa_trt = True
         names = self.model.names
         self.names = dict(names) if isinstance(names, dict) else dict(enumerate(names))
         self.class_names = [str(self.names[i]) for i in sorted(self.names)]
@@ -264,11 +295,64 @@ class EpiDetector:
                         'label': str(self.names.get(cls, cls)), 'cls': cls})
         return out
 
+    def _prever(self, fonte, imgsz, conf, augment=False):
+        """Uma chamada ao modelo. O TensorRT que falha 3 vezes seguidas e trocado pelo modelo PyTorch
+        original: mais lento, mas a camera nao fica sem analise."""
+        # o modelo convertido em TensorRT so aceita o tamanho com que foi convertido (a biblioteca le
+        # do proprio arquivo quando o tamanho nao e informado)
+        tam = {} if self.backend == 'tensorrt' else {'imgsz': imgsz}
+        with trava_gpu():
+            try:
+                r = self.model.predict(fonte, conf=conf, iou=0.5, device=self.device, verbose=False,
+                                       augment=augment and self.arquitetura != 'detr',
+                                       **tam, **precision_kwargs(self.half))
+                self._falhas_trt = 0
+                return r
+            except Exception as e:
+                if self.backend != 'tensorrt':
+                    raise
+                self._falhas_trt += 1
+                if self._falhas_trt < 3:
+                    raise
+                self.log(f'TensorRT falhou 3 vezes seguidas ({str(e)[:120]}); usando o modelo PyTorch original')
+                from ultralytics import YOLO
+                self.model = YOLO(self.model_path)
+                self.runtime_path, self.backend = self.model_path, 'pytorch'
+                self.half = bool(is_cuda(self.device))
+                self._falhas_trt = 0
+                return self.model.predict(fonte, imgsz=imgsz, conf=conf, iou=0.5, device=self.device, verbose=False,
+                                          **precision_kwargs(self.half))
+
+    def aquecer(self, imgsz=640):
+        """Primeira inferencia, sozinha na placa (carrega o modelo e prepara os nucleos), antes de a
+        camera comecar: feita no meio da analise, ela atrasava os primeiros quadros e, no TensorRT,
+        brigava com a pose. imgsz: o tamanho que a camera vai usar."""
+        import numpy as np
+        try:
+            self._prever(np.zeros((384, 640, 3), np.uint8), 640, 0.5)
+            if self.backend == 'tensorrt':
+                tam = self.model.predictor.args.imgsz
+                self.tam_trt = int(max(tam)) if isinstance(tam, (list, tuple)) else int(tam)
+                if imgsz > self.tam_trt:
+                    self._par_pytorch().aquecer(imgsz)
+            elif imgsz != 640:
+                self._prever(np.zeros((imgsz * 9 // 16 // 32 * 32, imgsz, 3), np.uint8), imgsz, 0.5)
+        except Exception as e:
+            self.log(f'aquecimento do detector falhou: {str(e)[:120]}')
+
+    def _par_pytorch(self):
+        """O modelo original (.pt) ao lado do convertido. O TensorRT so aceita o tamanho da conversao
+        (640): imagem maior, que e o que mostra o EPI de quem esta longe, roda neste."""
+        with self._gemeo_trava:
+            if self._gemeo is None:
+                self._gemeo = EpiDetector(self.model_path, self.device, use_tensorrt=False, log=self.log)
+            return self._gemeo
+
     def detect(self, img, imgsz=640, conf=0.35, augment=False):
         # o RT-DETR nao tem aumento no teste (TTA); o iou e ignorado por ele, que ja sai sem NMS
-        r = self.model.predict(img, imgsz=imgsz, conf=conf, iou=0.5, device=self.device, verbose=False,
-                               augment=augment and self.arquitetura != 'detr', **precision_kwargs(self.half))[0]
-        return self._convert(r)
+        if self.backend == 'tensorrt' and imgsz > self.tam_trt:
+            return self._par_pytorch().detect(img, imgsz, conf, augment)
+        return self._convert(self._prever(img, imgsz, conf, augment)[0])
 
     def detect_crops(self, img, boxes, imgsz=640, conf=0.3, margin=0.15, min_px=24):
         """Detector em recortes de cada pessoa ampliados para imgsz: EPIs pequenos ficam visiveis."""
@@ -284,8 +368,12 @@ class EpiDetector:
             offsets.append((cx1, cy1))
         if not crops:
             return []
-        results = self.model.predict(crops, imgsz=imgsz, conf=conf, iou=0.5, device=self.device, verbose=False,
-                                     **precision_kwargs(self.half))
+        if self.backend == 'tensorrt':
+            # o modelo convertido aceita uma imagem por vez: varios recortes juntos davam erro
+            # ("input size [2, 3, 640, 640] not equal to max model size") e o quadro inteiro se perdia
+            results = [self._prever(c, imgsz, conf)[0] for c in crops]
+        else:
+            results = self._prever(crops, imgsz, conf)
         out = []
         for r, (dx, dy) in zip(results, offsets):
             out.extend(self._convert(r, dx, dy))

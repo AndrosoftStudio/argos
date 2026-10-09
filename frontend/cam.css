@@ -30,6 +30,7 @@ html,body{background:var(--navy);color:#fff;font-family:'Outfit',system-ui,sans-
 .mode-info{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:7px 14px;font-size:.88rem;}
 .mode-info b{color:var(--gold);}
 .mode-info .ic{width:18px;height:18px;color:var(--gold);}
+.mode-aviso{margin:-6px 8px 0;max-width:420px;font-size:.78rem;line-height:1.35;text-align:center;color:rgba(255,255,255,.82);}
 /* botao redondo grande: o gesto e so tocar */
 .btn-redondo{display:flex;flex-direction:column;align-items:center;gap:6px;background:none;border:0;color:#fff;font:600 .9rem 'Outfit',system-ui,sans-serif;cursor:pointer;}
 .btn-redondo .circulo{width:84px;height:84px;border-radius:50%;display:grid;place-items:center;border:4px solid var(--gold);transition:transform .15s;}
