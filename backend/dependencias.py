@@ -44,7 +44,8 @@ MARCA_TRT = os.path.join(MOTOR, 'argos-trt-id.txt')      # vem dentro do pacote 
 DOWNLOADS_PADRAO = 'https://pub-6b5befc214654d93bdc0345875151ea0.r2.dev/argosepi-discovery/'
 
 _lock = threading.Lock()
-_estado = {'status': 'parado', 'etapa': '', 'log': [], 'inicio': 0.0, 'fim': 0.0, 'erro': ''}
+# pct: quanto do download ja veio (None nas etapas sem medida, como instalar e conferir)
+_estado = {'status': 'parado', 'etapa': '', 'pct': None, 'log': [], 'inicio': 0.0, 'fim': 0.0, 'erro': ''}
 
 
 def preparar_caminho():
@@ -84,6 +85,7 @@ def _registrar(linha: str):
 def _etapa(txt: str):
     with _lock:
         _estado['etapa'] = txt
+        _estado['pct'] = None
     _registrar('== ' + txt)
 
 
@@ -163,6 +165,7 @@ def _instalar_no_programa():
                     if pct != ultimo:
                         ultimo = pct
                         with _lock:
+                            _estado['pct'] = int(pct)
                             _estado['etapa'] = (f'Baixando o TensorRT: {pct}% '
                                                 f'({feito / 1073741824:.1f} de {total / 1073741824:.1f} GB)')
         if pac.get('sha256') and soma.hexdigest() != pac['sha256']:
@@ -245,6 +248,6 @@ def instalar() -> dict:
     with _lock:
         if _estado['status'] == 'instalando':
             return {'iniciado': False, 'status': 'instalando'}
-        _estado.update(status='instalando', etapa='Começando', log=[], inicio=time.time(), fim=0.0, erro='')
+        _estado.update(status='instalando', etapa='Começando', pct=None, log=[], inicio=time.time(), fim=0.0, erro='')
     threading.Thread(target=_trabalho, daemon=True, name='instalar-tensorrt').start()
     return {'iniciado': True, 'status': 'instalando'}

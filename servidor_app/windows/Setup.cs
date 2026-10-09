@@ -20,6 +20,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -91,6 +92,9 @@ namespace ArgosEPI.Instalador
         ProgressBar barra;
         LinkLabel lnkDetalhes;
         readonly CancellationTokenSource cancelar = new CancellationTokenSource();
+        // Atualizacao pedida pelo programa: so aparece uma janelinha com o andamento; esta tela grande
+        // fica invisivel e so volta se algo der errado (para mostrar o erro e o botao de tentar de novo).
+        JanelaAtualizando mini;
 
         public Tela(string fonte, string pastaAtualizar, string varianteArg)
         {
@@ -113,6 +117,48 @@ namespace ArgosEPI.Instalador
             AutoScaleMode = AutoScaleMode.Dpi;
             Shown += async (s, e) => await CarregarManifesto();
             FormClosing += (s, e) => cancelar.Cancel();
+            FormClosed += (s, e) => { if (mini != null) mini.Fechar(); };
+            if (pastaAtualizar != null)
+            {
+                Opacity = 0;
+                ShowInTaskbar = false;
+                FormBorderStyle = FormBorderStyle.FixedToolWindow;      // fora do Alt+Tab enquanto invisivel
+                mini = new JanelaAtualizando(Icon);
+                mini.Show();
+            }
+        }
+
+        // algo deu errado na atualizacao: fecha a janelinha e mostra a tela grande, com os detalhes
+        void Revelar()
+        {
+            if (mini == null) return;
+            mini.Fechar();
+            mini = null;
+            FormBorderStyle = FormBorderStyle.FixedSingle;
+            ShowInTaskbar = true;
+            Opacity = 1;
+            CenterToScreen();
+            Activate();
+        }
+
+        // espera a janela do programa aparecer (ate 15 s) para a janelinha nao sumir antes dela
+        async Task EsperarJanela(string pasta)
+        {
+            var exe = Path.Combine(pasta, "ArgosEPI.exe");
+            for (int i = 0; i < 60; i++)
+            {
+                await Task.Delay(250);
+                try
+                {
+                    foreach (var p in Process.GetProcessesByName("ArgosEPI"))
+                    {
+                        string caminho = null;
+                        try { caminho = p.MainModule.FileName; } catch { }
+                        if (caminho != null && string.Equals(caminho, exe, StringComparison.OrdinalIgnoreCase) && p.MainWindowHandle != IntPtr.Zero) return;
+                    }
+                }
+                catch { }
+            }
         }
 
         // ---------- pagina 1: escolhas ----------
@@ -243,6 +289,7 @@ namespace ArgosEPI.Instalador
                 });
                 manifesto = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(txt);
                 lblVersao.Text = "Versão " + Str(manifesto, "versao") + " · servidor de câmeras com IA para EPIs";
+                if (mini != null) mini.Versao("versão " + Str(manifesto, "versao"));
                 var w = Obj(manifesto, "windows");
                 if (Obj(w, "programa2") == null || Obj(w, "nucleo") == null || Obj(w, "base") == null)
                     throw new Exception("este instalador é de outra versão: baixe o instalador de novo pelo site");
@@ -262,6 +309,7 @@ namespace ArgosEPI.Instalador
                                             : "Sem acesso aos arquivos de instalação. Confira a internet e abra de novo.";
                 lblVersao.ForeColor = Perigo;
                 Log("latest.json: " + ex.Message);
+                Revelar();
             }
         }
 
@@ -330,12 +378,21 @@ namespace ArgosEPI.Instalador
             lblDetalhe.Text = ok ? "Tudo já veio instalado (programa, bibliotecas e modelos): nada mais é baixado. Agora é só abrir e vincular à sua conta pela janela do programa."
                                  : erro + "\nO que já foi baixado fica guardado: tentar de novo continua de onde parou.";
             lblDetalhe.ForeColor = ok ? Suave : Perigo;
-            if (!ok) { txtLog.Visible = true; lnkDetalhes.Text = "Esconder detalhes"; btnTentar.Visible = true; }
+            if (!ok) { txtLog.Visible = true; lnkDetalhes.Text = "Esconder detalhes"; btnTentar.Visible = true; Revelar(); }
             chkAbrir.Visible = ok;
             btnConcluir.Visible = true;
             btnConcluir.Text = ok ? "Concluir" : "Fechar";
             if (Portatil) chkAbrir.Checked = false;
-            if (ok && pastaAtualizar != null) { if (!Portatil) Abrir(pasta); Close(); }
+            if (ok && pastaAtualizar != null)
+            {
+                if (!Portatil)
+                {
+                    if (mini != null) mini.Definir("Abrindo o " + Principal.Nome + "...", 100, "Atualizado para a versão " + Str(manifesto, "versao"));
+                    Abrir(pasta);
+                    await EsperarJanela(pasta);
+                }
+                Close();
+            }
         }
 
         void Executar(string pasta, bool iniciar, bool atalho, CancellationToken ct)
@@ -994,6 +1051,7 @@ namespace ArgosEPI.Instalador
             if (titulo != null) { lblEtapa.Text = titulo; Log("> " + titulo); }
             if (milesimos >= 0) barra.Value = Math.Max(0, Math.Min(1000, milesimos));
             if (detalhe != null) lblDetalhe.Text = detalhe;
+            if (mini != null) mini.Definir(lblEtapa.Text, barra.Value / 10, lblDetalhe.Text);
         }
 
         void Log(string s)
@@ -1035,6 +1093,115 @@ namespace ArgosEPI.Instalador
     }
 
     // Placa de video: NVIDIA -> nvidia; AMD Radeon ou Intel Arc/Iris Xe -> dml; o resto -> cpu.
+    // ---------------------------------------------------------------- janelinha da atualizacao
+    // Logo com um anel girando, o que esta sendo feito e uma barra fina. E o que a pessoa ve quando
+    // toca em "Atualizar" no programa: ele fecha, isto aparece, e no fim o programa abre de novo.
+    public class JanelaAtualizando : Form
+    {
+        static readonly Color Fundo = Color.FromArgb(8, 10, 29), Trilho = Color.FromArgb(40, 46, 96), Ouro = Color.FromArgb(251, 195, 67),
+            Azul = Color.FromArgb(77, 88, 216), Texto = Color.FromArgb(233, 235, 251), Suave = Color.FromArgb(167, 176, 228);
+        const int Largura = 400, Altura = 276;
+        readonly System.Windows.Forms.Timer anim;
+        readonly Image logo;
+        readonly float k = 1f;              // escala da tela (125%, 150%...)
+        string status = "Preparando a atualização...", detalhe = "", versao = "";
+        int pct = -1;
+        float angulo, fase;
+        bool podeFechar;
+
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")] static extern IntPtr CreateRoundRectRgn(int l, int t, int r, int b, int w, int h);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool ReleaseCapture();
+        [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+
+        public JanelaAtualizando(Icon icone)
+        {
+            Text = "Atualizando o " + Principal.Nome;
+            FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.CenterScreen;
+            BackColor = Fundo;
+            ShowInTaskbar = true;
+            try { using (var g = CreateGraphics()) k = Math.Max(1f, g.DpiX / 96f); } catch { }
+            ClientSize = new Size((int)(Largura * k), (int)(Altura * k));
+            if (icone != null)
+            {
+                Icon = icone;
+                try { logo = new Icon(icone, 256, 256).ToBitmap(); } catch { }
+            }
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
+            Region = Region.FromHrgn(CreateRoundRectRgn(0, 0, ClientSize.Width + 1, ClientSize.Height + 1, (int)(26 * k), (int)(26 * k)));
+            // arrasta por qualquer ponto
+            MouseDown += (s, e) => { if (e.Button == MouseButtons.Left) { ReleaseCapture(); SendMessage(Handle, 0xA1, (IntPtr)2, IntPtr.Zero); } };
+            // fechar no meio deixaria a instalacao pela metade: so o instalador fecha esta janela
+            FormClosing += (s, e) => { if (!podeFechar && e.CloseReason == CloseReason.UserClosing) e.Cancel = true; };
+            anim = new System.Windows.Forms.Timer { Interval = 16 };
+            anim.Tick += (s, e) => { angulo = (angulo + 5f) % 360; fase += 0.045f; Invalidate(); };
+            anim.Start();
+        }
+
+        public void Definir(string st, int porcento, string det)
+        {
+            if (IsDisposed) return;
+            if (!string.IsNullOrEmpty(st)) status = st;
+            pct = porcento;
+            detalhe = det ?? "";
+            Invalidate();
+        }
+
+        public void Versao(string v) { versao = v ?? ""; Invalidate(); }
+
+        public void Fechar()
+        {
+            podeFechar = true;
+            anim.Stop();
+            try { if (!IsDisposed) Close(); } catch { }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.Clear(Fundo);
+            g.ScaleTransform(k, k);
+            // brilho azul atras da logo, como o fundo do painel
+            using (var gp = new GraphicsPath())
+            {
+                gp.AddEllipse(Largura / 2 - 170, -90, 340, 270);
+                using (var pb = new PathGradientBrush(gp) { CenterColor = Color.FromArgb(90, Azul), SurroundColors = new[] { Color.FromArgb(0, Fundo) } }) g.FillPath(pb, gp);
+            }
+            using (var faixa = new SolidBrush(Ouro)) g.FillRectangle(faixa, 0, 0, Largura, 5);
+            float cx = Largura / 2f, cy = 92, r = 50;
+            if (logo != null)
+            {
+                float t = 62 * (1 + 0.02f * (float)Math.Sin(fase * 2));
+                g.DrawImage(logo, new RectangleF(cx - t / 2, cy - t / 2, t, t));
+            }
+            var anel = new RectangleF(cx - r, cy - r, r * 2, r * 2);
+            using (var trilho = new Pen(Trilho, 3.5f)) g.DrawEllipse(trilho, anel);
+            using (var pen = new Pen(Ouro, 3.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            {
+                float arco = 70 + 110 * (0.5f + 0.5f * (float)Math.Sin(fase * 1.6));
+                g.DrawArc(pen, anel, angulo - 90, arco);
+            }
+            var centro = new StringFormat { Alignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
+            using (var ft = new Font("Segoe UI Semibold", 12.5f))
+            using (var b = new SolidBrush(Texto))
+                g.DrawString(status, ft, b, new RectangleF(14, 160, Largura - 28, 28), centro);
+            using (var fd = new Font("Segoe UI", 9f))
+            using (var b = new SolidBrush(Suave))
+                g.DrawString(detalhe, fd, b, new RectangleF(14, 190, Largura - 28, 20), centro);
+            // barra fina com o andamento
+            var barra = new RectangleF(56, 222, Largura - 112, 5);
+            using (var bt = new SolidBrush(Trilho)) g.FillRectangle(bt, barra);
+            if (pct > 0)
+                using (var ba = new SolidBrush(Ouro)) g.FillRectangle(ba, barra.X, barra.Y, barra.Width * Math.Min(100, pct) / 100f, barra.Height);
+            using (var fv = new Font("Segoe UI", 8f))
+            using (var b = new SolidBrush(Suave))
+                g.DrawString(Principal.Nome + (versao.Length > 0 ? " · " + versao : ""), fv, b, new RectangleF(14, 242, Largura - 28, 18), centro);
+        }
+    }
+
     public class Placa
     {
         public string Nome, Modo = "cpu", Resumo = "Nenhuma placa de vídeo dedicada encontrada: o recomendado é só o processador.";

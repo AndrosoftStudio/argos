@@ -561,6 +561,45 @@ def _mark_tensorrt_job_error(engine_path: str, uid: str | None, model_name: str 
     return updated
 
 
+# Quanto tempo a ultima conversao para TensorRT levou neste computador: e a estimativa que o
+# painel e a janela do programa mostram (a conversao em si nao informa andamento).
+_TEMPO_TRT = os.path.join(BASE_DIR, 'dados', 'tensorrt_tempo.json')
+
+
+def _tempo_conversao():
+    try:
+        with open(_TEMPO_TRT, encoding='utf-8') as f:
+            return int(json.load(f).get('ultima_s') or 0) or None
+    except (OSError, ValueError):
+        return None
+
+
+def _guardar_tempo_conversao(segundos):
+    try:
+        with open(_TEMPO_TRT, 'w', encoding='utf-8') as f:
+            json.dump({'ultima_s': int(segundos)}, f)
+    except OSError:
+        pass
+
+
+def _tarefas_servidor() -> list:
+    """Trabalhos demorados deste servidor agora (baixar o TensorRT, converter um modelo): o painel
+    e a janela do programa mostram o andamento."""
+    tarefas = []
+    d = dependencias.estado()
+    if d.get('status') == 'instalando':
+        tarefas.append({'tipo': 'tensorrt_instalar', 'titulo': 'Instalando o TensorRT', 'etapa': d.get('etapa') or '',
+                        'pct': d.get('pct'), 'desde': d.get('inicio') or None})
+    with optimization_jobs_lock:
+        jobs = [dict(j) for j in optimization_jobs.values()]
+    for j in jobs:
+        if j.get('status') == 'running':
+            tarefas.append({'tipo': 'tensorrt_converter', 'titulo': 'Convertendo o modelo para TensorRT',
+                            'etapa': str(j.get('model') or ''), 'pct': None, 'desde': j.get('started_at'),
+                            'estimativa_s': _tempo_conversao()})
+    return tarefas
+
+
 def _tensorrt_status_for_path(model_path: str, uid=None, model_name=None) -> dict:
     engine_path = _engine_path_for_model(model_path)
     key = engine_path
@@ -588,12 +627,14 @@ def _tensorrt_status_for_path(model_path: str, uid=None, model_name=None) -> dic
         'available': _is_cuda_backend() and not dep_error,
         'enabled': os.environ.get('EPI_USE_TENSORRT', '1').strip().lower() not in ('0', 'false', 'no', 'off'),
         'dependency_error': dep_error,
+        'sem_gpu': not _is_cuda_backend(),         # servidor sem placa NVIDIA: TensorRT nao se aplica
         # com GPU e so faltando pacote, o painel mostra o botao de instalar
         'pode_instalar': bool(dep_error) and _is_cuda_backend() and bool(dependencias.faltando()),
         'engine_exists': engine_exists,
         'engine_name': os.path.basename(engine_path),
         'engine_path': engine_path if engine_exists else None,
         'job': job or trt_meta or None,
+        'estimativa_s': _tempo_conversao(),      # quanto a ultima conversao levou aqui
     }
 
 
@@ -633,6 +674,7 @@ def _export_tensorrt_async(uid: str, model_name: str, model_path: str, reason='m
     _set_tensorrt_meta(uid, model_name, dict(optimization_jobs[key]))
 
     def _job():
+        inicio = time.time()
         try:
             from ultralytics import YOLO as _YOLO
             model = _YOLO(model_path)
@@ -646,7 +688,9 @@ def _export_tensorrt_async(uid: str, model_name: str, model_path: str, reason='m
                 'engine_name': os.path.basename(engine_path),
                 'engine_path': engine_path,
                 'finished_at': time.time(),
+                'duracao_s': round(time.time() - inicio),
             }
+            _guardar_tempo_conversao(time.time() - inicio)
             with optimization_jobs_lock:
                 optimization_jobs[key] = data
             _set_tensorrt_meta(uid, model_name, data)
@@ -941,7 +985,13 @@ def _start_cf(port=8088):
         if tunel_estado['estado'] not in ('falhou', 'bloqueado'):
             _tunel('abrindo')
         # 127.0.0.1 e nao localhost: o servidor do programa instalado so escuta em IPv4
-        proc = subprocess.Popen([cmd,"tunnel","--url",f"http://127.0.0.1:{port}","--no-autoupdate"],
+        # --protocol http2: so conexoes TCP de saida. No padrao (QUIC) o cloudflared, ao reconectar,
+        # reabre a MESMA porta UDP de antes, e porta escolhida faz o Windows mostrar o aviso do
+        # Firewall (que so um administrador aceita). ARGOS_TUNEL_PROTOCOLO=quic|auto volta atras.
+        protocolo = os.environ.get('ARGOS_TUNEL_PROTOCOLO', 'http2').strip().lower()
+        if protocolo not in ('http2', 'quic', 'auto'):
+            protocolo = 'http2'
+        proc = subprocess.Popen([cmd,"tunnel","--url",f"http://127.0.0.1:{port}","--no-autoupdate","--protocol",protocolo],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
             encoding='utf-8', errors='replace')
         url, erros, aberto_em = None, [], 0.0
@@ -1282,6 +1332,7 @@ def resumo_local():
                                  'ram_total': metrics.get('ram_total'), 'gpu_name': metrics.get('gpu_name'),
                                  'gpu_pct': metrics.get('gpu_pct'), 'cpu_count': psutil.cpu_count(logical=True)},
                         hardware=_hardware_servidor(), cameras=cameras, ajuda=ajuda.resumo(),
+                        tarefas=_tarefas_servidor(),
                         ajudou=ajuda.capacidades().get('atendidos')))
 
 
@@ -1973,6 +2024,9 @@ if sock:
                     destino = mover_para.pop(sid, None)
                     if destino and now - destino[1] < 60:    # o painel escolheu outro servidor para esta camera
                         out.json({'type': 'mover', 'url': destino[0]})
+                    aviso = cur.direto_aviso()
+                    if aviso:                                # video direto perdendo pacotes: volta ao envio normal
+                        out.json({'type': 'direto', 'usar': False, 'motivo': aviso[0], 'espera_s': aviso[1]})
                     if sub.fechado and sub is state['sub']:
                         with removed_streams_lock:
                             removed = sid in removed_streams
@@ -2025,7 +2079,7 @@ if sock:
         seguido do quadro binario com o mesmo seq, 'aguardando' (stream ainda nao existe), 'removido'.
         O painel manda {"type":"ping"}; sem nada por 20 s a conexao e fechada."""
         out = _WsSender(ws)
-        u, err = _auth()
+        u, err = _auth_ver()
         if err or '_cam_session' in u:
             out.json({'type': 'erro', 'error': 'Sessão inválida'})
             return
@@ -3492,7 +3546,7 @@ def delete_cam_token_route(token):
 @app.route('/rtc/ice', methods=['GET'])
 def rtc_ice():
     """Servidores STUN/TURN para o navegador montar a conexao direta."""
-    _u, err = _auth()
+    _u, err = _auth_ver()
     if err: return err
     return jsonify({'iceServers': rtc.servidores_ice(), **rtc.situacao()})
 
@@ -3515,6 +3569,10 @@ def rtc_publicar(sid):
     if not p: return jsonify({'error': 'Stream removido'}), 410
     if not p.public_config().get('imediato'):
         return jsonify({'error': 'O vídeo direto vale só no modo tempo real.', 'codigo': 'modo'}), 409
+    espera = p.direto_espera()
+    if espera > 0:
+        return jsonify({'error': 'A rede estava perdendo pacotes do vídeo direto: usando o envio normal por enquanto.',
+                        'codigo': 'instavel', 'espera_s': round(espera)}), 409
     try:
         resposta, sessao = rtc.publicar(sid, sdp)
     except Exception as e:
@@ -3525,8 +3583,8 @@ def rtc_publicar(sid):
 
 @app.route('/rtc/assistir/<sid>', methods=['POST'])
 def rtc_assistir(sid):
-    """O painel pede o mesmo video que a camera esta mandando (sem recodificar)."""
-    u, err = _auth()
+    """O painel (ou a TV) pede o mesmo video que a camera esta mandando (sem recodificar)."""
+    u, err = _auth_ver()
     if err: return err
     if '_cam_session' in u: return jsonify({'error': 'Câmeras não assistem.'}), 403
     if not _stream_permitido(u, sid): return _stream_negado()
@@ -3543,9 +3601,10 @@ def rtc_assistir(sid):
 
 @app.route('/rtc/sessao/<sid>/<tipo>/<sessao>', methods=['DELETE'])
 def rtc_encerrar(sid, tipo, sessao):
-    u, err = _auth()
+    u, err = _auth_ver()
     if err: return err
     if not _stream_permitido(u, sid): return _stream_negado()
+    if '_tv' in u and tipo != 'whep': return jsonify({'error': 'A TV só assiste.'}), 403
     rtc.encerrar(sid, tipo, sessao)
     return jsonify({'ok': True})
 
@@ -3553,8 +3612,18 @@ def rtc_encerrar(sid, tipo, sessao):
 # ═══════════════════════════════════════════════════════════════
 # TV — tela que toca a sirene e fala os avisos (link criado em Dispositivos)
 # ═══════════════════════════════════════════════════════════════
+def _auth_ver():
+    """Quem pode assistir uma camera: a conta (painel) ou uma TV da conta. Devolve (usuario, erro).
+    A TV so assiste: nao muda ajuste, nao lista cadastro e nao manda video."""
+    info = _auth_tv()
+    if info:
+        return {'id': info['uid'], '_tv': info['nome']}, None
+    return _auth()
+
+
 def _auth_tv():
-    """Token de TV (tv_...). So abre as rotas da TV: nao le cadastros nem cameras."""
+    """Token de TV (tv_...). So abre as rotas da TV e deixa assistir as cameras da conta
+    (/ws/view e /rtc/assistir): nao le cadastros nem muda nada."""
     t = _token() or ''
     if not t.startswith('tv_'):
         return None
@@ -3571,7 +3640,8 @@ def _faltas_agora(uid) -> dict:
     """O que as cameras da conta estao vendo neste instante (a TV mostra enquanto durar)."""
     with user_streams_lock:
         sids = list(user_streams.get(uid, []))
-    cameras, pessoas, faltas = 0, 0, []
+    cameras, pessoas, faltas, cams = 0, 0, [], []
+    nomes = None
     for sid in sids:
         with streams_lock:
             p = streams.get(sid)
@@ -3581,6 +3651,12 @@ def _faltas_agora(uid) -> dict:
         if p.pipeline.estatisticas()['sem_sinal']:
             continue
         cameras += 1
+        nome = ''
+        if sid.startswith('remote_'):          # celular: o nome dado ao link em Dispositivos
+            if nomes is None:
+                nomes = {seguranca.sid_do_token_camera(t['token']): t['nome'] for t in user_mgr.list_cam_tokens(uid)}
+            nome = nomes.get(sid) or ''
+        cams.append({'sid': sid, 'nome': nome})
         for q in r.get('persons') or []:
             pessoas += 1
             epis = q.get('epis') or {}
@@ -3590,7 +3666,7 @@ def _faltas_agora(uid) -> dict:
                 faltas.append({'nome': q.get('nome') or '', 'itens': itens, 'area': q.get('area') or '',
                                'camera': sid, 'queda': queda,
                                'ha_s': max([float((epis.get(i) or {}).get('faltando_ha') or 0) for i in itens] or [0])})
-    return {'cameras': cameras, 'pessoas': pessoas, 'faltas': faltas[:12]}
+    return {'cameras': cameras, 'pessoas': pessoas, 'faltas': faltas[:12], 'cams': cams[:9]}
 
 
 @app.route('/tv/estado', methods=['GET'])

@@ -261,7 +261,7 @@
         body: opts.body ? JSON.stringify(opts.body) : undefined,
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { const e = new Error(d.error || ('HTTP ' + r.status)); e.status = r.status; e.codigo = d.codigo; throw e; }
+      if (!r.ok) { const e = new Error(d.error || ('HTTP ' + r.status)); e.status = r.status; e.codigo = d.codigo; e.espera_s = d.espera_s; throw e; }
       return d;
     } finally { clearTimeout(t); }
   }
@@ -269,8 +269,8 @@
   /* Uma conexão WebRTC com o servidor: 'enviar' (câmera) ou 'assistir' (painel).
      O aperto de mãos vai pelas rotas /rtc/... do servidor; o vídeo vai por UDP, direto. */
   class DirectLink {
-    constructor({ backendUrl, token, streamId, modo, track = null, fps = 30, onState = null, onTrack = null }) {
-      Object.assign(this, { backendUrl, token, streamId, modo, track, fps, onState, onTrack });
+    constructor({ backendUrl, token, streamId, modo, track = null, fps = 30, altura = 720, onState = null, onTrack = null }) {
+      Object.assign(this, { backendUrl, token, streamId, modo, track, fps, altura, onState, onTrack });
       this.pc = null;
       this.sessao = '';
       this.estado = 'novo';     // novo | conectando | ligado | caiu | fechado
@@ -341,16 +341,19 @@
       try {
         const p = this.sender.getParameters();
         if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-        p.encodings[0].maxBitrate = 3500000;
+        // Taxa contida de propósito: a análise não ganha nada com mais, e menos pacotes por segundo
+        // dão tempo de a retransmissão chegar quando o Wi-Fi perde algum (com 3,5 Mb/s a imagem quebrava).
+        p.encodings[0].maxBitrate = this.altura <= 480 ? 900000 : this.altura <= 720 ? 1600000 : 2800000;
         p.encodings[0].maxFramerate = this.fps;
         p.degradationPreference = 'maintain-framerate';
         await this.sender.setParameters(p);
       } catch (e) { /* o navegador escolhe */ }
     }
 
-    async trocarTrack(track, fps) {
+    async trocarTrack(track, fps, altura) {
       this.track = track;
       if (fps) this.fps = fps;
+      if (altura) this.altura = altura;
       if (this.sender && track) { await this.sender.replaceTrack(track); try { track.contentHint = 'motion'; } catch (e) { /* */ } this._limites(); }
     }
 
@@ -461,12 +464,13 @@
       if (!track || track.readyState !== 'live') return;
       if (this.link) {
         // a câmera foi reaberta (o painel mudou fps/resolução): troca a faixa sem derrubar a conexão
-        if (this.link.track !== track) this.link.trocarTrack(track, this.config.fps).catch(() => {});
+        if (this.link.track !== track) this.link.trocarTrack(track, this.config.fps, this.config.resolucao).catch(() => {});
         return;
       }
       if (now() < (this._diretoDepois || 0)) return;
       const link = this.link = new DirectLink({
         backendUrl: this.backendUrl, token: this.token, streamId: this.streamId, modo: 'enviar', track, fps: this.config.fps,
+        altura: this.config.resolucao,
         onState: (st, motivo) => {
           if (this.link !== link) return;
           if (st === 'ligado') { this.diretoLigado = true; this.diretoFalhas = 0; this.diretoMotivo = ''; this._semFila(); }
@@ -474,16 +478,18 @@
         },
       });
       try { await link.abrir(); } catch (e) {
-        if (this.link === link) this._diretoCaiu(e.codigo === 'desligado' || e.codigo === 'indisponivel' ? 'vídeo direto indisponível no servidor' : (e.message || 'falhou'), e.codigo);
+        if (this.link === link) this._diretoCaiu(e.codigo === 'desligado' || e.codigo === 'indisponivel' ? 'vídeo direto indisponível no servidor' : (e.message || 'falhou'), e.codigo, e.espera_s);
       }
     }
 
-    _diretoCaiu(motivo, codigo) {
+    _diretoCaiu(motivo, codigo, esperaS) {
       this._fecharDireto();
       this.diretoFalhas++;
       this.diretoMotivo = motivo || '';
-      // tenta de novo com calma: 5 s, 15 s, 45 s... até 5 min (servidor sem o recurso: 5 min direto)
-      const espera = codigo === 'desligado' ? 300000 : Math.min(300000, 5000 * 3 ** Math.min(this.diretoFalhas - 1, 4));
+      // tenta de novo com calma: 5 s, 15 s, 45 s... até 5 min (servidor sem o recurso: 5 min direto).
+      // Rede perdendo pacotes: o servidor diz quanto esperar (o envio normal segue valendo).
+      const espera = esperaS ? esperaS * 1000 + 2000
+        : codigo === 'desligado' ? 300000 : Math.min(300000, 5000 * 3 ** Math.min(this.diretoFalhas - 1, 4));
       this._diretoDepois = now() + espera;
     }
 
@@ -593,6 +599,7 @@
             break;
           case 'config': this._applyConfig(d.config, d.janela_s); break;
           case 'mover': this.onMove && this.onMove(d.url); break;
+          case 'direto': if (d.usar === false) this._diretoCaiu('a rede estava perdendo pacotes: voltou ao envio normal', 'instavel', d.espera_s); break;
           case 'pong': if (d.t) this.rtt = this.rtt ? this.rtt * 0.7 + (now() - d.t) * 0.3 : now() - d.t; break;
           case 'removido': this.onStatus && this.onStatus('removido'); this.stop(); break;
           case 'erro': this.onStatus && this.onStatus('erro', d.error); break;

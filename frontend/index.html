@@ -16,14 +16,14 @@
 <meta name="twitter:card" content="summary_large_image">
 <script src="config.js"></script>
 <script type="module" src="google-login.js"></script>
-<script src="argos-stream.js?v=20261008"></script>
+<script src="argos-stream.js?v=20261009"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Outfit:wght@300;400;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="painel.css?v=20261008">
+<link rel="stylesheet" href="painel.css?v=20261009">
 </head>
 <body><div id="root"></div>
 <script type="text/babel">
@@ -445,7 +445,7 @@ function Perguntas(){
         <footer className="modal-actions">
           {p.tipo!=='info'&&<button type="button" className="btn btn-secondary" onClick={cancelar}>Cancelar</button>}
           <button type="submit" className={'btn '+(p.perigo&&p.tipo==='confirmar'?'btn-danger':'btn-primary')} data-foco={p.tipo!=='texto'||undefined}>
-            <Icon n={p.perigo&&p.tipo==='confirmar'?'trash':'check'}/>{p.botao}
+            <Icon n={p.icBotao||(p.perigo&&p.tipo==='confirmar'?'trash':'check')}/>{p.botao}
           </button>
         </footer>
       </form>
@@ -1069,7 +1069,7 @@ function AbasAjustes({atual}){
   );
 }
 
-function ServidoresPage({servidores,alcance,principalId,carregando,onAtualizar,onUsar,token,onToast}){
+function ServidoresPage({servidores,alcance,principalId,carregando,onAtualizar,onUsar,token,onToast,onModelos}){
   const renomear=async(s)=>{
     const nome=await pedirTexto({titulo:'Nome do servidor',ic:'server',valor:s.nome,placeholder:'Ex.: PC da portaria'});
     if(!nome||nome===s.nome) return;
@@ -1123,6 +1123,7 @@ function ServidoresPage({servidores,alcance,principalId,carregando,onAtualizar,o
                 </li>
               ))}
             </ul>
+            <ModelosDoServidor servidores={servidores} alcance={alcance} token={token} onToast={onToast} onMudou={onModelos}/>
             <section className="bloco" aria-labelledby="titulo-add-servidor">
               <header className="bloco-titulo"><Icon n="plus"/><h2 id="titulo-add-servidor">Adicionar outro servidor</h2>
               <Ajuda titulo="Como vincular um servidor" resumo="Ligue o Argos no computador e, nele mesmo, toque em “Adicionar este computador”.">
@@ -1987,6 +1988,22 @@ function ModalNovoDispositivo({onClose,onSave}){
   );
 }
 
+// Relógio que só anda enquanto há algo em andamento: tempo decorrido de uma tarefa demorada.
+function useAgora(ativo){
+  const [t,setT]=useState(()=>Date.now());
+  useEffect(()=>{
+    if(!ativo) return;
+    setT(Date.now());
+    const id=setInterval(()=>setT(Date.now()),1000);
+    return()=>clearInterval(id);
+  },[ativo]);
+  return t;
+}
+const tempoCorrido=(seg)=>{
+  const s=Math.max(0,Math.round(seg)),m=Math.floor(s/60);
+  return m?`${m} min ${String(s%60).padStart(2,'0')} s`:`${s} s`;
+};
+
 /* Instala o onnx e o TensorRT no servidor (só com GPU NVIDIA). Vários cards podem
    mostrar o botão: todos leem o mesmo estado do servidor. */
 function InstalarTensorRT({token,backendUrl,onPronto,onToast}){
@@ -2007,7 +2024,8 @@ function InstalarTensorRT({token,backendUrl,onPronto,onToast}){
     return()=>clearInterval(iv);
   },[instalando]);
   const instalar=async()=>{
-    if(!await confirmar({titulo:'Instalar o TensorRT neste servidor?',texto:`Baixa o onnx e o TensorRT da NVIDIA (${(st&&st.tamanho)||'~2 GB'}). Pode levar de 5 a 20 minutos, dependendo da internet. As câmeras continuam funcionando enquanto isso.`,botao:'Instalar'})) return;
+    if(!await confirmar({titulo:'Instalar o TensorRT neste servidor?',ic:'download',perigo:false,icBotao:'download',
+      texto:`Baixa o onnx e o TensorRT da NVIDIA (${(st&&st.tamanho)||'~2 GB'}). Pode levar de 5 a 20 minutos, dependendo da internet. As câmeras continuam funcionando enquanto isso.`,botao:'Instalar'})) return;
     setPedindo(true);
     try{
       const r=await authFetch(backendUrl+'/tensorrt/dependencias',token,{method:'POST'});
@@ -2018,17 +2036,22 @@ function InstalarTensorRT({token,backendUrl,onPronto,onToast}){
     }catch(e){onToast&&onToast(mensagemErro(e,'Erro ao instalar'),'err');}
     setPedindo(false);
   };
-  if(instalando) return(
-    <div className="instalar-trt" role="status">
-      <p className="dica-linha"><span className="giro"/>{st.etapa||'Instalando'}... (pode levar alguns minutos)</p>
-      {(st.log||[]).length>0&&<pre className="instalar-log">{st.log.slice(-4).join('\n')}</pre>}
-    </div>
-  );
+  const agora=useAgora(instalando);
+  if(instalando){
+    const corrido=st.inicio?Math.max(0,(agora/1000)-st.inicio):0;
+    return(
+      <div className="tarefa" role="status">
+        <p className="tarefa-linha"><span className="giro" aria-hidden="true"/><span>{st.etapa||'Instalando o TensorRT'}</span></p>
+        <progress className="barra" max={100} value={st.pct!=null?st.pct:undefined} aria-label="Instalação do TensorRT">{st.pct!=null?st.pct+'%':''}</progress>
+        <p className="tarefa-dica">Começou há {tempoCorrido(corrido)}. As câmeras continuam funcionando; o programa do servidor também mostra este andamento.</p>
+      </div>
+    );
+  }
   return(
     <div className="instalar-trt">
       {st&&st.status==='erro'&&<p className="err-msg" style={{margin:0}}><Icon n="alert"/>{st.erro}</p>}
       <button type="button" className="btn btn-secondary btn-sm" onClick={instalar} disabled={pedindo}>
-        <Icon n="zap"/>{pedindo?'Começando...':(st&&st.status==='erro'?'Tentar instalar de novo':'Instalar dependências do TensorRT')}
+        <Icon n="download"/>{pedindo?'Começando...':(st&&st.status==='erro'?'Tentar instalar de novo':'Instalar dependências do TensorRT')}
       </button>
     </div>
   );
@@ -2045,16 +2068,30 @@ function ModelCard({model,token,backendUrl,onRefresh,onToast,onSetDefault,defaul
   const trt=model.tensorrt||{};
   const trtJob=trt.job||{};
   const trtRunning=trtJob.status==='running';
-  const trtError=trt.dependency_error||trtJob.error||'';
-  const trtStatusText=trt.engine_exists?'engine pronto':(trtRunning?'convertendo...':(trtError?(trt.dependency_error?'dependencia faltando':'erro'):(trt.available?'disponivel':'indisponivel')));
-  const trtStatusColor=trt.engine_exists?'var(--ok)':(trtRunning?'var(--wn)':(trtError?'var(--dn)':(trt.available?'var(--wn)':'var(--dn)')));
+  // sem placa NVIDIA o TensorRT não se aplica, e "falta instalar" se resolve no bloco do servidor: nenhum dos dois é erro do modelo
+  const trtForaDoModelo=!!(trt.sem_gpu||trt.pode_instalar);
+  const trtError=trtForaDoModelo?'':(trt.dependency_error||trtJob.error||'');
+  const trtStatusText=trt.engine_exists?'pronto':(trtRunning?'convertendo...':(trt.sem_gpu?'só com placa NVIDIA':(trt.pode_instalar?'falta instalar':(trtError?(trt.dependency_error?'dependência faltando':'erro'):(trt.available?'pode converter':'indisponível')))));
+  const trtStatusColor=trt.engine_exists?'var(--ok)':(trtRunning?'var(--wn)':(trt.sem_gpu?'var(--mt)':(trt.pode_instalar?'var(--wn)':(trtError?'var(--dn)':(trt.available?'var(--wn)':'var(--dn)')))));
   const canConvertTensorRT=trt.available&&!converting&&!trtRunning&&!trt.dependency_error;
-  const trtButtonText=trt.engine_exists?'Reconverter TensorRT':(converting||trtRunning?'Convertendo...':(trtError&&!trt.dependency_error?'Tentar novamente':(trt.dependency_error?'Dependencia faltando':'Converter TensorRT')));
+  const trtButtonText=trt.engine_exists?'Converter de novo para TensorRT':(converting||trtRunning?'Convertendo...':(trtError&&!trt.dependency_error?'Tentar converter de novo':(trt.sem_gpu?'TensorRT: só com placa NVIDIA':(trt.dependency_error?'Instale o TensorRT no servidor primeiro':'Converter para TensorRT'))));
   useEffect(()=>{
     if(!trtRunning) return;
     const id=setInterval(()=>onRefresh&&onRefresh(),5000);
     return()=>clearInterval(id);
   },[trtRunning,model.name]);
+  // conversão: o TensorRT não informa andamento, então mostramos há quanto tempo começou e a estimativa
+  const agora=useAgora(trtRunning);
+  const trtCorrido=trtRunning&&trtJob.started_at?Math.max(0,agora/1000-trtJob.started_at):0;
+  const trtEstimativa=Number(trt.estimativa_s)||0;
+  const estavaConvertendo=useRef(false);
+  useEffect(()=>{
+    if(estavaConvertendo.current&&!trtRunning){
+      if(trt.engine_exists) onToast&&onToast('Modelo convertido para TensorRT'+(trtJob.duracao_s?` (levou ${tempoCorrido(trtJob.duracao_s)})`:'')+'. As câmeras passam a usar na próxima análise.');
+      else if(trtJob.error) onToast&&onToast('A conversão para TensorRT falhou: '+trtJob.error,'err');
+    }
+    estavaConvertendo.current=trtRunning;
+  },[trtRunning]);
   const saveConfig=async()=>{
     if(!canConfig){onToast&&onToast('Faça login para configurar modelos','err');return;}
     setSaving(true);
@@ -2085,7 +2122,7 @@ function ModelCard({model,token,backendUrl,onRefresh,onToast,onSetDefault,defaul
       const r=await authFetch(backendUrl+'/models/'+encodeURIComponent(model.name)+'/tensorrt',token,{method:'POST'});
       const d=await r.json();
       if(!r.ok) throw new Error(d.tensorrt?.error||d.error||'Erro ao converter');
-      onToast&&onToast('Conversao TensorRT iniciada');
+      onToast&&onToast('Conversão iniciada. O tempo aparece aqui e no programa do servidor.');
       onRefresh&&onRefresh();
     }catch(e){onToast&&onToast(mensagemErro(e,'Erro ao converter'),'err');}
     setConverting(false);
@@ -2107,7 +2144,13 @@ function ModelCard({model,token,backendUrl,onRefresh,onToast,onSetDefault,defaul
         <li className="chip" style={{color:trtStatusColor}}><Icon n="zap"/>TensorRT: {trtStatusText}</li>
       </ul>
       {trtError&&!trtRunning&&<p className="err-msg" style={{margin:0}}><Icon n="alert"/>{trtError}</p>}
-      {trt.pode_instalar&&canConfig&&<InstalarTensorRT token={token} backendUrl={backendUrl} onPronto={onRefresh} onToast={onToast}/>}
+      {trtRunning&&(
+        <div className="tarefa" role="status">
+          <p className="tarefa-linha"><span className="giro" aria-hidden="true"/><span>Convertendo para TensorRT · há {tempoCorrido(trtCorrido)}</span></p>
+          <progress className="barra" max={100} value={trtEstimativa?Math.min(96,trtCorrido/trtEstimativa*100):undefined} aria-label="Conversão para TensorRT"/>
+          <p className="tarefa-dica">{trtEstimativa?`Da última vez levou ${tempoCorrido(trtEstimativa)} neste servidor.`:'Costuma levar de 3 a 10 minutos (até 20 com a placa de vídeo ocupada).'} A conversão usa a placa de vídeo: a análise das câmeras pode ficar mais lenta até terminar.</p>
+        </div>
+      )}
       <form className="field" style={{margin:0}} onSubmit={enviar(saveConfig)}>
         <label htmlFor={idTitulo+'-epis'}><Icon n="helmet"/>{model.tipo==='base'?'Minha regra (EPIs)':'EPIs obrigatórios'}</label>
         <input id={idTitulo+'-epis'} value={requiredText} onChange={e=>setRequiredText(e.target.value)} disabled={!canConfig} placeholder="capacete, colete"/>
@@ -2120,6 +2163,108 @@ function ModelCard({model,token,backendUrl,onRefresh,onToast,onSetDefault,defaul
         {model.editable&&<button type="button" className="ib sm perigo dica-dir" onClick={removeModel} aria-label="Remover modelo" data-dica="Remover"><Icon n="trash"/></button>}
       </footer>
     </article>
+  );
+}
+
+/* Modelos de IA de cada servidor: os arquivos .pt, o TensorRT e a conversão ficam na máquina,
+   então a lista é de um servidor por vez (com vários na conta, escolhe-se qual). */
+function ModelosDoServidor({servidores,alcance,token,onToast,onMudou}){
+  const vivos=servidores.filter(s=>alcance[s.id]).map(s=>({id:s.id,nome:s.nome,base:alcance[s.id].base}));
+  const [sel,setSel]=useState('');
+  const atual=vivos.find(v=>v.id===sel)||vivos[0];
+  const base=atual?atual.base:'';
+  const [modelos,setModelos]=useState(null);
+  const [enviando,setEnviando]=useState(false);
+  const [pct,setPct]=useState(0);
+  const carregar=useCallback(async()=>{
+    if(!base) return;
+    try{
+      const r=await authFetch(base+'/models',token);
+      const d=await r.json().catch(()=>({}));
+      if(r.ok&&d.models) setModelos(d.models);
+    }catch{}
+  },[base,token]);
+  useEffect(()=>{setModelos(null);carregar();},[carregar]);
+  if(!atual) return null;
+  const padrao=((modelos||[]).find(m=>m.is_default)||{}).name||'';
+  // o TensorRT é instalado uma vez por servidor (não por modelo): o botão e o andamento ficam aqui
+  const faltaTrt=(modelos||[]).some(m=>(m.tensorrt||{}).pode_instalar&&m.configurable!==false);
+  const definirPadrao=async(nome)=>{
+    try{
+      const r=await authFetch(base+'/models/'+encodeURIComponent(nome)+'/default',token,{method:'POST'});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(d.error||'Erro ao definir padrão');
+      onToast('Modelo padrão salvo!');
+      await carregar();
+      onMudou&&onMudou();
+    }catch(e){onToast(mensagemErro(e,'Erro ao definir padrão'),'err');}
+  };
+  const enviarModelo=async(file)=>{
+    if(!file) return;
+    if(!String(file.name||'').toLowerCase().endsWith('.pt')){onToast('Envie um arquivo .pt','err');return;}
+    setEnviando(true);setPct(0);
+    try{
+      const fd=new FormData();
+      fd.append('model',file);
+      await new Promise((ok,falha)=>{
+        const xhr=new XMLHttpRequest();
+        xhr.open('POST',base+'/models/upload');
+        xhr.setRequestHeader('Authorization','Bearer '+token);
+        xhr.setRequestHeader('ngrok-skip-browser-warning','true');
+        xhr.upload.onprogress=(e)=>{if(e.lengthComputable) setPct(Math.max(1,Math.round((e.loaded/e.total)*100)));};
+        xhr.onload=()=>{
+          try{
+            const d=JSON.parse(xhr.responseText||'{}');
+            if(xhr.status>=200&&xhr.status<300) ok(d); else falha(new Error(d.error||'Erro ao enviar modelo'));
+          }catch(err){falha(err);}
+        };
+        xhr.onerror=()=>falha(new Error('Falha no envio do modelo'));
+        xhr.send(fd);
+      });
+      await carregar();
+      onMudou&&onMudou();
+      onToast('Modelo enviado para '+atual.nome+'!');
+    }catch(e){onToast(mensagemErro(e,'Erro ao enviar modelo'),'err');}
+    setEnviando(false);setPct(0);
+  };
+  return(
+    <section className="bloco" aria-labelledby="titulo-modelos">
+      <header className="bloco-titulo">
+        <Icon n="chip"/><h2 id="titulo-modelos">Modelos de IA</h2>
+        <Ajuda titulo="Modelos de IA" resumo="Os modelos ficam em cada servidor. O TensorRT deixa a detecção mais rápida em placa NVIDIA.">
+          <p>O <b>modelo</b> é o arquivo que reconhece as pessoas e os EPIs na imagem. Cada servidor tem os seus: enviar um arquivo .pt aqui manda só para o servidor escolhido.</p>
+          <p>A estrela marca o <b>modelo padrão</b> das câmeras novas daquele servidor. “Minha regra” é a lista de EPIs que o modelo cobra por padrão.</p>
+          <p><b>TensorRT</b> (só placa NVIDIA): deixa a detecção bem mais rápida. Primeiro instale as dependências (cerca de 2 GB, uma vez por servidor) e depois toque no raio para converter o modelo. A conversão leva alguns minutos e ocupa a placa de vídeo enquanto roda.</p>
+        </Ajuda>
+        <div className="acoes-dir">
+          <label className="btn btn-primary btn-sm" style={{cursor:'pointer'}}>
+            <Icon n="upload"/>{enviando?'Enviando...':'Enviar .pt'}
+            <input type="file" accept=".pt" className="sr" disabled={enviando} onChange={e=>{const f=e.target.files&&e.target.files[0]; if(f) enviarModelo(f); e.target.value='';}}/>
+          </label>
+        </div>
+      </header>
+      {vivos.length>1&&(
+        <Opcoes rotulo="Servidor dos modelos" valor={atual.id} onChange={setSel} className="filtros"
+          opcoes={vivos.map(v=>({id:v.id,ic:'server',txt:v.nome}))}/>
+      )}
+      {vivos.length===1&&<p className="dica-linha" style={{marginBottom:12}}><Icon n="server"/>Modelos do servidor {atual.nome}</p>}
+      {enviando&&(
+        <p className="progresso" style={{marginBottom:12}}>
+          <Icon n="upload"/><progress className="barra" max={100} value={pct||0} aria-label="Envio do modelo">{pct}%</progress><span aria-hidden="true">{pct}%</span>
+        </p>
+      )}
+      {faltaTrt&&(
+        <div className="trt-servidor">
+          <p className="dica-linha"><Icon n="zap"/>O TensorRT deixa a detecção mais rápida na placa NVIDIA. Ainda não está instalado em {atual.nome}.</p>
+          <InstalarTensorRT key={atual.id} token={token} backendUrl={base} onPronto={carregar} onToast={onToast}/>
+        </div>
+      )}
+      {modelos===null
+        ? <p className="dica-linha" role="status"><span className="giro" aria-hidden="true"/>Lendo os modelos do servidor...</p>
+        : <ul className="cards" aria-label={'Modelos de '+atual.nome}>
+            {modelos.map(model=><li key={atual.id+model.name}><ModelCard model={model} token={token} backendUrl={base} onRefresh={carregar} onToast={onToast} onSetDefault={definirPadrao} defaultModel={padrao} nivel={3}/></li>)}
+          </ul>}
+    </section>
   );
 }
 
@@ -3959,7 +4104,7 @@ function App(){
 
       {page==='servidores'&&(
         <ServidoresPage servidores={servidores} alcance={alcance} principalId={principalId} carregando={buscandoServidores}
-          onAtualizar={()=>carregarServidores()} onUsar={usarServidor} token={token} onToast={showToast}/>
+          onAtualizar={()=>carregarServidores()} onUsar={usarServidor} token={token} onToast={showToast} onModelos={loadModels}/>
       )}
 
       {page==='epis'&&!semServidor&&(
@@ -4192,6 +4337,7 @@ function App(){
                     </select>
                   </p>
                   <p className="field"><span className="field-rot"><Icon n="gauge"/>Placa de vídeo ou CPU</span><a className="btn btn-secondary" href="#servidores"><Icon n="server"/>Escolher em Servidores</a></p>
+                  <p className="field"><span className="field-rot"><Icon n="chip"/>Modelos de IA e TensorRT</span><a className="btn btn-secondary" href="#servidores"><Icon n="server"/>Ver em Servidores</a></p>
                 </form>
                 <ul className="diag" style={{marginTop:12}} aria-label="Situação">
                   <li className={"chip"+(online?' bom':' alerta')}><Icon n="server"/>{online?'online':'offline'}</li>
@@ -4200,25 +4346,6 @@ function App(){
                 </ul>
               </section>
 
-              <section className="bloco" aria-labelledby="titulo-modelos">
-                <header className="bloco-titulo">
-                  <Icon n="chip"/><h3 id="titulo-modelos">Modelos de IA</h3>
-                  <div className="acoes-dir">
-                    <label className="btn btn-primary btn-sm" style={{cursor:'pointer'}}>
-                      <Icon n="upload"/>{uploadingModel?'Enviando...':'Enviar .pt'}
-                      <input type="file" accept=".pt" className="sr" disabled={uploadingModel} onChange={e=>{const f=e.target.files&&e.target.files[0]; if(f) uploadModelFile(f); e.target.value='';}}/>
-                    </label>
-                  </div>
-                </header>
-                {uploadingModel&&(
-                  <p className="progresso" style={{marginBottom:12}}>
-                    <Icon n="upload"/><progress className="barra" max={100} value={uploadPct||0} aria-label="Envio do modelo">{uploadPct}%</progress><span aria-hidden="true">{uploadPct}%</span>
-                  </p>
-                )}
-                <ul className="cards" aria-label="Modelos disponíveis">
-                  {availableModels.map(model=><li key={model.name}><ModelCard model={model} token={token} backendUrl={backendUrl} onRefresh={loadModels} onToast={showToast} onSetDefault={setModelAsDefault} defaultModel={defaultModel}/></li>)}
-                </ul>
-              </section>
             </div>
           </details>
           </>}

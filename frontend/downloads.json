@@ -1,12 +1,12 @@
 {
-    "versao":  "20.4.0",
+    "versao":  "20.4.1",
     "data":  "2026-10-09",
-    "notas":  "Tempo real de verdade: o video vai direto da camera para o servidor (sem guardar segundos de video) e o painel mostra na hora. Pagina da TV com sirene e avisos falados com o nome do funcionario. Ajustes da camera em janela propria, com escolha do servidor e da analise de rosto. Editar funcionarios e EPIs. Desempenho mostra periodo, EPIs exigidos, area e o que a TV falou.",
+    "notas":  "Sem pedir permissao de administrador nem aviso do Firewall (video direto sem porta fixa, cameras RTSP so por TCP, tunel so por TCP). TV mostra as cameras ao vivo. Volta sozinho ao envio normal quando a rede perde pacotes. Modelos e TensorRT por servidor, com andamento no painel e no programa. Atualizacao em uma janelinha que reabre o programa.",
     "windows":  {
                     "setup":  {
                                   "url":  "ArgosEPI-Servidor-Setup.exe",
-                                  "tamanho":  134656,
-                                  "sha256":  "797a229d82f5bd29ee752b0829ca0e3b73a465d06aa9d2e5b5f1f4e660a9bb2f"
+                                  "tamanho":  141312,
+                                  "sha256":  "83dcfa6b618c665f3bd8a5020bd66be6ff7b9f10b021c16b67cb4d848a229337"
                               },
                     "base":  {
                                  "id":  "3335d94196",
@@ -24,22 +24,22 @@
                               },
                     "programa2":  {
                                       "nvidia":  {
-                                                     "url":  "win/argos-programa-20.4.0-nvidia.zip",
-                                                     "tamanho":  2744410,
-                                                     "sha256":  "94c85a1150bcc1bba374c4afa87208c486aed2174719d79bf91b0b45a907ad28",
-                                                     "descompactado":  3414673
+                                                     "url":  "win/argos-programa-20.4.1-nvidia.zip",
+                                                     "tamanho":  2755262,
+                                                     "sha256":  "fb96bc864e12b39ce9b0a405f6ee7fb2093be88937ad754b969143f3d38ead33",
+                                                     "descompactado":  3425509
                                                  },
                                       "dml":  {
-                                                  "url":  "win/argos-programa-20.4.0-dml.zip",
-                                                  "tamanho":  2744410,
-                                                  "sha256":  "243261ed1bbe7cb8482dbad971c552135e93caf649ff6b9006c61169398469f1",
-                                                  "descompactado":  3414673
+                                                  "url":  "win/argos-programa-20.4.1-dml.zip",
+                                                  "tamanho":  2755262,
+                                                  "sha256":  "e9782791a7a214d0087ff907b075e05e4e1d8a28bbe6aa30be4cb1b4333ee751",
+                                                  "descompactado":  3425509
                                               },
                                       "cpu":  {
-                                                  "url":  "win/argos-programa-20.4.0-cpu.zip",
-                                                  "tamanho":  2744410,
-                                                  "sha256":  "380c856f66a339457d3ea3656cc4fc00e85df5e28e6043258e5e4532405cdcef",
-                                                  "descompactado":  3414673
+                                                  "url":  "win/argos-programa-20.4.1-cpu.zip",
+                                                  "tamanho":  2755262,
+                                                  "sha256":  "a20e8830113703a02a592983e300404f06554cfba75f370be491ec65c9e5edbf",
+                                                  "descompactado":  3425509
                                               }
                                   },
                     "nucleo":  {

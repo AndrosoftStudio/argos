@@ -11,13 +11,18 @@ Agora, no modo tempo real, a camera manda video de verdade (H.264/VP8) por WebRT
 
 O MediaMTX (midia/mediamtx) e um programa separado que fica ao lado do servidor: recebe o WebRTC,
 entrega os quadros para a analise por RTSP em 127.0.0.1 e repassa o mesmo video, sem recodificar,
-para quem assiste pelo painel. As portas de controle ficam so em 127.0.0.1; so a porta UDP do
-video escuta na rede.
+para quem assiste pelo painel. As portas de controle ficam so em 127.0.0.1.
+
+O video NAO usa porta fixa: cada conexao abre uma porta UDP qualquer, como o navegador faz, e e
+este computador que manda o primeiro pacote. Assim o Firewall do Windows nao mostra aviso nem
+pede administrador (porta fixa de escuta faz ele perguntar).
 
   ARGOS_RTC=0                desliga o video direto (fica so o caminho antigo)
   ARGOS_RTC_HOST=127.0.0.1   escuta o video so neste computador (testes)
-  ARGOS_RTC_PORTA_UDP=8189   porta UDP do video (padrao 8189; ocupada = outra livre)
-  ARGOS_RTC_HOSTS=ip1,ip2    enderecos extras a anunciar (Docker: o IP do computador)
+  ARGOS_RTC_PORTA_UDP=8189   porta UDP fixa, para quem abre a porta no roteador ou usa Docker
+                             (no Windows faz o Firewall perguntar uma vez)
+  ARGOS_RTC_HOSTS=ip1,ip2    com porta fixa: enderecos extras a anunciar (Docker: o IP do computador)
+  ARGOS_RTC_LOG=debug        registro detalhado em dados/rtc/mediamtx.log
 """
 import atexit
 import os
@@ -36,6 +41,9 @@ ATIVO = os.environ.get('ARGOS_RTC', '1').strip().lower() not in ('0', 'false', '
 HOST = os.environ.get('ARGOS_RTC_HOST', '').strip()
 HOSTS_EXTRAS = [h.strip() for h in os.environ.get('ARGOS_RTC_HOSTS', '').split(',') if h.strip()]
 STUN = 'stun:stun.cloudflare.com:3478'
+LOG = os.environ.get('ARGOS_RTC_LOG', 'warn').strip().lower()
+if LOG not in ('error', 'warn', 'info', 'debug'):
+    LOG = 'warn'
 PASTA = os.path.join(pastas.RAIZ, 'dados', 'rtc')
 
 _lock = threading.Lock()
@@ -61,8 +69,10 @@ def _porta_livre(tipo=socket.SOCK_STREAM, preferida=0, host='127.0.0.1'):
 def _config(p) -> str:
     so_local = HOST in ('127.0.0.1', 'localhost')
     hosts = (['127.0.0.1'] if so_local else []) + HOSTS_EXTRAS
+    # sem porta fixa: nada de escuta (o MediaMTX abre uma porta qualquer por conexao)
+    udp = f"{HOST}:{p['udp']}" if p.get('udp') else "''"
     linhas = [
-        'logLevel: warn',
+        f'logLevel: {LOG}',
         'logDestinations: [stdout]',
         'api: true',
         f"apiAddress: 127.0.0.1:{p['api']}",
@@ -76,7 +86,7 @@ def _config(p) -> str:
         'webrtc: true',
         f"webrtcAddress: 127.0.0.1:{p['http']}",
         'webrtcAllowOrigins: []',
-        f"webrtcLocalUDPAddress: {HOST}:{p['udp']}",
+        f'webrtcLocalUDPAddress: {udp}',
         "webrtcLocalTCPAddress: ''",
         f"webrtcIPsFromInterfaces: {'false' if so_local else 'true'}",
         'webrtcAdditionalHosts: [' + ', '.join(hosts) + ']',
@@ -118,12 +128,15 @@ def iniciar() -> bool:
             _erro = 'o programa de vídeo direto ainda não está instalado'
             return False
         try:
-            udp = int(os.environ.get('ARGOS_RTC_PORTA_UDP', '8189') or 8189)
+            fixa = int(os.environ.get('ARGOS_RTC_PORTA_UDP', '0') or 0)
         except ValueError:
-            udp = 8189
-        p = {'api': _porta_livre(), 'rtsp': _porta_livre(), 'http': _porta_livre(),
-             'udp': _porta_livre(socket.SOCK_DGRAM, udp)}     # conferida so em 127.0.0.1: nao acorda o firewall
-        if not all(p.values()) or len(set(p.values())) < 4:
+            fixa = 0
+        p = {'api': _porta_livre(), 'rtsp': _porta_livre(), 'http': _porta_livre(), 'udp': 0}
+        com_porta = bool(fixa) or HOST in ('127.0.0.1', 'localhost')
+        if com_porta:
+            p['udp'] = _porta_livre(socket.SOCK_DGRAM, fixa or 8189)     # conferida so em 127.0.0.1
+        tcp = [p['api'], p['rtsp'], p['http']]
+        if not all(tcp) or len(set(tcp)) < 3 or (com_porta and not p['udp']):
             _erro = 'sem portas livres para o vídeo direto'
             return False
         os.makedirs(PASTA, exist_ok=True)
@@ -145,7 +158,7 @@ def iniciar() -> bool:
             parar_sem_trava()
             return False
         _erro = ''
-        print(f"[rtc] video direto ligado (UDP {p['udp']})", flush=True)
+        print('[rtc] video direto ligado (' + (f"UDP {p['udp']}" if p['udp'] else 'sem porta fixa') + ')', flush=True)
         return True
 
 
@@ -170,7 +183,8 @@ atexit.register(parar)
 def situacao() -> dict:
     est = midia.estado()['mediamtx']
     return {'ativo': ATIVO, 'ligado': _vivo(), 'instalado': est['status'] == 'pronto',
-            'baixando': est['status'] == 'baixando', 'erro': _erro, 'porta_udp': _portas.get('udp') if _vivo() else None}
+            'baixando': est['status'] == 'baixando', 'erro': _erro,
+            'porta_udp': (_portas.get('udp') or None) if _vivo() else None}
 
 
 def url_leitura(sid) -> str:
@@ -219,6 +233,26 @@ def publicando(sid) -> bool:
         return r.status_code == 200 and bool(r.json().get('ready'))
     except (requests.RequestException, ValueError):
         return False
+
+
+def chegada(sid):
+    """(pacotes recebidos, pacotes perdidos) do video direto que esta camera esta mandando, contados
+    pelo MediaMTX depois de esperar as retransmissoes. None se nao ha ninguem publicando."""
+    if not _vivo():
+        return None
+    try:
+        r = requests.get(f"http://127.0.0.1:{_portas['api']}/v3/webrtcsessions/list", timeout=2)
+        itens = r.json().get('items') or []
+    except (requests.RequestException, ValueError):
+        return None
+    rec = per = 0
+    achou = False
+    for s in itens:
+        if s.get('path') == sid and s.get('state') == 'publish':
+            achou = True
+            rec += int(s.get('inboundRTPPackets') or s.get('rtpPacketsReceived') or 0)
+            per += int(s.get('inboundRTPPacketsLost') or s.get('rtpPacketsLost') or 0)
+    return (rec, per) if achou else None
 
 
 def servidores_ice() -> list:

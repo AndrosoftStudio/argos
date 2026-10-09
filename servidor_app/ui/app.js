@@ -245,6 +245,36 @@ function blocoCamerasResumo() {
   </section>`;
 }
 
+function tempoCorrido(seg) {
+  const s = Math.max(0, Math.round(seg)), m = Math.floor(s / 60);
+  return m ? `${m} min ${String(s % 60).padStart(2, '0')} s` : `${s} s`;
+}
+
+/* Trabalhos demorados deste servidor (pedidos pelo painel): o que está fazendo, a barra e há quanto tempo. */
+function blocoTarefas() {
+  const ts = (E.resumo && E.resumo.tarefas) || [];
+  return ts.map(t => {
+    const corrido = t.desde ? Math.max(0, Date.now() / 1000 - t.desde) : 0;
+    const converte = t.tipo === 'tensorrt_converter';
+    const p = t.pct != null ? pct(t.pct) : (t.estimativa_s ? Math.min(96, Math.round(corrido / t.estimativa_s * 100)) : null);
+    const dica = converte
+      ? (t.estimativa_s ? `Da última vez levou ${tempoCorrido(t.estimativa_s)} neste computador.` : 'Costuma levar de 3 a 10 minutos (até 20 com a placa de vídeo ocupada).')
+        + ' A conversão usa a placa de vídeo: a análise das câmeras pode ficar mais lenta até terminar.'
+      : 'Pedido pelo painel. As câmeras continuam funcionando enquanto isso.';
+    return `<section class="bloco tarefa" role="status"><header class="bloco-titulo">${ic(converte ? 'zap' : 'download')}<h2>${esc(t.titulo)}</h2>
+        <span class="tarefa-tempo" data-desde="${Number(t.desde) || ''}">há ${tempoCorrido(corrido)}</span></header>
+      ${t.etapa ? `<p class="texto">${esc(converte ? 'Modelo: ' + t.etapa : t.etapa)}</p>` : ''}
+      <p class="progresso"><span class="trilho${p == null ? ' correndo' : ''}"><span class="enche" style="width:${p == null ? 40 : p}%"></span></span>${t.pct != null ? `<span>${p}%</span>` : ''}</p>
+      <p class="tarefa-dica">${dica}</p></section>`;
+  }).join('');
+}
+function atualizarTemposDasTarefas() {
+  document.querySelectorAll('.tarefa-tempo[data-desde]').forEach(el => {
+    const d = Number(el.dataset.desde);
+    if (d) el.textContent = 'há ' + tempoCorrido(Date.now() / 1000 - d);
+  });
+}
+
 function desde(ts) {
   if (!ts) return '';
   const s = Math.max(0, Date.now() / 1000 - ts);
@@ -270,7 +300,7 @@ function paginaInicio() {
       <button type="button" class="btn btn-primary btn-sm" data-acao="atualizar" ${a.baixando ? 'disabled' : ''}>${a.baixando ? `Baixando ${a.pct}%` : `${ic('download')}Atualizar`}</button></p>`);
   }
   if (E.banco.estado === 'erro') faixa.push(`<p class="faixa erro">${ic('alert')}Banco de dados: ${esc(E.banco.erro)}</p>`);
-  return cabeca('home', 'Início') + faixa.join('') +
+  return cabeca('home', 'Início') + faixa.join('') + blocoTarefas() +
     `<div class="grade2">${blocoConta(E.resumo)}${blocoServidor()}</div>` + blocoCamerasResumo();
 }
 
@@ -438,7 +468,8 @@ function assinatura() {
     return JSON.stringify([E.servidor, E.banco.estado, E.banco.erro, E.modelos, E.app.etapa, E.atualizacao,
       r && [r.vinculado, r.conta, r.servidor, r.codigo, r.erro, r.url_local, r.cloudflare_url, r.tunel, r.pares, r.tipo,
         (r.ajuda || []).map(p => [p.nome, p.disponivel, (p.usados.rosto || 0) + (p.usados.epi || 0) > 0]), r.ajudou && Math.floor(((r.ajudou.rosto || 0) + (r.ajudou.epi || 0)) / 500),
-        r.maquina, r.disponivel, (r.cameras || []).map(c => [c.id, c.ativa, (c.faltando || []).length])],
+        r.maquina, r.disponivel, (r.cameras || []).map(c => [c.id, c.ativa, (c.faltando || []).length]),
+        (r.tarefas || []).map(t => [t.tipo, t.etapa, t.pct, t.estimativa_s ? Math.floor((Date.now() / 1000 - (t.desde || 0)) / Math.max(3, t.estimativa_s / 50)) : 0])],
       Math.floor(Date.now() / 30000)]);
   }
   if (pagina === 'ajustes') return JSON.stringify([E.config, E.app.versao, E.app.variante, E.servidor.estado, E.resumo && E.resumo.hardware]);
@@ -472,15 +503,25 @@ function desenhar(forcar) {
   }
   if (pagina === 'cameras') atualizarCameras();
   if (pagina === 'registro') atualizarRegistro();
+  if (pagina === 'inicio') atualizarTemposDasTarefas();
 }
 
+/* Atualizar: o programa baixa o instalador novo, abre-o em modo atualização e se encerra. Assim que
+   isso acontece esta janela some: quem mostra o andamento é a janelinha do instalador, que no fim
+   abre o programa de novo. */
+let atualizando = false;
 async function ciclo() {
   try {
     E = await api('/api/estado');
     conectado = true;
     aplicarTema(E.config.tema);
     if (host) host.enviar({ tipo: 'config', ao_fechar: E.config.ao_fechar, saindo: E.app.saindo, cor: corDaBarra() });
-  } catch { conectado = false; }
+    if (atualizando && E.app.saindo && host) host.enviar({ tipo: 'saindo' });
+    if (atualizando && E.atualizacao && E.atualizacao.erro && !E.atualizacao.baixando) atualizando = false;
+  } catch {
+    conectado = false;
+    if (atualizando && host) host.enviar({ tipo: 'saindo' });      // o programa já se encerrou para atualizar
+  }
   desenhar(false);
 }
 
@@ -490,6 +531,7 @@ document.addEventListener('click', (ev) => {
   if (b) {
     ev.preventDefault();
     const nome = b.dataset.acao;
+    if (nome === 'atualizar') { atualizando = true; aviso('Baixando a atualização. Esta janela fecha e volta sozinha quando terminar.'); }
     acao(nome, b.dataset.url ? { url: b.dataset.url } : {});
     const msgs = { ligar: 'Ligando o servidor...', desligar: 'Desligando o servidor...', reiniciar: 'Reiniciando...',
       vincular: 'Abrindo o site para vincular...', painel: 'Abrindo o painel no navegador...', conferir_atualizacao: 'Procurando atualização...' };

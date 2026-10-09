@@ -13,7 +13,7 @@
 # Requisitos: Windows 10/11 (csc do .NET Framework, curl, tar) e internet na primeira vez.
 # Uso: powershell -ExecutionPolicy Bypass -File empacotar_windows.ps1 -Versao 20.3.0 [-Placas cpu,nvidia,dml] [-SoJanela]
 param(
-  [string]$Versao = "20.4.0",
+  [string]$Versao = "20.4.1",
   [string[]]$Placas = @("cpu", "nvidia", "dml"),
   [string]$Trabalho = "D:\argos-build",
   [string]$Notas = "",

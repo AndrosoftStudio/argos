@@ -95,7 +95,7 @@ class Ponte:
             return
         self.log(f'[ponte] abrindo tunel para a porta {self.porta}...')
         try:
-            self._proc = subprocess.Popen([cmd, 'tunnel', '--url', f'http://localhost:{self.porta}'],
+            self._proc = subprocess.Popen([cmd, 'tunnel', '--url', f'http://localhost:{self.porta}', '--protocol', 'http2'],
                                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                           encoding='utf-8', errors='replace', bufsize=1,
                                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))

@@ -244,3 +244,12 @@ h1,h2,h3{font-size:inherit;font-weight:inherit;}
   .rail-item span{font-size:.68rem;}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important;}}
+
+/* Tarefas demoradas (baixar o TensorRT, converter um modelo): pedido pelo painel, andamento aqui */
+.tarefa{margin-bottom:16px;border:1px solid var(--brand);}
+.tarefa .progresso{margin-top:10px;}
+.tarefa-tempo{margin-left:auto;font-size:.84rem;font-weight:700;color:var(--mt);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.tarefa-dica{font-size:.8rem;color:var(--mt);margin-top:8px;line-height:1.4;}
+.progresso .trilho.correndo .enche{animation:tarefa-corre 1.5s ease-in-out infinite;}
+@keyframes tarefa-corre{from{transform:translateX(-110%);}to{transform:translateX(260%);}}
+@media (prefers-reduced-motion:reduce){.progresso .trilho.correndo .enche{animation:none;width:100% !important;opacity:.5;}}

@@ -108,3 +108,62 @@ def test_nome_de_pagina_de_erro_nao_vira_nome_de_camera():
     assert camera_discovery._display_name(rec) == 'Câmera 10.0.0.3'
     rec['http'] = {'title': 'NETSurveillance WEB'}
     assert camera_discovery._display_name(rec).startswith('NETSurveillance WEB')
+
+
+# ── sem pedir permissao de administrador ─────────────────────────────
+def test_video_direto_nao_abre_porta_fixa():
+    """Porta UDP fixa em todas as placas de rede faz o Windows mostrar o aviso do Firewall (que so
+    um administrador consegue aceitar): por padrao o MediaMTX nao escuta em porta nenhuma."""
+    import rtc
+    base = {'api': 9001, 'rtsp': 9002, 'http': 9003}
+    assert "webrtcLocalUDPAddress: ''" in rtc._config(dict(base, udp=0))
+    assert "webrtcLocalTCPAddress: ''" in rtc._config(dict(base, udp=0))
+    assert 'webrtcLocalUDPAddress: ' + rtc.HOST + ':8189' in rtc._config(dict(base, udp=8189))
+    # tudo o que escuta fica so nesta maquina
+    for linha in rtc._config(dict(base, udp=0)).splitlines():
+        if linha.startswith(('apiAddress', 'rtspAddress', 'webrtcAddress')):
+            assert '127.0.0.1:' in linha
+
+
+def test_camera_rtsp_so_por_tcp():
+    """O leitor de RTSP nao tenta UDP (que abre portas e chama o aviso do Firewall)."""
+    import processor  # noqa: F401
+    assert 'rtsp_transport;tcp' in os.environ.get('OPENCV_FFMPEG_CAPTURE_OPTIONS', '')
+
+
+# ── rede perdendo pacotes: volta ao envio normal ─────────────────────
+def test_perda_de_pacotes_derruba_o_video_direto(monkeypatch):
+    import processor
+    import rtc
+
+    class Falso:
+        PERDA_LIMITE = processor.VideoProcessor.PERDA_LIMITE
+        PERDA_JANELAS = processor.VideoProcessor.PERDA_JANELAS
+        client_id = 'remote_x'
+        _conferir_perda = processor.VideoProcessor._conferir_perda
+
+        def _log(self, *a, **k):
+            pass
+
+    medidas = iter([(0, 0), (1000, 0), (2000, 5), (3000, 10),              # 0,5% de perda: segue direto
+                    (3900, 110), (4800, 210), (5700, 310)])                # 10% em 3 medidas: cai
+    monkeypatch.setattr(rtc, 'chegada', lambda sid: next(medidas))
+    p, estado = Falso(), {}
+    assert [p._conferir_perda(estado) for _ in range(6)] == [False] * 6
+    assert p._conferir_perda(estado) is True
+    assert p._direto_aviso == ('perda', 120)        # 1a queda: 2 min ate tentar de novo
+
+
+def test_sem_medida_nao_derruba(monkeypatch):
+    import processor
+    import rtc
+
+    class Falso:
+        PERDA_LIMITE, PERDA_JANELAS, client_id = 0.02, 3, 'remote_x'
+        _conferir_perda = processor.VideoProcessor._conferir_perda
+
+        def _log(self, *a, **k):
+            pass
+
+    monkeypatch.setattr(rtc, 'chegada', lambda sid: None)
+    assert Falso()._conferir_perda({}) is False

@@ -10,7 +10,7 @@
 <link rel="icon" type="image/png" href="icone-192.png" sizes="192x192">
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
 <script src="config.js"></script>
-<script src="argos-stream.js?v=20261008"></script>
+<script src="argos-stream.js?v=20261009"></script>
 <style>
 /* Tela para ser vista de longe: letras grandes, um estado por vez (tudo certo / falta EPI). */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
@@ -34,7 +34,27 @@ body.alerta{background:radial-gradient(130% 95% at 50% 0%,#ff5a4a 0%,#d41e1e 38%
 .dot{width:.7em;height:.7em;border-radius:50%;background:#ff8f8f;}
 .dot.on{background:#7dffab;box-shadow:0 0 0 .2em rgba(125,255,171,.25);}
 
-.palco{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2.4vh;padding:0 4vw 2vh;text-align:center;min-height:0;}
+.palco{flex:1;display:flex;align-items:stretch;gap:2vw;padding:0 3vw 2vh;min-height:0;}
+.info{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2.4vh;text-align:center;}
+
+/* Cameras ao vivo: o video com as caixas, do jeito que aparece no painel */
+.cams{flex:1.8;min-width:0;display:grid;gap:1.2vh 1vw;grid-template-columns:repeat(var(--colunas,1),minmax(0,1fr));grid-auto-rows:minmax(0,1fr);}
+.cam{position:relative;background:#02031f;border:.4vh solid rgba(255,255,255,.3);border-radius:1.8vh;overflow:hidden;min-height:0;}
+.cam video,.cam canvas{position:absolute;inset:0;width:100%;height:100%;display:block;}
+.cam video{object-fit:contain;}
+.cam-nome{position:absolute;left:1vh;top:1vh;z-index:2;background:rgba(2,3,31,.72);border-radius:999px;padding:.3em .8em;font-size:clamp(.8rem,2vh,1.3rem);font-weight:700;max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cam.em-alerta{border-color:#fff;box-shadow:0 0 0 .6vh rgba(255,255,255,.45);}
+/* com cameras na tela, o lado dos avisos encolhe para caber */
+.com-cams .selo{width:clamp(80px,15vh,170px);height:clamp(80px,15vh,170px);font-size:clamp(44px,8vh,92px);}
+.com-cams .titulo{font-size:clamp(2rem,8.5vh,6.5rem);}
+.com-cams .sub{font-size:clamp(1rem,2.8vh,2rem);}
+.com-cams .falta{min-width:0;flex:1 1 100%;padding:1.6vh 1.2vw;gap:1.1vh;}
+.com-cams .falta-nome,.com-cams .faltas:not(.uma) .falta-nome{font-size:clamp(1.3rem,4.2vh,3rem);}
+.com-cams .epi canvas,.com-cams .faltas:not(.uma) .epi canvas{width:clamp(32px,5.2vh,62px);height:clamp(32px,5.2vh,62px);}
+.com-cams .epi{font-size:clamp(.62rem,1.45vh,1rem);max-width:9.5vh;}
+.com-cams .falta-epis{gap:.8vh .7vw;}
+.com-cams .frase{font-size:clamp(1rem,2.6vh,1.9rem);max-width:100%;}
+@media (orientation:portrait){.palco{flex-direction:column;}.cams{flex:1.2;}}
 .selo{width:clamp(110px,24vh,280px);height:clamp(110px,24vh,280px);border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.14);border:.5vh solid rgba(255,255,255,.5);font-size:clamp(60px,13vh,150px);}
 .ok .selo{background:var(--ok);border-color:#b6ffd0;box-shadow:0 0 0 2vh rgba(47,191,98,.2);}
 .titulo{font-family:var(--display);font-weight:400;font-size:clamp(2.6rem,13vh,11rem);letter-spacing:.02em;line-height:.95;text-transform:uppercase;}
@@ -81,12 +101,15 @@ body.quieto .barra{opacity:.28;}
   </div>
 </header>
 
-<main class="palco ok" id="palco" aria-live="assertive">
-  <div class="selo" id="selo" aria-hidden="true"></div>
-  <h1 class="titulo" id="titulo">Tudo certo</h1>
-  <p class="sub" id="sub"></p>
-  <ul class="faltas" id="faltas" hidden></ul>
-  <p class="frase" id="frase"></p>
+<main class="palco ok" id="palco">
+  <section class="cams" id="cams" aria-label="Câmeras ao vivo" hidden></section>
+  <section class="info" aria-live="assertive">
+    <div class="selo" id="selo" aria-hidden="true"></div>
+    <h1 class="titulo" id="titulo">Tudo certo</h1>
+    <p class="sub" id="sub"></p>
+    <ul class="faltas" id="faltas" hidden></ul>
+    <p class="frase" id="frase"></p>
+  </section>
 </main>
 
 <footer class="barra" id="barra">
@@ -94,6 +117,7 @@ body.quieto .barra{opacity:.28;}
     <span class="sr">Volume dos avisos</span><input type="range" id="volume" min="0" max="100" step="5"><output id="volume-txt" for="volume"></output></label>
   <button type="button" class="sec" id="btn-sirene" aria-pressed="true">Sirene</button>
   <button type="button" class="sec" id="btn-voz" aria-pressed="true">Voz</button>
+  <button type="button" class="sec" id="btn-cams" aria-pressed="true">Câmeras</button>
   <button type="button" class="sec" id="btn-teste">Testar som</button>
   <button type="button" class="sec" id="btn-cheia">Tela cheia</button>
 </footer>
@@ -126,6 +150,7 @@ const som = { ctx: null, ganho: null, sirene: null, liberado: false, tocando: fa
 let volume = Number(localStorage.getItem('tv_volume') ?? 80);
 let comSirene = localStorage.getItem('tv_sirene') !== '0';
 let comVoz = localStorage.getItem('tv_voz') !== '0';
+let comCams = localStorage.getItem('tv_cams') !== '0';      // TV fraca: dá para ficar só com os avisos
 
 function aplicarVolume() {
   $('volume').value = volume;
@@ -293,6 +318,46 @@ function iconeEpi(item) {
   return c;
 }
 
+/* ── Câmeras ao vivo ──────────────────────────────────────────────
+   O mesmo vídeo do painel, com as caixas: vídeo direto quando a rede deixa, senão os quadros
+   que o servidor manda. Cada câmera fala com o servidor que a processa. */
+const cams = new Map();          // base|sid -> {el, video, player, viewer}
+
+function sincronizarCams(lista) {
+  const querem = new Map(lista.map((c) => [c.base + '|' + c.sid, c]));
+  for (const [k, c] of cams) {
+    if (querem.has(k)) continue;
+    c.viewer.stop(); c.player.close(); c.el.remove(); cams.delete(k);
+  }
+  let n = 0;
+  for (const [k, c] of querem) {
+    n++;
+    let atual = cams.get(k);
+    if (!atual) {
+      const el = document.createElement('article'); el.className = 'cam';
+      const video = document.createElement('video'); video.muted = true; video.autoplay = true; video.playsInline = true; video.hidden = true;
+      const canvas = document.createElement('canvas');
+      const nome = document.createElement('span'); nome.className = 'cam-nome';
+      el.append(video, canvas, nome);
+      $('cams').append(el);
+      const player = new ArgosStream.LivePlayer({ canvas });
+      const viewer = new ArgosStream.LiveViewer({
+        backendUrl: c.base || location.origin, token: TOKEN, streamId: c.sid, player, videoEl: video,
+        onDireto: (on) => { video.hidden = !on; },
+      });
+      viewer.start();
+      atual = { el, video, player, viewer, nome };
+      cams.set(k, atual);
+    }
+    atual.nome.textContent = c.nome || ('Câmera ' + n);
+    atual.el.classList.toggle('em-alerta', Boolean(c.alerta));
+  }
+  const total = cams.size;
+  $('cams').hidden = !total;
+  $('cams').style.setProperty('--colunas', total <= 1 ? 1 : total <= 4 ? 2 : 3);
+  $('palco').classList.toggle('com-cams', total > 0);
+}
+
 let chaveDesenhada = '';
 function desenhar() {
   const vivos = [...conexoes.values()].filter((c) => c.vivo);
@@ -302,11 +367,15 @@ function desenhar() {
   $('rede-txt').textContent = vivos.length ? (vivos.length > 1 ? vivos.length + ' servidores' : 'Conectada') : 'Sem servidor';
   let cameras = 0, pessoas = 0;
   const faltas = [];
-  for (const c of vivos) {
+  const lista = [];
+  for (const [base, c] of conexoes) {
+    if (!c.vivo) continue;
     const e = c.estado || {};
     cameras += e.cameras || 0; pessoas += e.pessoas || 0;
     for (const f of e.faltas || []) faltas.push(f);
+    for (const k of e.cams || []) lista.push({ base, sid: k.sid, nome: k.nome, alerta: (e.faltas || []).some((f) => f.camera === k.sid) });
   }
+  sincronizarCams(comCams ? lista.slice(0, 9) : []);
   $('chip-cam').hidden = !vivos.length;
   $('chip-cam').textContent = `${cameras} câmera${cameras === 1 ? '' : 's'} · ${pessoas} pessoa${pessoas === 1 ? '' : 's'}`;
   const palco = $('palco');
@@ -386,6 +455,7 @@ function botaoLiga(id, chave, ler, gravar) {
 }
 botaoLiga('btn-sirene', 'tv_sirene', () => comSirene, (v) => { comSirene = v; });
 botaoLiga('btn-voz', 'tv_voz', () => comVoz, (v) => { comVoz = v; });
+botaoLiga('btn-cams', 'tv_cams', () => comCams, (v) => { comCams = v; chaveDesenhada = ''; desenhar(); });
 $('btn-teste').onclick = async () => {
   await liberarSom();
   await tocarBuffer(som.sirene, 1);

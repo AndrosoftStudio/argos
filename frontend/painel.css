@@ -951,3 +951,23 @@ dialog.modal::backdrop{background:rgba(3,4,40,.5);backdrop-filter:blur(8px);-web
 .inline-cred .scan-form{grid-template-columns:1fr 1fr auto;}
 @media (max-width:620px){.inline-cred .scan-form{grid-template-columns:1fr;}}
 .net-corpo>.dica-linha{margin:8px 0 2px;}
+
+/* ═══ 20.4.1 ═══════════════════════════════════════════════════════ */
+/* Tarefas demoradas do servidor (baixar o TensorRT, converter um modelo): o que está fazendo,
+   a barra e há quanto tempo começou */
+.giro{flex-shrink:0;}
+.tarefa{display:flex;flex-direction:column;gap:7px;padding:10px 12px;background:var(--sf2);border:1px solid var(--bd);border-radius:10px;}
+.tarefa-linha{display:flex;align-items:center;gap:9px;margin:0;font-size:.86rem;font-weight:600;color:var(--tx);line-height:1.35;}
+.tarefa-linha .giro{width:16px;height:16px;border-width:2px;}
+.tarefa-dica{margin:0;font-size:.76rem;color:var(--mt);line-height:1.4;}
+/* sem medida de andamento: a barra corre de um lado ao outro */
+progress.barra:indeterminate{background:linear-gradient(90deg,var(--sf3) 0%,var(--sf3) 30%,var(--brand) 50%,var(--sf3) 70%,var(--sf3) 100%);background-size:220% 100%;animation:barra-corre 1.5s linear infinite;}
+progress.barra:indeterminate::-webkit-progress-bar{background:transparent;}
+progress.barra:indeterminate::-moz-progress-bar{background:transparent;}
+@keyframes barra-corre{from{background-position:110% 0;}to{background-position:-110% 0;}}
+@media (prefers-reduced-motion:reduce){progress.barra:indeterminate{animation:none;}}
+.dica-linha .giro{width:16px;height:16px;border-width:2px;}
+/* TensorRT do servidor (instala uma vez por servidor): fica acima dos modelos */
+.trt-servidor{display:grid;gap:10px;margin-bottom:14px;padding:12px 14px;border:1px solid var(--bd);border-radius:14px;background:var(--sf2);max-width:720px;}
+.trt-servidor .dica-linha{margin:0;}
+.trt-servidor .instalar-trt{justify-items:start;}

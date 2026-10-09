@@ -17,6 +17,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
 import ajuda
 import areas as areas_mod
+import rtc
 import auditoria
 import avisos
 import face_id
@@ -33,6 +34,27 @@ from yolo_runtime import precision_kwargs
 # quadro: num servidor de 16 nucleos a imagem da camera IP chegava meio segundo atrasada. Com um
 # thread o quadro sai assim que chega (medido: 540 ms -> 43 ms). ARGOS_DECODIFICAR_THREADS muda.
 THREADS_VIDEO = max(1, int(os.environ.get('ARGOS_DECODIFICAR_THREADS', '1') or 1))
+
+
+def _rtsp_por_tcp():
+    """Camera de rede (RTSP) sempre por TCP.
+
+    Por UDP o leitor de video (FFmpeg, dentro do OpenCV) abre portas de escuta neste programa e o
+    Windows mostra o aviso do Firewall, que pede administrador: em computador de escola ou empresa
+    ninguem consegue aceitar. Camera que so fala UDP: OPENCV_FFMPEG_CAPTURE_OPTIONS=rtsp_transport;udp
+    no .env."""
+    valor = os.environ.setdefault('OPENCV_FFMPEG_CAPTURE_OPTIONS', 'rtsp_transport;tcp')
+    if os.name == 'nt':
+        # no Windows o FFmpeg do OpenCV le as variaveis pelo msvcrt.dll, que guarda uma copia propria
+        # feita quando o programa abriu: o os.environ nao chega la (medido: sem isto ele tenta UDP)
+        try:
+            import ctypes
+            ctypes.cdll.msvcrt._putenv_s(b'OPENCV_FFMPEG_CAPTURE_OPTIONS', valor.encode('ascii', 'ignore'))
+        except Exception:
+            pass
+
+
+_rtsp_por_tcp()
 
 
 def abrir_rede(fonte):
@@ -364,6 +386,43 @@ class VideoProcessor:
             ev.set()
         self._direto_em = 0.0
 
+    # O video direto nao espera nada: pacote que se perde no caminho vira imagem quebrada e a analise
+    # falha junto. Com perda seguida, a camera volta para o envio normal (que nao perde) por um tempo.
+    # 2% dos pacotes, ja contadas as retransmissoes (ARGOS_RTC_PERDA_LIMITE, em %, muda)
+    PERDA_LIMITE = float(os.environ.get('ARGOS_RTC_PERDA_LIMITE', '2') or 2) / 100
+    PERDA_JANELAS = 3         # em 3 medidas seguidas (6 s)
+
+    def direto_espera(self) -> float:
+        """Segundos que faltam para o video direto poder ser tentado de novo (0 = pode)."""
+        return max(0.0, getattr(self, '_direto_volta_em', 0.0) - time.monotonic())
+
+    def direto_aviso(self):
+        """Uma vez so: (motivo, espera em segundos) quando o video direto acabou de ser dispensado."""
+        aviso, self._direto_aviso = getattr(self, '_direto_aviso', None), None
+        return aviso
+
+    def _conferir_perda(self, estado) -> bool:
+        """True quando a perda passou do limite por tempo demais (chamado a cada ~2 s)."""
+        agora = rtc.chegada(self.client_id)
+        if agora is None:
+            return False
+        antes, estado['ultimo'] = estado.get('ultimo'), agora
+        if antes is None or agora[0] < antes[0]:
+            return False
+        rec, per = agora[0] - antes[0], agora[1] - antes[1]
+        taxa = per / max(rec + per, 1)
+        self._direto_perda = round(taxa * 100, 1)
+        estado['ruins'] = estado.get('ruins', 0) + 1 if (rec + per >= 30 and taxa > self.PERDA_LIMITE) else 0
+        if estado['ruins'] < self.PERDA_JANELAS:
+            return False
+        # cada vez que acontece, espera mais antes de tentar de novo: 2, 5, 10 min
+        self._direto_quedas = getattr(self, '_direto_quedas', 0) + 1
+        espera = (120, 300, 600)[min(self._direto_quedas, 3) - 1]
+        self._direto_volta_em = time.monotonic() + espera
+        self._direto_aviso = ('perda', espera)
+        self._log(f'Video direto com {self._direto_perda}% de perda: voltando ao envio normal por {espera // 60} min.')
+        return True
+
     def direto_ativo(self) -> bool:
         """True enquanto os quadros estao chegando pelo video direto."""
         return time.perf_counter() - getattr(self, '_direto_em', 0.0) < 1.5
@@ -371,7 +430,13 @@ class VideoProcessor:
     def _ler_direto(self, parar):
         cap, vazio_desde = None, time.perf_counter()
         proximo = 0.0
+        perda, conferir_em = {}, time.perf_counter() + 2.0
+        self._direto_perda = 0.0
         while not parar.is_set() and self.running and self.use_external:
+            if time.perf_counter() >= conferir_em:
+                conferir_em = time.perf_counter() + 2.0
+                if self._conferir_perda(perda):
+                    break
             if cap is None:
                 cap = abrir_rede(self._direto_url)
                 if not cap.isOpened():
@@ -679,6 +744,8 @@ class VideoProcessor:
             'pose': self.pose_ok,
             'config': self.public_config(),
             'direto': self.direto_ativo(),
+            'direto_perda': getattr(self, '_direto_perda', 0.0) if self.direto_ativo() else None,
+            'direto_espera_s': round(self.direto_espera()),
             'pipeline': stats,
             'frames_recebidos': len(self.pipeline.taxa_entrada.ts),
             'frames_descartados': stats['pulados'],
