@@ -4031,7 +4031,7 @@ function App(){
           </span>
           <button type="button" className={"ib"+(alarmeLigado?'':' aceso')} onClick={()=>trocarAlarme(!alarmeLigado)}
             aria-pressed={alarmeLigado} aria-label="Sirene neste painel"
-            data-dica={alarmeLigado?'Sirene neste painel: ligada':'Sirene neste painel: desligada (toca na TV)'}><Icon n={alarmeLigado?'bell':'bell-off'}/></button>
+            data-dica={alarmeLigado?'Sirene neste painel: ligada':'Sirene neste painel: desligada'}><Icon n={alarmeLigado?'bell':'bell-off'}/></button>
           {online&&<button type="button" className={"ib"+(paused?' aceso':'')} onClick={togglePause}
             aria-label={paused?'Retomar IA':'Pausar IA'} data-dica={paused?'IA pausada: retomar':'Pausar IA'}><Icon n={paused?'play':'pause'}/></button>}
           <abbr className="avatar" title={user.nome}>{iniciais(user.nome)}</abbr>
